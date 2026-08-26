@@ -1021,6 +1021,61 @@ export function holdingRow(tokens, holding, rowIndex = 0) {
     );
 }
 
+/**
+ * The device code, as the thing the sign-in screen is actually about.
+ *
+ * Spaced by hand: the runtime exposes no letter-spacing, and a code that has
+ * to be copied off a screen and typed into a phone is worth the character gaps
+ * more than most text is.
+ *
+ * @param {import("gpui").Theme} tokens
+ * @param {string} code
+ */
+export function deviceCodeBox(tokens, code) {
+  return h_flex()
+    .items_center()
+    .justify_center()
+    .w_full()
+    .py(tokens.spacing.md)
+    .px(tokens.spacing.sm)
+    .rounded(tokens.radius.md)
+    .border(1)
+    .border_color(tokens.border)
+    .bg(tokens.muted)
+    .child(
+      numeric(tokens, code.split("").join(" "), 22)
+        .font_weight(600)
+        .text_color(tokens.foreground),
+    );
+}
+
+/**
+ * A numbered step. Sign-in is a three-place errand — open a page, type a code,
+ * approve — and the screen says so rather than leaving it to be inferred from
+ * the order of the controls.
+ *
+ * @param {import("gpui").Theme} tokens
+ * @param {number} index
+ * @param {string} title
+ */
+export function step(tokens, index, title) {
+  return h_flex()
+    .items_center()
+    .gap(tokens.spacing.sm)
+    .child(
+      h_flex()
+        .items_center()
+        .justify_center()
+        .w(16)
+        .h(16)
+        .flex_none()
+        .rounded(tokens.radius.full)
+        .bg(tokens.secondary)
+        .child(numeric(tokens, index, 10).text_color(tokens.secondary_foreground)),
+    )
+    .child(muted(tokens, title));
+}
+
 /** @param {import("gpui").Theme} tokens @param {string} title @param {string} detail */
 export function emptyPanel(tokens, title, detail) {
   return v_flex()

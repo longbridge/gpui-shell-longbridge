@@ -29,7 +29,7 @@ export default class WorkspaceUiProbe extends LongbridgeApp {
   init() {
     // A probe replaces init wholesale, so it owes the view the state a render
     // reaches for unconditionally.
-    this.initFilters();
+    this.initInteractionState();
     // Enough rows to exercise the authenticated table path; the host-level
     // scroll test separately materializes every native overflow direction.
     this.quotes = Array.from({ length: 12 }, (_, index) => quote(index));

@@ -48,7 +48,13 @@ fn logged_out_application_loads_through_the_public_shell_runtime(cx: &mut TestAp
             .unwrap_or_default()
     });
 
-    assert!(rendered.contains("Sign in required"), "{rendered}");
+    assert!(rendered.contains("Sign in to continue"), "{rendered}");
+    assert!(
+        rendered.contains("longbridge-sign-in"),
+        "the sign-in card must offer the action:\n{rendered}"
+    );
+    // The identity belongs to the chrome; the card must not repeat it.
+    assert_eq!(rendered.matches("Read-only market terminal").count(), 1, "{rendered}");
     assert!(!rendered.contains("Stock detail"), "{rendered}");
     assert!(!rendered.contains("Holdings"), "{rendered}");
 }

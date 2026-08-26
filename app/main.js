@@ -64,6 +64,8 @@ import {
   holdingRow,
   holdingsHeader,
   label,
+  deviceCodeBox,
+  step,
   menuItem,
   menuTrigger,
   muted,
@@ -179,11 +181,7 @@ export default class LongbridgeApp extends View {
     this.chartPointer = null;
     this.chartHoverFramePending = false;
     this.chartGeneration = 0;
-    // Both popovers are controlled: the shell reports every open/close through
-    // `on_open_change`, and this is where the answer lives.
-    this.watchlistMenuOpen = false;
-    this.allocationHelpOpen = false;
-    this.initFilters();
+    this.initInteractionState();
     this.clock = timer.every(1_000, (cx) => {
       this.lastTick = Date.now();
       this.quotes = sortLikeTerminal(this.quotes, this.lastTick);
@@ -193,17 +191,23 @@ export default class LongbridgeApp extends View {
   }
 
   /**
-   * Retained text state for the two list filters.
+   * The state a render reaches for unconditionally: both controlled popovers,
+   * and the retained text state behind the two list filters.
    *
-   * Its own method because a render reaches for it unconditionally and a view
-   * that skipped it draws nothing at all: `Input.new(undefined)` throws, and a
-   * probe that replaces `init` wholesale would otherwise take the whole tree
-   * down. `InputState.new()` needs a live host call, so this belongs in an
-   * `init` or an event handler, never in a render. The query is mirrored onto
-   * the view because render reads it every frame and reading it off the handle
-   * would put a host call on the frame path.
+   * Its own method because a view that skipped it draws nothing at all --
+   * `Input.new(undefined)` throws and takes the whole tree with it -- and a
+   * probe that replaces `init` wholesale would otherwise do exactly that.
+   *
+   * `InputState.new()` needs a live host call, so this belongs in an `init` or
+   * an event handler, never in a render. The query is mirrored onto the view
+   * because render reads it every frame and reading it off the handle would
+   * put a host call on the frame path. The popovers are controlled: the shell
+   * reports every open and close through `on_open_change`, and these two
+   * fields are where the answer lives.
    */
-  initFilters() {
+  initInteractionState() {
+    this.watchlistMenuOpen = false;
+    this.allocationHelpOpen = false;
     this.watchlistQuery = "";
     this.holdingsQuery = "";
     this.watchlistFilter = InputState.new({ placeholder: "Filter watchlist" });
@@ -618,7 +622,8 @@ export default class LongbridgeApp extends View {
       .flex_1()
       .items_center()
       .justify_center()
-      .child(v_flex().w(520).child(this.authPanel(tokens, false)));
+      .p(tokens.spacing.lg)
+      .child(v_flex().w(400).child(this.authPanel(tokens)));
   }
 
   /** @param {import("gpui").Theme} tokens */
@@ -812,6 +817,22 @@ export default class LongbridgeApp extends View {
                 close(cx);
                 this.chooseTheme(tokens.appearance === "dark" ? "light" : "dark", cx);
               },
+            ),
+          )
+          .child(rule(tokens))
+          .child(
+            // The only way out while signed in: the sign-in card is not on
+            // screen once a session is live, so its "Clear session" cannot be
+            // reached from here.
+            menuItem(
+              tokens,
+              "watchlist-menu-sign-out",
+              "Sign out",
+              (_event, cx) => {
+                close(cx);
+                this.signOut(cx);
+              },
+              { detail: "Clears the saved session", destructive: true },
             ),
           ),
       );
@@ -1096,110 +1117,113 @@ export default class LongbridgeApp extends View {
       );
   }
 
-  /** @param {import("gpui").Theme} tokens @param {boolean} connected */
-  authPanel(tokens, connected) {
+  /**
+   * The sign-in screen.
+   *
+   * It is the only thing on screen when it is on screen, so it is laid out as
+   * one card rather than as a panel among panels: the product mark, then the
+   * one thing the person has to do next, then the controls for doing it. When
+   * a device code is live that one thing is the code itself, which is why it
+   * is the largest text in the application.
+   *
+   * @param {import("gpui").Theme} tokens
+   */
+  authPanel(tokens) {
     const device = this.authorization;
     const stored = this.hasStoredTokens;
     const needsAttention = stored && this.status.state === "error";
-    const title = connected
-      ? "Connected"
-      : needsAttention
-        ? "Session needs attention"
-        : stored
-          ? "Restoring session"
-          : "Sign in required";
-    const detail = connected
-      ? "Quotes and account data are read-only."
-      : needsAttention
-        ? "Retry the saved session or clear it to sign in again."
-        : stored
-          ? "Reconnecting with the saved Longbridge session."
-          : "Authorize this device with your Longbridge account.";
+
+    // The chrome carries the identity -- the header above this is showing the
+    // mark, the name and the tagline, and the footer is already saying the
+    // terminal is read-only. So the card carries the task and nothing else;
+    // repeating any of it here would be three of everything on one screen.
     return panel(tokens)
+      .p(tokens.spacing.xl)
+      .gap(tokens.spacing.lg)
       .child(
-        h_flex()
-          .items_center()
-          .justify_between()
-          .px(tokens.spacing.md)
-          .py(tokens.spacing.sm)
-          .child(label(tokens, "Access"))
-          .child(
-            muted(
-              tokens,
-              connected ? "ACTIVE" : device ? "DEVICE CODE" : stored ? "SESSION" : "DEVICE CODE",
-            ),
-          ),
-      )
-      .child(rule(tokens))
-      .child(
-        v_flex()
-          .gap(tokens.spacing.sm)
-          .p(tokens.spacing.md)
-          .child(device ? this.deviceCode(tokens, device) : emptyPanel(tokens, title, detail))
-          .when(Boolean(this.error), (element) => element.child(errorMessage(tokens, this.error)))
-          .child(
-            h_flex()
-              .gap(tokens.spacing.sm)
+        device
+          ? this.deviceCode(tokens, device)
+          : v_flex()
+              .items_center()
+              .gap(tokens.spacing.xs)
               .child(
-                action(
+                label(
                   tokens,
-                  "longbridge-sign-in",
-                  device
-                    ? "Waiting for approval"
-                    : connected
-                      ? "Refresh portfolio"
-                      : stored
-                        ? "Retry connection"
-                        : "Sign in",
-                  (_event, cx) =>
-                    connected ? this.loadPortfolio() : stored ? this.resume(cx) : this.signIn(cx),
-                  {
-                    variant: connected || stored ? "default" : "primary",
-                    disabled: Boolean(device),
-                  },
+                  needsAttention
+                    ? "Session needs attention"
+                    : stored
+                      ? "Restoring your session"
+                      : "Sign in to continue",
+                  14,
                 ),
               )
-              .when(stored, (element) =>
-                element.child(
-                  action(
-                    tokens,
-                    "longbridge-sign-out",
-                    "Clear session",
-                    (_event, cx) => this.signOut(cx),
-                    { variant: "destructive", quiet: true },
-                  ),
+              .child(
+                muted(
+                  tokens,
+                  needsAttention
+                    ? "Retry the saved session, or clear it and sign in again."
+                    : stored
+                      ? "Reconnecting with the saved Longbridge session."
+                      : "Authorize this device with your Longbridge account.",
                 ),
               ),
-          ),
-      );
-  }
-
-  /** @param {import("gpui").Theme} tokens @param {{ userCode: string, verificationUri: string }} device */
-  deviceCode(tokens, device) {
-    return v_flex()
-      .gap(tokens.spacing.xs)
-      .child(label(tokens, device.userCode || "Open authorization link", 16))
-      .child(muted(tokens, device.verificationUri))
-      .child(
-        externalLink(
-          tokens,
-          "open-authorization-link",
-          "Open Longbridge authorization",
-          device.verificationUri,
-        ),
       )
+      .when(Boolean(this.error), (element) => element.child(errorMessage(tokens, this.error)))
       .child(
-        h_flex()
+        v_flex()
           .gap(tokens.spacing.sm)
           .child(
             action(
               tokens,
-              "copy-authorization-link",
-              "Copy link",
-              () => this.copyAuthorization(device.verificationUri, "Authorization link"),
-              { variant: "ghost" },
-            ),
+              "longbridge-sign-in",
+              device ? "Waiting for approval" : stored ? "Retry connection" : "Sign in",
+              (_event, cx) => (stored ? this.resume(cx) : this.signIn(cx)),
+              { variant: stored ? "default" : "primary", disabled: Boolean(device) },
+            ).w_full(),
           )
+          .when(stored || Boolean(device), (element) =>
+            element.child(
+              action(
+                tokens,
+                "longbridge-sign-out",
+                device ? "Cancel" : "Clear session",
+                (_event, cx) => this.signOut(cx),
+                { variant: "destructive", quiet: true },
+              ).w_full(),
+            ),
+          ),
+      );
+  }
+
+  /**
+   * The live device-code step. Three numbered places, and the code between
+   * them as the largest thing on the screen.
+   *
+   * @param {import("gpui").Theme} tokens
+   * @param {{ userCode: string, verificationUri: string }} device
+   */
+  deviceCode(tokens, device) {
+    return v_flex()
+      .gap(tokens.spacing.sm)
+      .child(step(tokens, 1, "Open the authorization page"))
+      .child(
+        h_flex()
+          .justify_center()
+          .child(
+            externalLink(
+              tokens,
+              "open-authorization-link",
+              device.verificationUri,
+              device.verificationUri,
+            ),
+          ),
+      )
+      .child(step(tokens, 2, "Enter this code"))
+      .child(deviceCodeBox(tokens, device.userCode || "--"))
+      .child(step(tokens, 3, "Approve the request in Longbridge"))
+      .child(
+        h_flex()
+          .gap(tokens.spacing.sm)
           .child(
             action(
               tokens,
@@ -1207,7 +1231,16 @@ export default class LongbridgeApp extends View {
               "Copy code",
               () => this.copyAuthorization(device.userCode, "Device code"),
               { variant: "ghost" },
-            ),
+            ).flex_1(),
+          )
+          .child(
+            action(
+              tokens,
+              "copy-authorization-link",
+              "Copy link",
+              () => this.copyAuthorization(device.verificationUri, "Authorization link"),
+              { variant: "ghost" },
+            ).flex_1(),
           ),
       );
   }
