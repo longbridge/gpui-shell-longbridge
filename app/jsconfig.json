@@ -1,0 +1,19 @@
+{
+  "// why": [
+    "This application stays JavaScript, while checkJs validates its JSDoc and",
+    "application shapes in types.d.ts together with the generated gpui.d.ts.",
+    "strictNullChecks is disabled because View state is initialized by init(),",
+    "which TypeScript cannot recognize as constructor definite assignment."
+  ],
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022"],
+    "checkJs": true,
+    "strict": true,
+    "strictNullChecks": false,
+    "noEmit": true
+  },
+  "include": ["*.js", "*.d.ts"]
+}

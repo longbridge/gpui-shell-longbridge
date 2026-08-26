@@ -1,0 +1,19 @@
+{
+  "id": "com.longbridge.gpui-shell-example",
+  "name": "Longbridge gpui-shell-example",
+  "version": "0.1.0",
+  "shell-version": "0.1.0",
+  "entry": "main.js",
+  "capabilities": {
+    "network": {
+      "hosts": [
+        "openapi.longbridge.com",
+        "openapi-quote.longbridge.com"
+      ]
+    },
+    "store": true,
+    "clipboard": {
+      "write": true
+    }
+  }
+}

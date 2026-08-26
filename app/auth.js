@@ -1,0 +1,277 @@
+// Longbridge OAuth 2.0 public-client support. This module intentionally has no
+// dynamic client registration: register this application once out-of-band and
+// replace CLIENT_ID with that public identifier before distributing it.
+
+import { sleep, store } from "gpui";
+
+/**
+ * The one, fixed public-client identifier for this application.
+ *
+ * Register once through Longbridge's developer flow, then replace this value.
+ * Never add dynamic registration or a client secret here.
+ */
+export const CLIENT_ID = "399ab09a-15a5-4321-af83-1400c7c4d817";
+
+export const OPENAPI_BASE_URL = "https://openapi.longbridge.com";
+export const OAUTH_BASE_URL = `${OPENAPI_BASE_URL}/oauth2`;
+
+const TOKEN_STORE_KEY = "longbridge.oauth.tokens.v1";
+const EXPIRY_SKEW_MS = 60_000;
+const DEFAULT_POLL_INTERVAL_MS = 5_000;
+
+/** @typedef {{ accessToken: string, refreshToken: string, expiresAt: number }} Tokens */
+/** @typedef {{ deviceCode: string, verificationUri: string, userCode: string, intervalMs: number, expiresAt: number }} DeviceAuthorization */
+
+function configuredClientId() {
+  if (CLIENT_ID.startsWith("REPLACE_WITH_")) {
+    throw new Error(
+      "Longbridge CLIENT_ID is not configured; register this public client once and replace the CLIENT_ID constant in auth.js",
+    );
+  }
+  return CLIENT_ID;
+}
+
+/** @param {string} value */
+function formComponent(value) {
+  return encodeURIComponent(value).replace(/%20/g, "+");
+}
+
+/** @param {Record<string, string>} fields */
+export function formBody(fields) {
+  return Object.entries(fields)
+    .map(([key, value]) => `${formComponent(key)}=${formComponent(value)}`)
+    .join("&");
+}
+
+/** @param {string} endpoint @param {Record<string, string>} fields @param {Record<string, string>} [extraHeaders] @param {typeof fetch} [fetchImpl] */
+async function postForm(endpoint, fields, extraHeaders = {}, fetchImpl = fetch) {
+  const response = await fetchImpl(endpoint, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/x-www-form-urlencoded",
+      ...extraHeaders,
+    },
+    body: formBody(fields),
+  });
+  const body = await response.text();
+  let json;
+  try {
+    json = JSON.parse(body);
+  } catch (_) {
+    json = null;
+  }
+  if (!response.ok) {
+    const code = json && typeof json.error === "string" ? json.error : `HTTP ${response.status}`;
+    throw new Error(`Longbridge OAuth request failed: ${code}`);
+  }
+  if (!json || typeof json !== "object") {
+    throw new Error("Longbridge OAuth response was not JSON");
+  }
+  return json;
+}
+
+/** @param {unknown} value @returns {Tokens | null} */
+function tokensFromStore(value) {
+  if (!value || typeof value !== "object") return null;
+  const token =
+    /** @type {{ accessToken?: unknown, refreshToken?: unknown, expiresAt?: unknown }} */ (value);
+  if (
+    typeof token.accessToken !== "string" ||
+    typeof token.refreshToken !== "string" ||
+    typeof token.expiresAt !== "number"
+  ) {
+    return null;
+  }
+  return {
+    accessToken: token.accessToken,
+    refreshToken: token.refreshToken,
+    expiresAt: token.expiresAt,
+  };
+}
+
+/** @returns {Tokens | null} */
+export function loadTokens() {
+  return tokensFromStore(store.get(TOKEN_STORE_KEY));
+}
+
+/** @param {Tokens} tokens */
+export async function saveTokens(tokens) {
+  store.set(TOKEN_STORE_KEY, tokens);
+  // Token rotation must be durable before a caller starts using the new access
+  // token: otherwise a crash would strand the previous refresh token.
+  await store.flush();
+}
+
+export async function clearTokens() {
+  store.remove(TOKEN_STORE_KEY);
+  await store.flush();
+}
+
+/**
+ * Starts RFC 8628 device authorization. It sends no registration request and
+ * returns immediately so the UI can show the verification URL and user code.
+ *
+ * @returns {Promise<DeviceAuthorization>}
+ */
+export async function beginDeviceAuthorization(dependencies = {}) {
+  const json = await postForm(
+    `${OAUTH_BASE_URL}/device/authorize`,
+    {
+      client_id: configuredClientId(),
+    },
+    {},
+    dependencies.fetch,
+  );
+  if (typeof json.device_code !== "string" || typeof json.expires_in !== "number") {
+    throw new Error("Longbridge device authorization response was incomplete");
+  }
+  const verificationUri =
+    typeof json.verification_uri_complete === "string"
+      ? json.verification_uri_complete
+      : json.verification_uri;
+  if (typeof verificationUri !== "string") {
+    throw new Error("Longbridge device authorization omitted verification_uri");
+  }
+  return {
+    deviceCode: json.device_code,
+    verificationUri,
+    userCode: typeof json.user_code === "string" ? json.user_code : "",
+    intervalMs: Math.max(1, typeof json.interval === "number" ? json.interval : 5) * 1_000,
+    expiresAt: (dependencies.now || Date.now)() + json.expires_in * 1_000,
+  };
+}
+
+/** @param {unknown} json @returns {Tokens} */
+function tokensFromResponse(json, fallbackRefreshToken, now = Date.now) {
+  if (!json || typeof json !== "object" || typeof json.access_token !== "string") {
+    throw new Error("Longbridge token response omitted access_token");
+  }
+  const response =
+    /** @type {{ access_token: string, refresh_token?: unknown, expires_in?: unknown }} */ (json);
+  const refreshToken =
+    typeof response.refresh_token === "string" ? response.refresh_token : fallbackRefreshToken;
+  if (typeof refreshToken !== "string" || refreshToken.length === 0) {
+    throw new Error("Longbridge token response omitted refresh_token");
+  }
+  return {
+    accessToken: response.access_token,
+    refreshToken,
+    expiresAt:
+      now() + (typeof response.expires_in === "number" ? response.expires_in : 3600) * 1_000,
+  };
+}
+
+const TERMINAL_DEVICE_ERRORS = new Set([
+  "access_denied",
+  "expired_token",
+  "invalid_client",
+  "invalid_grant",
+]);
+
+async function pollDeviceRegion(authorization, clientId, region, fetchImpl, now) {
+  try {
+    const response = await fetchImpl(`${OAUTH_BASE_URL}/token`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
+        "x-dc-region": region,
+      },
+      body: formBody({
+        client_id: clientId,
+        grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+        device_code: authorization.deviceCode,
+      }),
+    });
+    const text = await response.text();
+    let json;
+    try {
+      json = JSON.parse(text);
+    } catch (_) {
+      return { kind: "transient" };
+    }
+    if (response.ok) {
+      try {
+        return { kind: "success", tokens: tokensFromResponse(json, "", now) };
+      } catch (_) {
+        return { kind: "transient" };
+      }
+    }
+    const code = json && typeof json.error === "string" ? json.error : `HTTP ${response.status}`;
+    return { kind: "oauth", code };
+  } catch (_) {
+    return { kind: "transient" };
+  }
+}
+
+/**
+ * Polls until the reader authorizes, rejects, or the device code expires.
+ * `slow_down` increases the interval for subsequent polls as RFC 8628 requires.
+ *
+ * @param {DeviceAuthorization} authorization
+ * @returns {Promise<Tokens>}
+ */
+export async function pollDeviceAuthorization(authorization, dependencies = {}) {
+  const clientId = configuredClientId();
+  const fetchImpl = dependencies.fetch || fetch;
+  const sleepImpl = dependencies.sleep || sleep;
+  const now = dependencies.now || Date.now;
+  const save = dependencies.saveTokens || saveTokens;
+  let intervalMs = authorization.intervalMs || DEFAULT_POLL_INTERVAL_MS;
+  while (now() < authorization.expiresAt) {
+    await sleepImpl(intervalMs);
+    const results = await Promise.all([
+      pollDeviceRegion(authorization, clientId, "ap", fetchImpl, now),
+      pollDeviceRegion(authorization, clientId, "us", fetchImpl, now),
+    ]);
+    const success = results.find((result) => result.kind === "success");
+    if (success) {
+      const tokens = success.tokens;
+      await save(tokens);
+      return tokens;
+    }
+    const terminal = results.find(
+      (result) => result.kind === "oauth" && TERMINAL_DEVICE_ERRORS.has(result.code),
+    );
+    if (terminal) {
+      throw new Error(`Longbridge device authorization failed: ${terminal.code}`);
+    }
+    if (results.some((result) => result.kind === "oauth" && result.code === "slow_down")) {
+      intervalMs += 5_000;
+    }
+  }
+  throw new Error("Longbridge device authorization expired");
+}
+
+/** @param {string} refreshToken */
+function dataCenterFor(refreshToken) {
+  return refreshToken.startsWith("us_") ? "us" : "ap";
+}
+
+/** @param {Tokens | null} existing */
+export async function refreshAccessToken(existing = loadTokens()) {
+  if (!existing) throw new Error("Longbridge sign-in is required");
+  const json = await postForm(
+    `${OAUTH_BASE_URL}/token`,
+    {
+      client_id: configuredClientId(),
+      grant_type: "refresh_token",
+      refresh_token: existing.refreshToken,
+    },
+    { "x-dc-region": dataCenterFor(existing.refreshToken) },
+  );
+  const tokens = tokensFromResponse(json, existing.refreshToken);
+  await saveTokens(tokens);
+  return tokens;
+}
+
+/** Returns a usable token, refreshing it shortly before expiry. */
+export async function accessToken() {
+  const tokens = loadTokens();
+  if (!tokens) throw new Error("Longbridge sign-in is required");
+  if (tokens.expiresAt <= Date.now() + EXPIRY_SKEW_MS) {
+    return (await refreshAccessToken(tokens)).accessToken;
+  }
+  return tokens.accessToken;
+}

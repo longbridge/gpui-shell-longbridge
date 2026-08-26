@@ -1,0 +1,23 @@
+[package]
+name = "gpui-shell-longbridge"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+gpui-shell = { path = "../gpui-component/crates/shell" }
+gpui = { version = "0.2.2", git = "https://github.com/zed-industries/zed", features = ["profiler"] }
+gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+
+[dev-dependencies]
+gpui = { version = "0.2.2", git = "https://github.com/zed-industries/zed", features = ["test-support"] }
+
+[profile.dev]
+codegen-units = 16
+debug = "limited"
+split-debuginfo = "unpacked"
+
+[profile.dev.package]
+gpui = { opt-level = 3 }
+gpui_platform = { opt-level = 3 }
+rquickjs = { opt-level = 3 }

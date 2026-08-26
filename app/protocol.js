@@ -1,0 +1,642 @@
+// Minimal Longbridge quote WebSocket wire codec.  This intentionally has no
+// socket, credential, HTTP, or trading code: callers only exchange Uint8Array
+// WebSocket binary messages with it.
+//
+// Wire layout and command values are verified against the pinned OpenAPI
+// source used by ../longbridge-terminal:
+//   rust/crates/wsclient/src/codec.rs
+//   rust/crates/proto/openapi-protobufs/control/control.proto
+//   rust/crates/proto/openapi-protobufs/quote/api.proto
+
+import { gunzipSync } from "zlib";
+
+const MAX_BODY_LENGTH = 0x00ff_ffff;
+const MAX_SAFE_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
+const SIGNATURE_LENGTH = 24;
+
+export const FRAME_TYPE = Object.freeze({
+  REQUEST: 1,
+  RESPONSE: 2,
+  PUSH: 3,
+});
+
+export const COMMAND = Object.freeze({
+  HEARTBEAT: 1,
+  AUTH: 2,
+  SUBSCRIBE: 6,
+  UNSUBSCRIBE: 7,
+  REALTIME_QUOTE: 11,
+  PUSH_QUOTE: 101,
+});
+
+export const SUB_TYPE = Object.freeze({
+  QUOTE: 1,
+  DEPTH: 2,
+  BROKERS: 3,
+  TRADE: 4,
+});
+
+export class LongbridgeProtocolError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "LongbridgeProtocolError";
+  }
+}
+
+function fail(message) {
+  throw new LongbridgeProtocolError(message);
+}
+
+function requireBytes(value, name) {
+  if (!(value instanceof Uint8Array)) fail(`${name} must be a Uint8Array`);
+  return value;
+}
+
+function requireInteger(value, name, minimum, maximum) {
+  if (!Number.isInteger(value) || value < minimum || value > maximum) {
+    fail(`${name} must be an integer from ${minimum} to ${maximum}`);
+  }
+  return value;
+}
+
+function requireString(value, name) {
+  if (typeof value !== "string") fail(`${name} must be a string`);
+  return value;
+}
+
+function concat(parts) {
+  let length = 0;
+  for (const part of parts) length += part.length;
+  const result = new Uint8Array(length);
+  let offset = 0;
+  for (const part of parts) {
+    result.set(part, offset);
+    offset += part.length;
+  }
+  return result;
+}
+
+function encodeUtf8(value, name) {
+  requireString(value, name);
+  const result = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const codePoint = value.codePointAt(index);
+    if (codePoint >= 0xd800 && codePoint <= 0xdfff) fail(`${name} contains an unpaired surrogate`);
+    if (codePoint > 0xffff) index += 1;
+
+    if (codePoint <= 0x7f) {
+      result.push(codePoint);
+    } else if (codePoint <= 0x7ff) {
+      result.push(0xc0 | (codePoint >> 6), 0x80 | (codePoint & 0x3f));
+    } else if (codePoint <= 0xffff) {
+      result.push(
+        0xe0 | (codePoint >> 12),
+        0x80 | ((codePoint >> 6) & 0x3f),
+        0x80 | (codePoint & 0x3f),
+      );
+    } else {
+      result.push(
+        0xf0 | (codePoint >> 18),
+        0x80 | ((codePoint >> 12) & 0x3f),
+        0x80 | ((codePoint >> 6) & 0x3f),
+        0x80 | (codePoint & 0x3f),
+      );
+    }
+  }
+  return Uint8Array.from(result);
+}
+
+function decodeUtf8(bytes, name) {
+  const chars = [];
+  for (let offset = 0; offset < bytes.length;) {
+    const first = bytes[offset++];
+    if (first <= 0x7f) {
+      chars.push(String.fromCharCode(first));
+      continue;
+    }
+    const width =
+      first >= 0xc2 && first <= 0xdf
+        ? 2
+        : first >= 0xe0 && first <= 0xef
+          ? 3
+          : first >= 0xf0 && first <= 0xf4
+            ? 4
+            : 0;
+    if (width === 0 || offset + width - 1 > bytes.length)
+      fail(`protobuf ${name} is not valid UTF-8`);
+    let codePoint = first & (width === 2 ? 0x1f : width === 3 ? 0x0f : 0x07);
+    for (let index = 1; index < width; index += 1) {
+      const next = bytes[offset++];
+      if ((next & 0xc0) !== 0x80) fail(`protobuf ${name} is not valid UTF-8`);
+      codePoint = (codePoint << 6) | (next & 0x3f);
+    }
+    if (
+      (width === 2 && codePoint < 0x80) ||
+      (width === 3 && (codePoint < 0x800 || (codePoint >= 0xd800 && codePoint <= 0xdfff))) ||
+      (width === 4 && (codePoint < 0x10000 || codePoint > 0x10ffff))
+    )
+      fail(`protobuf ${name} is not valid UTF-8`);
+    if (codePoint <= 0xffff) {
+      chars.push(String.fromCharCode(codePoint));
+    } else {
+      const pair = codePoint - 0x10000;
+      chars.push(String.fromCharCode(0xd800 | (pair >> 10), 0xdc00 | (pair & 0x3ff)));
+    }
+  }
+  return chars.join("");
+}
+
+function u24(value) {
+  return Uint8Array.of((value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff);
+}
+
+function u32(value) {
+  return Uint8Array.of(
+    (value >>> 24) & 0xff,
+    (value >>> 16) & 0xff,
+    (value >>> 8) & 0xff,
+    value & 0xff,
+  );
+}
+
+function u16(value) {
+  return Uint8Array.of((value >>> 8) & 0xff, value & 0xff);
+}
+
+function readU24(bytes, offset) {
+  return (bytes[offset] << 16) | (bytes[offset + 1] << 8) | bytes[offset + 2];
+}
+
+function readU32(bytes, offset) {
+  return (
+    bytes[offset] * 0x1_000000 +
+    (bytes[offset + 1] << 16) +
+    (bytes[offset + 2] << 8) +
+    bytes[offset + 3]
+  );
+}
+
+/**
+ * Encodes one Longbridge binary packet.  The protocol does not use a total
+ * frame length; the per-type fixed header plus its u24 body length is exact.
+ */
+export function encodeFrame(packet) {
+  if (!packet || typeof packet !== "object") fail("packet must be an object");
+  const type = requireInteger(packet.type, "packet.type", 1, 3);
+  const command = requireInteger(packet.command, "packet.command", 0, 0xff);
+  const body = requireBytes(packet.body ?? new Uint8Array(), "packet.body");
+  if (body.length > MAX_BODY_LENGTH) fail("packet.body exceeds the u24 wire limit");
+
+  if (type === FRAME_TYPE.REQUEST) {
+    const requestId = requireInteger(packet.requestId, "packet.requestId", 0, 0xffff_ffff);
+    const timeoutMillis = requireInteger(packet.timeoutMillis, "packet.timeoutMillis", 0, 0xffff);
+    return concat([
+      Uint8Array.of(type, command),
+      u32(requestId),
+      u16(timeoutMillis),
+      u24(body.length),
+      body,
+    ]);
+  }
+
+  if (type === FRAME_TYPE.RESPONSE) {
+    const requestId = requireInteger(packet.requestId, "packet.requestId", 0, 0xffff_ffff);
+    const status = requireInteger(packet.status, "packet.status", 0, 0xff);
+    return concat([
+      Uint8Array.of(type, command),
+      u32(requestId),
+      Uint8Array.of(status),
+      u24(body.length),
+      body,
+    ]);
+  }
+
+  return concat([Uint8Array.of(type, command), u24(body.length), body]);
+}
+
+/** Decodes and length-checks one binary WebSocket message. */
+export function decodeFrame(data) {
+  const bytes = requireBytes(data, "data");
+  if (bytes.length < 1) fail("truncated frame header");
+
+  const header = bytes[0];
+  if ((header & 0xc0) !== 0) fail("frame header has reserved bits set");
+  const gzip = (header & 0x20) !== 0;
+  const type = header & 0x0f;
+  const verified = (header & 0x10) !== 0;
+  if (type < FRAME_TYPE.REQUEST || type > FRAME_TYPE.PUSH) fail("unknown frame type");
+
+  const signatureLength = verified ? SIGNATURE_LENGTH : 0;
+  let offset = 1;
+  const requireRemaining = (length, label) => {
+    if (bytes.length - offset < length) fail(`truncated ${label}`);
+  };
+  requireRemaining(1, "command");
+  const command = bytes[offset++];
+
+  let requestId;
+  let timeoutMillis;
+  let status;
+  if (type === FRAME_TYPE.REQUEST) {
+    requireRemaining(9, "request header");
+    requestId = readU32(bytes, offset);
+    timeoutMillis = (bytes[offset + 4] << 8) | bytes[offset + 5];
+    offset += 6;
+  } else if (type === FRAME_TYPE.RESPONSE) {
+    requireRemaining(8, "response header");
+    requestId = readU32(bytes, offset);
+    status = bytes[offset + 4];
+    offset += 5;
+  } else {
+    requireRemaining(3, "push header");
+  }
+
+  const bodyLength = readU24(bytes, offset);
+  offset += 3;
+  const expectedLength = offset + bodyLength + signatureLength;
+  if (expectedLength !== bytes.length) {
+    fail(
+      `frame length mismatch: header declares ${expectedLength} bytes, received ${bytes.length}`,
+    );
+  }
+  let body = bytes.slice(offset, offset + bodyLength);
+  offset += bodyLength;
+  const signature = verified
+    ? { nonce: bytes.slice(offset, offset + 8), signature: bytes.slice(offset + 8, offset + 24) }
+    : null;
+
+  if (gzip) {
+    try {
+      body = new Uint8Array(gunzipSync(body));
+    } catch {
+      fail("invalid gzip-compressed frame body");
+    }
+    if (body.length > MAX_BODY_LENGTH) fail("inflated frame body exceeds the u24 wire limit");
+  }
+
+  if (type === FRAME_TYPE.REQUEST) {
+    return { type, command, requestId, timeoutMillis, body, signature };
+  }
+  if (type === FRAME_TYPE.RESPONSE) {
+    return { type, command, requestId, status, body, signature };
+  }
+  return { type, command, body, signature };
+}
+
+function asBigInt(value, name, signed = false) {
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value)) fail(`${name} must be a safe integer or bigint`);
+    value = BigInt(value);
+  }
+  if (typeof value !== "bigint") fail(`${name} must be a bigint or safe integer`);
+  const minimum = signed ? -(1n << 63n) : 0n;
+  const maximum = signed ? (1n << 63n) - 1n : (1n << 64n) - 1n;
+  if (value < minimum || value > maximum) fail(`${name} is outside its 64-bit range`);
+  return value;
+}
+
+function encodeVarint(value, name = "varint") {
+  let current = asBigInt(value, name);
+  const encoded = [];
+  do {
+    let byte = Number(current & 0x7fn);
+    current >>= 7n;
+    if (current !== 0n) byte |= 0x80;
+    encoded.push(byte);
+  } while (current !== 0n);
+  return Uint8Array.from(encoded);
+}
+
+function encodeSignedInt64(value, name) {
+  return encodeVarint(BigInt.asUintN(64, asBigInt(value, name, true)), name);
+}
+
+function fieldTag(field, wireType) {
+  return encodeVarint(
+    BigInt(requireInteger(field, "field", 1, 0x1fff_ffff) * 8 + wireType),
+    "field tag",
+  );
+}
+
+function stringField(field, value, name) {
+  const encoded = encodeUtf8(value, name);
+  return concat([
+    fieldTag(field, 2),
+    encodeVarint(BigInt(encoded.length), "string length"),
+    encoded,
+  ]);
+}
+
+function bytesField(field, value) {
+  const bytes = requireBytes(value, "protobuf bytes");
+  return concat([fieldTag(field, 2), encodeVarint(BigInt(bytes.length), "bytes length"), bytes]);
+}
+
+function varintField(field, value, name, signed = false) {
+  return concat([
+    fieldTag(field, 0),
+    signed ? encodeSignedInt64(value, name) : encodeVarint(value, name),
+  ]);
+}
+
+function packedVarintField(field, values, name) {
+  if (!Array.isArray(values)) fail(`${name} must be an array`);
+  const packed = concat(
+    values.map((value, index) =>
+      encodeVarint(
+        BigInt(requireInteger(value, `${name}[${index}]`, 0, 0xffff_ffff)),
+        `${name}[${index}]`,
+      ),
+    ),
+  );
+  return packed.length === 0 ? new Uint8Array() : bytesField(field, packed);
+}
+
+/** Encodes control.AuthRequest for command 2. */
+export function encodeAuthRequest({ token, metadata = {} }) {
+  const parts = [stringField(1, token, "token")];
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    fail("metadata must be an object");
+  }
+  for (const key of Object.keys(metadata).sort()) {
+    const entry = concat([
+      stringField(1, key, "metadata key"),
+      stringField(2, metadata[key], `metadata.${key}`),
+    ]);
+    parts.push(bytesField(2, entry));
+  }
+  return concat(parts);
+}
+
+/** Encodes control.Heartbeat for command 1. */
+export function encodeHeartbeat({ timestamp, heartbeatId } = {}) {
+  const parts = [];
+  if (timestamp !== undefined) parts.push(varintField(1, timestamp, "timestamp", true));
+  if (heartbeatId !== undefined) {
+    parts.push(
+      varintField(
+        2,
+        BigInt(requireInteger(heartbeatId, "heartbeatId", -0x8000_0000, 0x7fff_ffff)),
+        "heartbeatId",
+        true,
+      ),
+    );
+  }
+  return concat(parts);
+}
+
+/** Encodes quote.SubscribeRequest for command 6. */
+export function encodeSubscribeRequest({
+  symbols,
+  subTypes = [SUB_TYPE.QUOTE],
+  isFirstPush = true,
+}) {
+  if (!Array.isArray(symbols)) fail("symbols must be an array");
+  const parts = symbols.map((symbol, index) => stringField(1, symbol, `symbols[${index}]`));
+  parts.push(packedVarintField(2, subTypes, "subTypes"));
+  if (isFirstPush) parts.push(varintField(3, 1n, "isFirstPush"));
+  return concat(parts);
+}
+
+/** Encodes quote.MultiSecurityRequest for real-time quote command 11. */
+export function encodeRealtimeQuoteRequest(symbols) {
+  if (!Array.isArray(symbols)) fail("symbols must be an array");
+  return concat(symbols.map((symbol, index) => stringField(1, symbol, `symbols[${index}]`)));
+}
+
+class ProtoReader {
+  constructor(bytes) {
+    this.bytes = requireBytes(bytes, "protobuf data");
+    this.offset = 0;
+  }
+
+  readByte(label) {
+    if (this.offset >= this.bytes.length) fail(`truncated protobuf ${label}`);
+    return this.bytes[this.offset++];
+  }
+
+  readVarint(label) {
+    let value = 0n;
+    for (let index = 0; index < 10; index += 1) {
+      const byte = this.readByte(label);
+      if (index === 9 && byte > 1) fail(`protobuf ${label} exceeds 64 bits`);
+      value |= BigInt(byte & 0x7f) << BigInt(index * 7);
+      if ((byte & 0x80) === 0) return value;
+    }
+    fail(`protobuf ${label} is an unterminated varint`);
+  }
+
+  readLength(label) {
+    const length = this.readVarint(`${label} length`);
+    if (length > MAX_SAFE_BIGINT) fail(`protobuf ${label} length exceeds JavaScript limits`);
+    const numericLength = Number(length);
+    if (numericLength > this.bytes.length - this.offset) fail(`truncated protobuf ${label}`);
+    return numericLength;
+  }
+
+  readBytes(label) {
+    const length = this.readLength(label);
+    const value = this.bytes.slice(this.offset, this.offset + length);
+    this.offset += length;
+    return value;
+  }
+
+  readString(label) {
+    return decodeUtf8(this.readBytes(label), label);
+  }
+
+  readField() {
+    const tag = this.readVarint("field tag");
+    if (tag > MAX_SAFE_BIGINT) fail("protobuf field tag exceeds JavaScript limits");
+    const numericTag = Number(tag);
+    const field = numericTag >>> 3;
+    const wireType = numericTag & 7;
+    if (field === 0) fail("protobuf field number must be non-zero");
+    return { field, wireType };
+  }
+
+  skip(wireType) {
+    if (wireType === 0) {
+      this.readVarint("unknown field");
+    } else if (wireType === 1) {
+      if (this.bytes.length - this.offset < 8) fail("truncated protobuf fixed64 field");
+      this.offset += 8;
+    } else if (wireType === 2) {
+      this.readBytes("unknown field");
+    } else if (wireType === 5) {
+      if (this.bytes.length - this.offset < 4) fail("truncated protobuf fixed32 field");
+      this.offset += 4;
+    } else {
+      fail(`unsupported protobuf wire type ${wireType}`);
+    }
+  }
+}
+
+function expectWireType(actual, expected, field) {
+  if (actual !== expected)
+    fail(`protobuf field ${field} has wire type ${actual}, expected ${expected}`);
+}
+
+function signed64(value) {
+  return BigInt.asIntN(64, value);
+}
+
+function unsigned32(value, field) {
+  if (value > 0xffff_ffffn) fail(`protobuf ${field} exceeds uint32`);
+  return Number(value);
+}
+
+function decodeMessage(data, readField) {
+  const reader = new ProtoReader(data);
+  while (reader.offset < reader.bytes.length) {
+    const { field, wireType } = reader.readField();
+    if (!readField(reader, field, wireType)) reader.skip(wireType);
+  }
+}
+
+function decodePrePostQuote(data) {
+  const quote = {};
+  decodeMessage(data, (reader, field, wireType) => {
+    if (field === 1) {
+      expectWireType(wireType, 2, field);
+      quote.lastDone = reader.readString("pre/post last_done");
+    } else if (field === 2) {
+      expectWireType(wireType, 0, field);
+      quote.timestamp = signed64(reader.readVarint("pre/post timestamp"));
+    } else if (field === 3) {
+      expectWireType(wireType, 0, field);
+      quote.volume = signed64(reader.readVarint("pre/post volume"));
+    } else if (field === 4) {
+      expectWireType(wireType, 2, field);
+      quote.turnover = reader.readString("pre/post turnover");
+    } else if (field === 5) {
+      expectWireType(wireType, 2, field);
+      quote.high = reader.readString("pre/post high");
+    } else if (field === 6) {
+      expectWireType(wireType, 2, field);
+      quote.low = reader.readString("pre/post low");
+    } else if (field === 7) {
+      expectWireType(wireType, 2, field);
+      quote.prevClose = reader.readString("pre/post prev_close");
+    } else return false;
+    return true;
+  });
+  return quote;
+}
+
+function decodeSecurityQuote(data) {
+  const quote = {};
+  decodeMessage(data, (reader, field, wireType) => {
+    if (field >= 1 && field <= 6) {
+      expectWireType(wireType, 2, field);
+      const names = ["symbol", "lastDone", "prevClose", "open", "high", "low"];
+      quote[names[field - 1]] = reader.readString(`quote ${names[field - 1]}`);
+    } else if (field === 7) {
+      expectWireType(wireType, 0, field);
+      quote.timestamp = signed64(reader.readVarint("quote timestamp"));
+    } else if (field === 8) {
+      expectWireType(wireType, 0, field);
+      quote.volume = signed64(reader.readVarint("quote volume"));
+    } else if (field === 9) {
+      expectWireType(wireType, 2, field);
+      quote.turnover = reader.readString("quote turnover");
+    } else if (field === 10) {
+      expectWireType(wireType, 0, field);
+      quote.tradeStatus = unsigned32(reader.readVarint("quote trade_status"), "trade_status");
+    } else if (field === 11) {
+      expectWireType(wireType, 2, field);
+      quote.preMarketQuote = decodePrePostQuote(reader.readBytes("pre_market_quote"));
+    } else if (field === 12) {
+      expectWireType(wireType, 2, field);
+      quote.postMarketQuote = decodePrePostQuote(reader.readBytes("post_market_quote"));
+    } else if (field === 13) {
+      expectWireType(wireType, 2, field);
+      quote.overnightQuote = decodePrePostQuote(reader.readBytes("over_night_quote"));
+    } else return false;
+    return true;
+  });
+  return quote;
+}
+
+/** Decodes quote.SecurityQuoteResponse returned by command 11. */
+export function decodeSecurityQuoteResponse(data) {
+  const quotes = [];
+  decodeMessage(data, (reader, field, wireType) => {
+    if (field !== 1) return false;
+    expectWireType(wireType, 2, field);
+    quotes.push(decodeSecurityQuote(reader.readBytes("secu_quote")));
+    return true;
+  });
+  return quotes;
+}
+
+/** Decodes quote.PushQuote delivered by push command 101. */
+export function decodePushQuote(data) {
+  const quote = {};
+  decodeMessage(data, (reader, field, wireType) => {
+    if (field === 1 || (field >= 3 && field <= 6) || field === 9 || field === 13) {
+      expectWireType(wireType, 2, field);
+      const names = {
+        1: "symbol",
+        3: "lastDone",
+        4: "open",
+        5: "high",
+        6: "low",
+        9: "turnover",
+        13: "currentTurnover",
+      };
+      quote[names[field]] = reader.readString(`push quote ${names[field]}`);
+    } else if (field === 2 || field === 7 || field === 8 || field === 12) {
+      expectWireType(wireType, 0, field);
+      const names = { 2: "sequence", 7: "timestamp", 8: "volume", 12: "currentVolume" };
+      quote[names[field]] = signed64(reader.readVarint(`push quote ${names[field]}`));
+    } else if (field === 10 || field === 11 || field === 14) {
+      expectWireType(wireType, 0, field);
+      const names = { 10: "tradeStatus", 11: "tradeSession", 14: "tag" };
+      quote[names[field]] = unsigned32(
+        reader.readVarint(`push quote ${names[field]}`),
+        names[field],
+      );
+    } else return false;
+    return true;
+  });
+  return quote;
+}
+
+/** Decodes control.AuthResponse returned by command 2. */
+export function decodeAuthResponse(data) {
+  const response = {};
+  decodeMessage(data, (reader, field, wireType) => {
+    if (field === 1) {
+      expectWireType(wireType, 2, field);
+      response.sessionId = reader.readString("session_id");
+    } else if (field === 2) {
+      expectWireType(wireType, 0, field);
+      response.expires = signed64(reader.readVarint("expires"));
+    } else if (field === 3 || field === 4) {
+      expectWireType(wireType, 0, field);
+      response[field === 3 ? "limit" : "online"] = unsigned32(
+        reader.readVarint(field === 3 ? "limit" : "online"),
+        field === 3 ? "limit" : "online",
+      );
+    } else return false;
+    return true;
+  });
+  return response;
+}
+
+/** Decodes the protobuf error body used for non-zero response statuses. */
+export function decodeErrorResponse(data) {
+  const response = {};
+  decodeMessage(data, (reader, field, wireType) => {
+    if (field === 1) {
+      expectWireType(wireType, 0, field);
+      response.code = reader.readVarint("error code");
+    } else if (field === 2) {
+      expectWireType(wireType, 2, field);
+      response.message = reader.readString("error message");
+    } else return false;
+    return true;
+  });
+  return response;
+}
