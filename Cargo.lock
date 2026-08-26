@@ -2681,7 +2681,6 @@ dependencies = [
  "llrt_net",
  "llrt_os",
  "llrt_path",
- "llrt_process",
  "llrt_url",
  "llrt_zlib",
  "rquickjs",
@@ -2703,6 +2702,7 @@ dependencies = [
  "gpui",
  "gpui-shell",
  "gpui_platform",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -4140,16 +4140,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "llrt_process"
-version = "0.9.0-beta"
-source = "git+https://github.com/awslabs/llrt?rev=7b95c82a9b15e7ddfb2778eca4b5a63111e74f51#7b95c82a9b15e7ddfb2778eca4b5a63111e74f51"
-dependencies = [
- "libc",
- "llrt_utils",
- "rquickjs",
-]
-
-[[package]]
 name = "llrt_stream"
 version = "0.9.0-beta"
 source = "git+https://github.com/awslabs/llrt?rev=7b95c82a9b15e7ddfb2778eca4b5a63111e74f51#7b95c82a9b15e7ddfb2778eca4b5a63111e74f51"
@@ -4363,6 +4353,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "62bb907fe88d54d8d9ce32a3cceab4218ed2f6b7d35617cafe9adf84e43919cb"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "matchers"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1525a2a28c7f4fa0fc98bb91ae755d1e2d1505079e05539e35bc876b5d65ae9"
+dependencies = [
+ "regex-automata",
 ]
 
 [[package]]
@@ -7722,10 +7721,14 @@ version = "0.3.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb7f578e5945fb242538965c2d0b04418d38ec25c79d160cd279bf0731c8d319"
 dependencies = [
+ "matchers",
  "nu-ansi-term",
+ "once_cell",
+ "regex-automata",
  "sharded-slab",
  "smallvec",
  "thread_local",
+ "tracing",
  "tracing-core",
  "tracing-log",
 ]

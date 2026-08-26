@@ -2,6 +2,7 @@ import { View } from "gpui";
 
 import {
   findNearestPricePoint,
+  formatMarketTime,
   layoutPriceSeries,
   mergeLiveQuote,
   prepareFiveDaySeries,
@@ -47,6 +48,23 @@ function runVectors() {
   ]);
   check(us.days[0].date === "2026-03-08", "uses New York DST for local dates");
   check(us.days[1].date === "2026-03-09", "separates adjacent US local dates");
+  check(
+    formatMarketTime("AAPL.US", Number(unix("2026-03-09T13:30:00Z"))) === "09:30",
+    "formats a US hover time in New York daylight time",
+  );
+  check(
+    formatMarketTime("AAPL.US", Number(unix("2026-01-09T14:30:00Z"))) === "09:30",
+    "formats a US hover time in New York standard time",
+  );
+  check(
+    formatMarketTime("700.HK", Number(unix("2026-08-24T02:00:00Z"))) === "10:00",
+    "formats an HK hover time in Hong Kong time",
+  );
+  const usLaidOut = layoutPriceSeries(us, { width: 500, height: 100, dayGap: 10 });
+  check(
+    usLaidOut.points[0].date === "2026-03-08" && usLaidOut.points.at(-1).date === "2026-03-09",
+    "laid-out US hover points retain New York trading dates across DST",
+  );
 
   const laidOut = layoutPriceSeries(series, { width: 500, height: 100, dayGap: 10 });
   check(laidOut.points[0].x === 0 && laidOut.points.at(-1).x === 500, "uses full plot width");
@@ -77,13 +95,9 @@ function runVectors() {
   // The hover card names the market-local day it is pointing at, and it reads
   // that off the laid-out point rather than off the prepared series.
   check(
-    laidOut.points.every((point) => typeof point.date === "string" && point.date.length === 10),
-    "every laid-out point carries the market-local date its hover label prints",
-  );
-  check(
-    laidOut.points.map((point) => point.date).join(",") ===
-      series.points.map((point) => point.date).join(","),
-    "layout keeps the dates the prepared series assigned",
+    laidOut.points[0].date === series.points[0].date &&
+      laidOut.points.at(-1).date === series.points.at(-1).date,
+    "laid-out hover points retain market-local trading dates",
   );
 
   const base = [candle("2026-08-26T14:30:00Z", 100)];

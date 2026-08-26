@@ -1,3 +1,4 @@
+import { text, v_flex } from "gpui";
 import LongbridgeApp from "./main.js";
 
 function quote(index) {
@@ -65,10 +66,20 @@ export default class WorkspaceUiProbe extends LongbridgeApp {
     ]);
     this.chartState = { symbol: this.selectedSymbol, state: "ready" };
     this.chartGeneration = 0;
+    this.chartThemeRevision = 0;
+    this.initPriceChartView();
     this.clock = null;
   }
 
   render(cx) {
-    return this.watchlistPage(cx.theme());
+    return (
+      v_flex()
+        .size_full()
+        .child(this.watchlistPage(cx.theme()))
+        // A probe-only state read used by the host interaction test. The table
+        // itself is still real: a click must travel through its virtual-list
+        // wrapper before this value can change.
+        .child(text(`Selected ${this.selectedSymbol}`))
+    );
   }
 }

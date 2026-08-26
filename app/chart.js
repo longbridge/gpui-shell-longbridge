@@ -42,6 +42,16 @@ function marketOffsetSeconds(symbol, timestamp) {
   return symbol.endsWith(".US") ? newYorkOffsetSeconds(timestamp) : 8 * 3600;
 }
 
+/** Formats a timestamp in the trading market's wall-clock time. */
+export function formatMarketTime(symbol, timestamp) {
+  const seconds = timestampSeconds(timestamp);
+  if (typeof symbol !== "string" || seconds === null) return "";
+  const local = new Date((seconds + marketOffsetSeconds(symbol, seconds)) * 1000);
+  const hour = String(local.getUTCHours()).padStart(2, "0");
+  const minute = String(local.getUTCMinutes()).padStart(2, "0");
+  return `${hour}:${minute}`;
+}
+
 /**
  * The market-local calendar day a timestamp falls in, as a whole number of days
  * since the epoch. Two timestamps share a market-local date exactly when this
@@ -240,7 +250,7 @@ function computePriceGeometry(series, width, height, dayGap, maxPoints) {
         // The grouped candles a day holds never carried the day's own key —
         // `prepareFiveDaySeries` adds it when it flattens them, and this
         // rebuilds from `days` rather than from that flattened list. Without
-        // this the hover label reads "undefined 13:54 UTC".
+        // this the hover label reads an undefined date before its local time.
         date: day.date,
         close,
         dayIndex,

@@ -7,9 +7,6 @@ import {
   Input,
   Link,
   PathBuilder,
-  Progress,
-  ProgressIndicator,
-  ProgressTrack,
   Table,
   TableBody,
   TableCell,
@@ -234,32 +231,38 @@ export const TABLE_HEADER_HEIGHT = 24;
  * @param {{ title: string, size: (el: import("gpui").Element) => import("gpui").Element }[]} columns
  */
 function tableHeaderRow(tokens, id, columns) {
-  return TableHeader.new(`${id}-header`)
-    .child(
-      // Row one of the table's rows: the body rows below start at two, the way
-      // an accessible row index counts every row including this one.
-      TableRow.new(`${id}-header-row`, 1)
-        .flex()
-        .items_center()
-        .h(TABLE_HEADER_HEIGHT)
-        .gap(tokens.spacing.sm)
-        .px(tokens.spacing.sm)
-        .bg(tokens.muted)
-        .border_b(1)
-        .border_color(tokens.border)
-        .children(
-          columns.map((column, index) =>
-            column
-              .size(
-                TableHead.new(`${id}-head-${index + 1}`, index + 1)
+  return TableHeader.new(`${id}-header`).child(
+    // Row one of the table's rows: the body rows below start at two, the way
+    // an accessible row index counts every row including this one.
+    TableRow.new(`${id}-header-row`, 1)
+      .flex()
+      .items_center()
+      .h(TABLE_HEADER_HEIGHT)
+      .gap(tokens.spacing.sm)
+      .px(tokens.spacing.sm)
+      .bg(tokens.muted)
+      .border_b(1)
+      .border_color(tokens.border)
+      .children(
+        columns.map((column, index) =>
+          column.size(
+            TableHead.new(`${id}-head-${index + 1}`, index + 1)
+              .flex()
+              .items_center()
+              // TableHead keeps the column's table semantics, while its
+              // full-size div is the shell-owned tooltip trigger.
+              .child(
+                div()
+                  .size_full()
                   .flex()
                   .items_center()
-                  .tooltip(COLUMN_HINTS[column.title] ?? column.title),
-              )
-              .child(muted(tokens, column.title)),
+                  .tooltip(COLUMN_HINTS[column.title] ?? column.title)
+                  .child(muted(tokens, column.title)),
+              ),
           ),
         ),
-    );
+      ),
+  );
 }
 
 const WATCHLIST_COLUMNS = [
@@ -415,10 +418,12 @@ export const QUOTE_ROW_HEIGHT = 44;
  * It registers no click handler of its own: rows are rebuilt every frame the
  * virtual list is scrolled, and a per-row callback would accumulate one
  * unreachable function per row per frame. The list carries a single
- * `on_item_click` instead and reports the index.
+ * `on_item_click` instead and reports the instrument's stable key.
  *
  * `rowIndex` is the row's zero-based position in the whole collection; what is
- * announced is that plus two, because the header above it is row one.
+ * announced is that plus two, because the header above it is row one. Selection
+ * is reported separately as the virtual list's stable instrument key, not this
+ * transient layout index.
  *
  * @param {import("gpui").Theme} tokens
  * @param {LongbridgeQuoteRow} quote
@@ -432,8 +437,7 @@ export function quoteRow(tokens, quote, selected, rowIndex = 0, now = Date.now()
     : quote.change.startsWith("+")
       ? tokens.primary
       : tokens.foreground;
-  const cell = (column, build) =>
-    build(TableCell.new(`quote-${quote.symbol}-${column}`, column));
+  const cell = (column, build) => build(TableCell.new(`quote-${quote.symbol}-${column}`, column));
   return TableRow.new(`quote-${quote.symbol}`, rowIndex + 2)
     .flex()
     .items_center()
@@ -488,7 +492,11 @@ export function quoteRow(tokens, quote, selected, rowIndex = 0, now = Date.now()
     )
     .child(
       cell(5, (element) =>
-        element.flex().flex_1().justify_end().child(muted(tokens, tradeStatusLabel(quote))),
+        element
+          .flex()
+          .flex_1()
+          .justify_end()
+          .child(muted(tokens, tradeStatusLabel(quote))),
       ),
     );
 }
@@ -585,137 +593,6 @@ export function quoteDetail(tokens, quote, now = Date.now(), pulseOpacity = 1) {
             { title: "Data health", value: dataHealth(quote, now) },
           ]),
         ),
-    );
-}
-
-function percentage(value, total) {
-  return `${total > 0 ? (value / total) * 100 : 0}%`;
-}
-
-/**
- * @param {import("gpui").Theme} tokens
- * @param {ReturnType<import("./chart.js").layoutPriceSeries>} geometry
- * @param {string} state
- * @param {Record<string, any> | null} hoveredPoint
- * @param {(event: import("gpui").MouseMoveEvent, cx: import("gpui").Context) => void} onMouseMove
- * @param {(hovered: boolean, cx: import("gpui").Context) => void} onHover
- */
-export function priceChart(tokens, geometry, state, hoveredPoint, onMouseMove, onHover) {
-  const height = 132;
-  const chart = v_flex()
-    .id("five-day-chart")
-    .h(178)
-    .gap(tokens.spacing.xs)
-    .child(
-      h_flex()
-        .items_center()
-        .justify_between()
-        .child(label(tokens, "5D intraday"))
-        .when(geometry.min !== null, (element) =>
-          element.child(
-            numeric(tokens, `${geometry.min.toFixed(2)} — ${geometry.max.toFixed(2)}`, 11),
-          ),
-        ),
-    );
-
-  if (state === "loading") {
-    return chart.child(
-      Progress.new("five-day-loading")
-        .indeterminate(true)
-        .h(height)
-        .flex()
-        .items_center()
-        .child(
-          ProgressTrack.new()
-            .w_full()
-            .h(2)
-            .bg(tokens.muted)
-            .child(ProgressIndicator.new().w("42%").h_full().bg(tokens.primary)),
-        ),
-    );
-  }
-  if (state === "error" || geometry.points.length === 0) {
-    return chart.child(
-      v_flex()
-        .h(height)
-        .items_center()
-        .justify_center()
-        .child(muted(tokens, state === "error" ? "Chart unavailable" : "No 5D data")),
-    );
-  }
-
-  const points = geometry.points.map((point) => [
-    percentage(point.x, geometry.width),
-    percentage(point.y, geometry.height),
-  ]);
-  const fillBuilder = PathBuilder.fill().move_to(points[0][0], "100%");
-  for (const point of points) fillBuilder.line_to(point[0], point[1]);
-  const fill = fillBuilder.line_to(points.at(-1)[0], "100%").close().build();
-  const stroke = PathBuilder.stroke(1.5).add_polygon(points, false).build();
-  const area = Background.linear_gradient(
-    180,
-    Background.stop(tokens.primary, 0),
-    Background.stop(tokens.surface, 1),
-  ).opacity(0.32);
-  const hoverX = hoveredPoint ? percentage(hoveredPoint.x, geometry.width) : null;
-  const hoverY = hoveredPoint ? percentage(hoveredPoint.y, geometry.height) : null;
-  const indicator = hoveredPoint
-    ? PathBuilder.stroke(1)
-        .move_to(hoverX, 0)
-        .line_to(hoverX, "100%")
-        .dash_array([3, 3])
-        .build()
-    : null;
-  const marker = hoveredPoint
-    ? PathBuilder.fill()
-        .move_to(hoverX, `${Math.max(0, (hoveredPoint.y / geometry.height) * 100 - 3)}%`)
-        .line_to(`${Math.min(100, (hoveredPoint.x / geometry.width) * 100 + 0.9)}%`, hoverY)
-        .line_to(hoverX, `${Math.min(100, (hoveredPoint.y / geometry.height) * 100 + 3)}%`)
-        .line_to(`${Math.max(0, (hoveredPoint.x / geometry.width) * 100 - 0.9)}%`, hoverY)
-        .close()
-        .build()
-    : null;
-  const hoverTime = hoveredPoint
-    ? new Date(hoveredPoint.timestamp * 1000).toISOString().slice(11, 16)
-    : "";
-
-  return chart
-    .child(
-      div()
-        .id("five-day-plot")
-        .relative()
-        .h(height)
-        .w_full()
-        .on_mouse_move(onMouseMove)
-        .on_hover(onHover)
-        .child(paint_path(fill, area).absolute().inset_0())
-        .child(paint_path(stroke, tokens.primary).absolute().inset_0())
-        .when(indicator, (element) =>
-          element
-            .child(paint_path(indicator, tokens.muted_foreground).absolute().inset_0())
-            .child(paint_path(marker, tokens.primary).absolute().inset_0())
-            .child(
-              v_flex()
-                .absolute()
-                .top(4)
-                .when(hoveredPoint.x > geometry.width * 0.68, (tip) => tip.left(4))
-                .when(hoveredPoint.x <= geometry.width * 0.68, (tip) => tip.right(4))
-                .px(tokens.spacing.sm)
-                .py(tokens.spacing.xs)
-                .gap(tokens.spacing.xxs)
-                .rounded(tokens.radius.sm)
-                .border(1)
-                .border_color(tokens.border)
-                .bg(tokens.surface)
-                .child(numeric(tokens, hoveredPoint.close.toFixed(3), 12))
-                .child(muted(tokens, `${hoveredPoint.date} ${hoverTime} UTC`)),
-            ),
-        ),
-    )
-    .child(
-      h_flex()
-        .justify_between()
-        .children(geometry.days.map((day) => muted(tokens, day.date.slice(5)))),
     );
 }
 
@@ -1043,9 +920,7 @@ export function deviceCodeBox(tokens, code) {
     .border_color(tokens.border)
     .bg(tokens.muted)
     .child(
-      numeric(tokens, code.split("").join(" "), 22)
-        .font_weight(600)
-        .text_color(tokens.foreground),
+      numeric(tokens, code.split("").join(" "), 22).font_weight(600).text_color(tokens.foreground),
     );
 }
 

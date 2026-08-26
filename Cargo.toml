@@ -8,6 +8,7 @@ publish = false
 gpui-shell = { path = "../gpui-component/crates/shell" }
 gpui = { version = "0.2.2", git = "https://github.com/zed-industries/zed", features = ["profiler"] }
 gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
 gpui = { version = "0.2.2", git = "https://github.com/zed-industries/zed", features = ["test-support"] }

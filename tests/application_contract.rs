@@ -65,7 +65,9 @@ fn application_exposes_api_backed_read_only_views() {
         "both lists must be virtualized tables that announce their full size"
     );
     assert!(
-        ui.contains("TableHead.new(") && ui.contains("TableCell.new(") && ui.contains("TableRow.new("),
+        ui.contains("TableHead.new(")
+            && ui.contains("TableCell.new(")
+            && ui.contains("TableRow.new("),
         "rows and headers must be table parts rather than styled flex containers"
     );
     assert!(main.contains("const tokens = cx.theme()"));
@@ -81,7 +83,8 @@ fn application_exposes_api_backed_read_only_views() {
     // Both lists go through one virtualized table, so the list and the bar are
     // named from the same id and cannot drift apart.
     assert!(
-        main.contains("v_virtual_list(`${id}-rows`")
+        main.contains("v_virtual_list(")
+            && main.contains("`${id}-rows`,")
             && main.contains("Scrollbar.vertical(`${id}-rows`)"),
         "both lists must virtualize their rows and pair a scrollbar with them by name"
     );
@@ -100,7 +103,7 @@ fn application_exposes_api_backed_read_only_views() {
     // Both bound anchored surfaces are exercised, and the pointer affordances
     // with them.
     assert!(
-        main.contains("Popover.new(\"watchlist-menu\")")
+        main.contains("Popover.new(\"user-menu\")")
             && main.contains("Popover.new(\"allocation-help\")"),
         "both Popover scenarios must stay wired"
     );
@@ -109,4 +112,37 @@ fn application_exposes_api_backed_read_only_views() {
         "the popup menu must announce itself as a menu"
     );
     assert!(ui.contains(".tooltip("), "pointer hints must stay wired");
+
+    // Authorization opens the page itself. The address is only known once the
+    // device code exists, and it is not one anyone reads.
+    assert!(
+        main.contains("open_url(authorization.verificationUri)")
+            && !main.contains("device.verificationUri,\n              device.verificationUri,"),
+        "sign-in must open the authorization page rather than print its URL"
+    );
+}
+
+#[test]
+fn price_chart_is_a_retained_child_view() {
+    let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
+    let chart =
+        fs::read_to_string(app_dir().join("price_chart_view.js")).expect("price_chart_view.js");
+
+    assert!(
+        main.contains("ViewHandle.new(PriceChartView")
+            && main.contains("child_view(this.priceChart)")
+            && main.contains("this.priceChart.set_props(")
+            && main.contains("this.priceChart.release()"),
+        "the root must create, update, mount, and release one retained price-chart child"
+    );
+    assert!(
+        chart.contains("export default class PriceChartView extends View"),
+        "the retained child must own the price-chart view lifecycle"
+    );
+    for root_owned_hover_state in ["chartPointer", "chartHoverFramePending", "chartHover"] {
+        assert!(
+            !main.contains(root_owned_hover_state),
+            "root still owns chart-local state {root_owned_hover_state}"
+        );
+    }
 }

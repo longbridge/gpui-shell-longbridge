@@ -1,4 +1,9 @@
-use std::{ops::Deref as _, path::PathBuf};
+use std::{
+    fs,
+    ops::Deref as _,
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use gpui::{IntoElement as _, TestAppContext, VisualTestContext};
 use gpui_shell::ShellRuntime;
@@ -13,18 +18,84 @@ fn grant_app_capabilities() {
     gpui_shell::set_capabilities(manifest.capabilities(&root, &std::env::temp_dir()));
 }
 
+static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
+
+struct ApplicationFixture {
+    root: PathBuf,
+}
+
+impl ApplicationFixture {
+    fn new(entry: &str) -> Self {
+        let ordinal = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "gpui-shell-longbridge-{}-{ordinal}",
+            std::process::id()
+        ));
+        copy_tree(&app_dir(), &root);
+        let manifest_path = root.join("gpui-shell.json");
+        let manifest = fs::read_to_string(&manifest_path).expect("copied application manifest");
+        let manifest = manifest.replacen(
+            r#""entry": "main.js""#,
+            &format!(r#""entry": "{entry}""#),
+            1,
+        );
+        fs::write(manifest_path, manifest).expect("select test application entry");
+        Self { root }
+    }
+}
+
+impl Drop for ApplicationFixture {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+fn copy_tree(source: &Path, destination: &Path) {
+    fs::create_dir_all(destination).expect("create application fixture directory");
+    for entry in fs::read_dir(source).expect("read application fixture source") {
+        let entry = entry.expect("application fixture entry");
+        let target = destination.join(entry.file_name());
+        if entry
+            .file_type()
+            .expect("application fixture file type")
+            .is_dir()
+        {
+            copy_tree(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), target).expect("copy application fixture file");
+        }
+    }
+}
+
+fn load_test_view(
+    runtime: &std::rc::Rc<ShellRuntime>,
+    fixture: &ApplicationFixture,
+    window: &mut gpui::Window,
+    cx: &mut gpui::App,
+) -> (
+    gpui::Entity<gpui_shell::ShellRoot>,
+    gpui::Entity<gpui_shell::ScriptView>,
+) {
+    let root = runtime
+        .try_load(&fixture.root, window, cx)
+        .expect("load test application through the public host facade");
+    let view = root
+        .read(cx)
+        .content()
+        .clone()
+        .downcast::<gpui_shell::ScriptView>()
+        .expect("test application content is a script view");
+    (root, view)
+}
+
 #[gpui::test]
 fn quote_stream_vectors_run_against_this_application(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
-    let view_type = runtime
-        .load_app(&app_dir(), "quote_stream.test.js")
-        .expect("load current quote stream vectors");
+    let fixture = ApplicationFixture::new("quote_stream.test.js");
     let window = cx.add_window(|_, _| Empty);
     let mut context = VisualTestContext::from_window(*window.deref(), cx);
-    let view = context
-        .update(|window, cx| runtime.instantiate_view(&view_type, window, cx))
-        .expect("instantiate current quote stream vectors");
+    let (_root, view) = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
 
     context.run_until_parked();
     let draw_view = view.clone();
@@ -46,14 +117,10 @@ fn quote_stream_vectors_run_against_this_application(cx: &mut TestAppContext) {
 fn auth_and_http_vectors_run_against_this_application(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
-    let view_type = runtime
-        .load_app(&app_dir(), "auth_http.test.js")
-        .expect("load current auth and http vectors");
+    let fixture = ApplicationFixture::new("auth_http.test.js");
     let window = cx.add_window(|_, _| Empty);
     let mut context = VisualTestContext::from_window(*window.deref(), cx);
-    let view = context
-        .update(|window, cx| runtime.instantiate_view(&view_type, window, cx))
-        .expect("instantiate current auth and http vectors");
+    let (_root, view) = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
 
     context.run_until_parked();
     let draw_view = view.clone();
@@ -75,50 +142,60 @@ fn auth_and_http_vectors_run_against_this_application(cx: &mut TestAppContext) {
 fn chart_vectors_run_against_this_application(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
-    runtime
-        .load_app(&app_dir(), "chart.test.js")
-        .expect("current chart vectors execute in QuickJS");
+    let fixture = ApplicationFixture::new("chart.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let _loaded = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+}
+
+#[gpui::test]
+fn reconnect_invalidates_the_superseded_chart_request_before_stopping(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("chart_reconnect.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let _loaded = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
 }
 
 #[gpui::test]
 fn protocol_vectors_run_against_this_application(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
-    runtime
-        .load_app(&app_dir(), "protocol.test.js")
-        .expect("current protocol vectors execute in QuickJS");
+    let fixture = ApplicationFixture::new("protocol.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let _loaded = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
 }
 
 #[gpui::test]
 fn market_state_vectors_run_against_this_application(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
-    runtime
-        .load_app(&app_dir(), "market.test.js")
-        .expect("current market-state vectors execute in QuickJS");
+    let fixture = ApplicationFixture::new("market.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let _loaded = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
 }
 
 #[gpui::test]
 fn portfolio_vectors_run_against_this_application(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
-    runtime
-        .load_app(&app_dir(), "portfolio.test.js")
-        .expect("current portfolio vectors execute in QuickJS");
+    let fixture = ApplicationFixture::new("portfolio.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let _loaded = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
 }
 
 #[gpui::test]
 fn watchlist_row_renders_scannable_market_columns(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
-    let view_type = runtime
-        .load_app(&app_dir(), "watchlist_ui.test.js")
-        .expect("load current Watchlist UI probe");
+    let fixture = ApplicationFixture::new("watchlist_ui.test.js");
     let window = cx.add_window(|_, _| Empty);
     let mut context = VisualTestContext::from_window(*window.deref(), cx);
-    let view = context
-        .update(|window, cx| runtime.instantiate_view(&view_type, window, cx))
-        .expect("instantiate current Watchlist UI probe");
+    let (_root, view) = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
     context.run_until_parked();
     let draw_view = view.clone();
     context.draw(
@@ -165,6 +242,31 @@ fn watchlist_row_renders_scannable_market_columns(cx: &mut TestAppContext) {
         "{rendered}"
     );
 
+    // A TableHead is a semantic table part, not an interactive shell element.
+    // Its tooltip must live on the full-size div it contains, otherwise the
+    // shell cannot wire the hover listeners and emits a warning instead.
+    let instrument_head = rendered
+        .lines()
+        .find(|line| line.contains(r#"TableHead "watchlist-head-1" #1"#))
+        .expect("instrument table header");
+    assert!(
+        !instrument_head.contains(":tooltip"),
+        "the table part cannot own the tooltip: {instrument_head}"
+    );
+    let instrument_header_children = rendered
+        .split_once(r#"TableHead "watchlist-head-1" #1"#)
+        .and_then(|(_, following)| following.split_once(r#"TableHead "watchlist-head-2" #2"#))
+        .map(|(children, _)| children)
+        .expect("instrument header's descendant range");
+    let instrument_tooltip = instrument_header_children
+        .lines()
+        .find(|line| line.contains(r#":tooltip[Str("Ticker and security name")]"#))
+        .expect("instrument tooltip on a table-header descendant");
+    assert!(
+        instrument_tooltip.trim_start().starts_with("div "),
+        "a shell-owned div must carry the header tooltip: {instrument_tooltip}"
+    );
+
     // A popup trigger draws its own open state. Styling it from focus alone
     // reads backwards: the surface holds the keyboard while it is up, so the
     // trigger would go flat exactly while the menu is showing.
@@ -203,14 +305,10 @@ fn authenticated_workspace_materializes_a_scrollable_watchlist(cx: &mut TestAppC
     cx.update(gpui_shell::init);
     grant_app_capabilities();
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
-    let view_type = runtime
-        .load_app(&app_dir(), "workspace_ui.test.js")
-        .expect("load authenticated workspace UI probe");
+    let fixture = ApplicationFixture::new("workspace_ui.test.js");
     let window = cx.add_window(|_, _| Empty);
     let mut context = VisualTestContext::from_window(*window.deref(), cx);
-    let view = context
-        .update(|window, cx| runtime.instantiate_view(&view_type, window, cx))
-        .expect("instantiate authenticated workspace UI probe");
+    let (_root, view) = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
 
     context.run_until_parked();
     let draw_view = view.clone();
@@ -243,37 +341,301 @@ fn authenticated_workspace_materializes_a_scrollable_watchlist(cx: &mut TestAppC
     // Both panes are panels of one resizable group rather than wrapped flex
     // children, so the divider between them is base's and its position is the
     // window's.
+    let workspace_group = rendered
+        .lines()
+        .find(|line| line.contains("h_resizable \"watchlist-workspace\""))
+        .expect("watchlist resizable group");
     assert!(
-        rendered.contains("h_resizable \"watchlist-workspace\""),
-        "{rendered}"
+        !workspace_group.contains(":id"),
+        "h_resizable must use only its constructor id: {workspace_group}"
     );
     assert!(rendered.contains("resizable_panel"), "{rendered}");
     assert!(rendered.contains("watchlist-pane"), "{rendered}");
     assert!(rendered.contains("stock-detail-pane"), "{rendered}");
 
-    // The Watchlist popup menu and the column tooltips.
-    assert!(rendered.contains("Popover"), "{rendered}");
-    assert!(rendered.contains("watchlist-menu-trigger"), "{rendered}");
+    // Column tooltips remain on shell-owned descendants. The session menu now
+    // lives in the window header, outside this page-only probe.
     assert!(rendered.contains(":tooltip"), "{rendered}");
 
-    assert!(rendered.contains("5D intraday"), "{rendered}");
-    assert!(rendered.contains("path fill"), "{rendered}");
-    assert!(rendered.contains("path stroke"), "{rendered}");
+    // The price chart is a retained child. Its chart labels and paths belong
+    // to the child's snapshot rather than being rebuilt with this root tree.
+    assert!(rendered.contains("child_view #"), "{rendered}");
+    assert!(!rendered.contains("5D intraday"), "{rendered}");
+    assert!(!rendered.contains("path fill"), "{rendered}");
+    assert!(!rendered.contains("path stroke"), "{rendered}");
     assert!(rendered.contains(":overflow_y_scrollbar"), "{rendered}");
+}
+
+#[gpui::test]
+fn retained_price_chart_owns_its_indicator_and_dated_tooltip(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("price_chart_view.test.js");
+    let fixture_root = fixture.root.clone();
+    let window = cx.add_window(move |window, cx| {
+        WorkspaceRoot(
+            runtime
+                .try_load(&fixture_root, window, cx)
+                .expect("load retained price-chart probe"),
+        )
+    });
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    context.update(|window, cx| window.draw(cx).clear(cx));
+
+    let view = window
+        .root(&mut context)
+        .expect("price-chart root")
+        .read_with(&context, |root, cx| {
+            root.0
+                .read(cx)
+                .content()
+                .clone()
+                .downcast::<gpui_shell::ScriptView>()
+                .expect("price-chart content is a script view")
+        });
+    let tree = |context: &mut VisualTestContext| {
+        context.update(|_, cx| {
+            view.read(cx)
+                .snapshot()
+                .map(gpui_shell::RenderSnapshot::debug_tree)
+                .unwrap_or_default()
+        })
+    };
+    let initial = tree(&mut context);
+    assert!(initial.contains("5D intraday"), "{initial}");
+    assert!(initial.contains(":on_mouse_move(fn)"), "{initial}");
+    assert!(initial.contains(":on_hover(fn)"), "{initial}");
+
+    context.simulate_mouse_move(
+        gpui::point(gpui::px(100.), gpui::px(80.)),
+        None,
+        gpui::Modifiers::default(),
+    );
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    let hovered = tree(&mut context);
+    assert!(hovered.contains("2026-03-09 09:30"), "{hovered}");
+    assert!(!hovered.contains("UTC"), "{hovered}");
+    assert!(!hovered.contains("undefined"), "{hovered}");
+    assert!(
+        hovered.matches("path fill").count() > initial.matches("path fill").count()
+            && hovered.matches("path stroke").count() > initial.matches("path stroke").count(),
+        "the child must draw its marker and indicator after pointer movement:\n{hovered}"
+    );
+
+    // Move out only after the pointer callback replaced the script snapshot.
+    // This exercises the current snapshot's genuine `on_hover(false)` path,
+    // rather than clearing hover by directly invoking child state.
+    context.simulate_mouse_move(
+        gpui::point(gpui::px(700.), gpui::px(300.)),
+        None,
+        gpui::Modifiers::default(),
+    );
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    let left = tree(&mut context);
+    assert!(!left.contains("2026-03-09"), "{left}");
+    assert_eq!(
+        left.matches("path fill").count(),
+        initial.matches("path fill").count(),
+        "leaving the replaced child snapshot must remove its marker:\n{left}"
+    );
+    assert_eq!(
+        left.matches("path stroke").count(),
+        initial.matches("path stroke").count(),
+        "leaving the replaced child snapshot must remove its indicator:\n{left}"
+    );
+}
+
+#[gpui::test]
+fn retained_price_chart_hover_rebuilds_the_child_without_the_parent(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("price_chart_retained.test.js");
+    let fixture_root = fixture.root.clone();
+    let runtime_for_window = runtime.clone();
+    let window = cx.add_window(move |window, cx| {
+        WorkspaceRoot(
+            runtime_for_window
+                .try_load(&fixture_root, window, cx)
+                .expect("load retained parent/price-chart probe"),
+        )
+    });
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    context.update(|window, cx| window.draw(cx).clear(cx));
+
+    let parent = window
+        .root(&mut context)
+        .expect("price-chart parent root")
+        .read_with(&context, |root, cx| {
+            root.0
+                .read(cx)
+                .content()
+                .clone()
+                .downcast::<gpui_shell::ScriptView>()
+                .expect("price-chart parent content is a script view")
+        });
+    let parent_tree = |context: &mut VisualTestContext| {
+        context.update(|_, cx| {
+            parent
+                .read(cx)
+                .snapshot()
+                .map(gpui_shell::RenderSnapshot::debug_tree)
+                .unwrap_or_default()
+        })
+    };
+    assert!(
+        parent_tree(&mut context).contains("Parent renders: 1"),
+        "the parent must start with one published snapshot"
+    );
+
+    let drive_child_only =
+        |context: &mut VisualTestContext, point: gpui::Point<gpui::Pixels>, operation: &str| {
+            let before = runtime.read_metrics();
+            context.simulate_click(point, gpui::Modifiers::default());
+            context.run_until_parked();
+            context.update(|window, cx| window.draw(cx).clear(cx));
+            assert_eq!(
+                runtime.read_metrics().since(&before).script_renders(),
+                1,
+                "{operation} must rebuild exactly the retained child"
+            );
+            let tree = parent_tree(context);
+            assert!(
+                tree.contains("Parent renders: 1"),
+                "{operation} rebuilt the parent:\n{tree}"
+            );
+        };
+
+    drive_child_only(
+        &mut context,
+        gpui::point(gpui::px(75.), gpui::px(20.)),
+        "loading props",
+    );
+    drive_child_only(
+        &mut context,
+        gpui::point(gpui::px(225.), gpui::px(20.)),
+        "error props",
+    );
+    drive_child_only(
+        &mut context,
+        gpui::point(gpui::px(375.), gpui::px(20.)),
+        "ready props",
+    );
+
+    let before_hover = runtime.read_metrics();
+    context.simulate_mouse_move(
+        gpui::point(gpui::px(100.), gpui::px(100.)),
+        None,
+        gpui::Modifiers::default(),
+    );
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    assert_eq!(
+        runtime.read_metrics().since(&before_hover).script_renders(),
+        1,
+        "hover must rebuild exactly the retained chart child"
+    );
+    let tree = parent_tree(&mut context);
+    assert!(
+        tree.contains("Parent renders: 1"),
+        "hover rebuilt the parent:\n{tree}"
+    );
+}
+
+#[gpui::test]
+fn unrelated_quote_updates_do_not_rebuild_the_price_chart_child(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("price_chart_updates.test.js");
+    let fixture_root = fixture.root.clone();
+    let runtime_for_window = runtime.clone();
+    let window = cx.add_window(move |window, cx| {
+        WorkspaceRoot(
+            runtime_for_window
+                .try_load(&fixture_root, window, cx)
+                .expect("load price-chart update probe"),
+        )
+    });
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    let before = runtime.read_metrics();
+
+    context.simulate_click(
+        gpui::point(gpui::px(20.), gpui::px(20.)),
+        gpui::Modifiers::default(),
+    );
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    let delta = runtime.read_metrics().since(&before);
+
+    assert_eq!(
+        delta.script_renders(),
+        1,
+        "the unrelated quote should rebuild only the root, not its chart child"
+    );
+}
+
+#[gpui::test]
+fn clicking_a_watchlist_row_selects_that_instruments_details(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    grant_app_capabilities();
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("workspace_ui.test.js");
+    let fixture_root = fixture.root.clone();
+    let runtime_for_view = runtime.clone();
+    let window = cx.add_window(move |window, cx| {
+        WorkspaceRoot(
+            runtime_for_view
+                .try_load(&fixture_root, window, cx)
+                .expect("load authenticated workspace UI probe"),
+        )
+    });
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    context.update(|window, cx| window.draw(cx).clear(cx));
+
+    // The table header occupies the first 44px after the Watchlist's title
+    // bar. The second uniform 44px item is therefore at y=130 in this fixed
+    // probe layout. Clicking it exercises the native virtual-list hit box,
+    // rather than invoking selection directly.
+    context.simulate_click(
+        gpui::point(gpui::px(200.), gpui::px(130.)),
+        gpui::Modifiers::default(),
+    );
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+
+    let view = window
+        .root(&mut context)
+        .expect("workspace root")
+        .read_with(&context, |root, cx| {
+            root.0
+                .read(cx)
+                .content()
+                .clone()
+                .downcast::<gpui_shell::ScriptView>()
+                .expect("workspace content is a script view")
+        });
+    let rendered = context.update(|_, cx| {
+        view.read(cx)
+            .snapshot()
+            .map(gpui_shell::RenderSnapshot::debug_tree)
+            .unwrap_or_default()
+    });
+    assert!(
+        rendered.contains("Selected TEST01.US"),
+        "clicking the second visible row must select its stock details:\n{rendered}"
+    );
 }
 
 #[gpui::test]
 fn allocation_donut_folds_past_the_palette_and_uses_no_other_colours(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
-    let view_type = runtime
-        .load_app(&app_dir(), "allocation_ui.test.js")
-        .expect("load allocation chart probe");
+    let fixture = ApplicationFixture::new("allocation_ui.test.js");
     let window = cx.add_window(|_, _| Empty);
     let mut context = VisualTestContext::from_window(*window.deref(), cx);
-    let view = context
-        .update(|window, cx| runtime.instantiate_view(&view_type, window, cx))
-        .expect("instantiate allocation chart probe");
+    let (_root, view) = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
     context.run_until_parked();
     let draw_view = view.clone();
     context.draw(
@@ -322,14 +684,10 @@ fn portfolio_renders_pnl_summary_and_position_columns(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     grant_app_capabilities();
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
-    let view_type = runtime
-        .load_app(&app_dir(), "portfolio_ui.test.js")
-        .expect("load Portfolio UI probe");
+    let fixture = ApplicationFixture::new("portfolio_ui.test.js");
     let window = cx.add_window(|_, _| Empty);
     let mut context = VisualTestContext::from_window(*window.deref(), cx);
-    let view = context
-        .update(|window, cx| runtime.instantiate_view(&view_type, window, cx))
-        .expect("instantiate Portfolio UI probe");
+    let (_root, view) = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
     context.run_until_parked();
     let draw_view = view.clone();
     context.draw(
@@ -377,14 +735,18 @@ fn portfolio_renders_pnl_summary_and_position_columns(cx: &mut TestAppContext) {
         "no panel scrolls inside the page scroll:\n{rendered}"
     );
     // The explanatory Popover beside the chart, distinct from the Watchlist menu.
-    assert!(rendered.contains("Popover \"allocation-help\""), "{rendered}");
+    assert!(
+        rendered.contains("Popover \"allocation-help\""),
+        "{rendered}"
+    );
     assert!(rendered.contains("allocation-help-trigger"), "{rendered}");
 
     // Holdings virtualizes too, so its rows are built during layout and are not
     // in this tree — `watchlist_ui.test.js` covers what one row draws. What is
     // here is the table around them, announcing a size the body never renders.
     assert!(
-        rendered.contains("Table \"holdings-table\"") && rendered.contains(":row_count[Number(2.0)]"),
+        rendered.contains("Table \"holdings-table\"")
+            && rendered.contains(":row_count[Number(2.0)]"),
         "holdings must be a table that announces its full size:\n{rendered}"
     );
     assert!(
@@ -406,5 +768,17 @@ impl gpui::Render for Empty {
         _: &mut gpui::Context<Self>,
     ) -> impl gpui::IntoElement {
         gpui::div()
+    }
+}
+
+struct WorkspaceRoot(gpui::Entity<gpui_shell::ShellRoot>);
+
+impl gpui::Render for WorkspaceRoot {
+    fn render(
+        &mut self,
+        _: &mut gpui::Window,
+        _: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        self.0.clone().into_any_element()
     }
 }

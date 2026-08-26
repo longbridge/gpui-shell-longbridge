@@ -27,12 +27,19 @@ fn logged_out_application_loads_through_the_public_shell_runtime(cx: &mut TestAp
     )));
 
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
-    let view_type = runtime.load_app(&root, manifest.entry()).expect("load app");
     let window = cx.add_window(|_, _| Empty);
     let mut context = VisualTestContext::from_window(*window.deref(), cx);
-    let view = context
-        .update(|window, cx| runtime.instantiate_view(&view_type, window, cx))
-        .expect("instantiate app");
+    let shell_root = context
+        .update(|window, cx| runtime.try_load(&root, window, cx))
+        .expect("load app through the public host facade");
+    let view = context.update(|_, cx| {
+        shell_root
+            .read(cx)
+            .content()
+            .clone()
+            .downcast::<gpui_shell::ScriptView>()
+            .expect("loaded application content is a script view")
+    });
 
     context.run_until_parked();
     let draw_view = view.clone();
@@ -54,7 +61,11 @@ fn logged_out_application_loads_through_the_public_shell_runtime(cx: &mut TestAp
         "the sign-in card must offer the action:\n{rendered}"
     );
     // The identity belongs to the chrome; the card must not repeat it.
-    assert_eq!(rendered.matches("Read-only market terminal").count(), 1, "{rendered}");
+    assert_eq!(
+        rendered.matches("Read-only market terminal").count(),
+        1,
+        "{rendered}"
+    );
     assert!(!rendered.contains("Stock detail"), "{rendered}");
     assert!(!rendered.contains("Holdings"), "{rendered}");
 }

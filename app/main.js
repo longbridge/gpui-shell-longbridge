@@ -10,12 +10,16 @@ import {
   Tab,
   Tabs,
   View,
+  ViewHandle,
+  child_view,
   clipboard,
   div,
   fps_monitor,
   h_flex,
   h_resizable,
   image,
+  log,
+  open_url,
   resizable_panel,
   set_theme,
   spawn,
@@ -43,13 +47,9 @@ import {
   watchlistInstruments,
 } from "./market.js";
 import { createQuoteStream } from "./quote_stream.js";
-import {
-  findNearestPricePoint,
-  layoutPriceSeries,
-  mergeLiveQuote,
-  prepareFiveDaySeries,
-} from "./chart.js";
+import { mergeLiveQuote, prepareFiveDaySeries } from "./chart.js";
 import { allocationInUsd, normalizeUsdRates, portfolioPresentation } from "./portfolio.js";
+import PriceChartView, { PRICE_CHART_LAYOUT } from "./price_chart_view.js";
 import {
   action,
   allocationChart,
@@ -57,7 +57,6 @@ import {
   detailGrid,
   emptyPanel,
   errorMessage,
-  externalLink,
   filterInput,
   HOLDING_ROW_HEIGHT,
   TABLE_HEADER_HEIGHT,
@@ -72,7 +71,6 @@ import {
   panel,
   popoverSurface,
   portfolioSummary,
-  priceChart,
   quoteDetail,
   quoteRow,
   QUOTE_ROW_HEIGHT,
@@ -87,6 +85,7 @@ let themes = null;
 // the panel growing. Any ceiling would do; this one keeps the summary and the
 // allocation chart reachable above it without a scroll.
 const HOLDINGS_VIEWPORT_ROWS = 10;
+const EMPTY_CANDLES = Object.freeze([]);
 
 /** @param {unknown} value */
 function stringValue(value) {
@@ -151,8 +150,10 @@ function storedTokens() {
 export default class LongbridgeApp extends View {
   init() {
     spawn(async () => {
-      themes = JSON.parse(await readFile("theme.json"));
+      themes = JSON.parse(await readFile("theme.json", "utf8"));
       set_theme(themes.dark);
+      this.chartThemeRevision += 1;
+      this.syncPriceChartView();
       with_cx((cx) => cx.notify());
     });
     this.instruments = [];
@@ -177,17 +178,63 @@ export default class LongbridgeApp extends View {
     this.quotePulse = 1;
     this.candleCache = new Map();
     this.chartState = { symbol: null, state: "idle" };
-    this.chartHover = null;
-    this.chartPointer = null;
-    this.chartHoverFramePending = false;
     this.chartGeneration = 0;
+    this.chartThemeRevision = 0;
     this.initInteractionState();
+    this.initPriceChartView();
     this.clock = timer.every(1_000, (cx) => {
       this.lastTick = Date.now();
       this.quotes = sortLikeTerminal(this.quotes, this.lastTick);
       cx.notify();
     });
     if (this.hasStoredTokens) this.resume();
+  }
+
+  /** Creates the retained chart entity from lifecycle code, never from render. */
+  initPriceChartView() {
+    const props = this.nextPriceChartProps();
+    this.publishedPriceChartProps = props;
+    this.priceChart = ViewHandle.new(PriceChartView, props);
+  }
+
+  /** The complete immutable input snapshot the child needs to render the chart. */
+  nextPriceChartProps() {
+    const symbol = this.selectedSymbol ?? "";
+    const candles = symbol ? (this.candleCache.get(symbol) ?? EMPTY_CANDLES) : EMPTY_CANDLES;
+    const state =
+      this.chartState.symbol === symbol ? this.chartState.state : symbol ? "loading" : "idle";
+    return {
+      symbol,
+      series: prepareFiveDaySeries(symbol, candles),
+      state,
+      layout: PRICE_CHART_LAYOUT,
+      themeRevision: this.chartThemeRevision,
+    };
+  }
+
+  /** Pushes props only when a chart input changed, and only from mutation sites. */
+  syncPriceChartView() {
+    if (!this.priceChart) return;
+    const next = this.nextPriceChartProps();
+    const previous = this.publishedPriceChartProps;
+    if (
+      previous?.symbol === next.symbol &&
+      previous?.series === next.series &&
+      previous?.state === next.state &&
+      previous?.layout === next.layout &&
+      previous?.themeRevision === next.themeRevision
+    ) {
+      return;
+    }
+    this.publishedPriceChartProps = next;
+    this.priceChart.set_props(next);
+  }
+
+  releasePriceChartView() {
+    if (!this.priceChart) return;
+    this.priceChart.release();
+    this.priceChart = null;
+    this.publishedPriceChartProps = null;
   }
 
   /**
@@ -206,7 +253,7 @@ export default class LongbridgeApp extends View {
    * fields are where the answer lives.
    */
   initInteractionState() {
-    this.watchlistMenuOpen = false;
+    this.userMenuOpen = false;
     this.allocationHelpOpen = false;
     this.watchlistQuery = "";
     this.holdingsQuery = "";
@@ -249,6 +296,20 @@ export default class LongbridgeApp extends View {
       try {
         const authorization = await beginDeviceAuthorization();
         this.authorization = authorization;
+        // The page opens here rather than waiting to be clicked. The address is
+        // only known once the device code exists, which is what a second click
+        // would have been waiting for — and it is not an address anyone reads,
+        // it is one they approve on.
+        try {
+          open_url(authorization.verificationUri);
+        } catch (error) {
+          // The browser is a convenience: "Copy link" is still on the card, and
+          // an authorization that cannot be opened here is not one that failed.
+          // It is said out loud, though. A bare catch here swallowed a missing
+          // import once, and the symptom was a browser that simply never
+          // opened, with nothing anywhere to say why.
+          log.warn(`could not open the authorization page: ${error}`);
+        }
         with_cx((next) => next.notify());
         const tokens = await pollDeviceAuthorization(authorization);
         this.hasStoredTokens = true;
@@ -267,6 +328,10 @@ export default class LongbridgeApp extends View {
   async connect(token) {
     this.connectedToken = token;
     const generation = ++this.streamGeneration;
+    // Stopping the old stream rejects its pending candlestick query. Make that
+    // request stale before awaiting stop, so its catch cannot publish into the
+    // reconnecting chart while the replacement watchlist is still loading.
+    this.chartGeneration += 1;
     const previous = this.stream;
     this.stream = null;
     if (previous) await previous.stop();
@@ -279,6 +344,8 @@ export default class LongbridgeApp extends View {
     this.instruments = instruments;
     this.quotes = sortLikeTerminal(initialQuotes(instruments), Date.now());
     this.selectedSymbol = instruments[0]?.symbol ?? null;
+    if (!this.priceChart) this.initPriceChartView();
+    this.syncPriceChartView();
     // The primary workspace is usable as soon as Watchlist has loaded. Asset
     // reads are a separate, slower boundary and must not leave navigation in a
     // misleading global Connecting state.
@@ -330,11 +397,13 @@ export default class LongbridgeApp extends View {
     this.portfolioQuotes = this.portfolioQuotes.map((current) => mergeQuote(current, quote));
     if (quote && typeof quote === "object" && quote.symbol === this.selectedSymbol) {
       const candles = this.candleCache.get(this.selectedSymbol);
-      if (candles)
-        this.candleCache.set(
-          this.selectedSymbol,
-          mergeLiveQuote(this.selectedSymbol, candles, quote),
-        );
+      if (candles) {
+        const merged = mergeLiveQuote(this.selectedSymbol, candles, quote);
+        if (merged !== candles) {
+          this.candleCache.set(this.selectedSymbol, merged);
+          this.syncPriceChartView();
+        }
+      }
       this.quotePulse = 0.72;
       timer.after(160, (cx) => {
         this.quotePulse = 1;
@@ -347,13 +416,19 @@ export default class LongbridgeApp extends View {
   loadSelectedChart() {
     const symbol = this.selectedSymbol;
     const stream = this.stream;
-    if (!symbol || !stream) return;
+    if (!symbol) {
+      this.chartState = { symbol: null, state: "idle" };
+      this.syncPriceChartView();
+      return;
+    }
     const generation = ++this.chartGeneration;
     this.chartState = {
       symbol,
       state: this.candleCache.has(symbol) ? "ready" : "loading",
     };
+    this.syncPriceChartView();
     with_cx((cx) => cx.notify());
+    if (!stream) return;
     const end = new Date();
     const start = new Date(end.getTime() - 14 * 86_400_000);
     const compact = (date) => date.toISOString().slice(0, 10).replaceAll("-", "");
@@ -374,6 +449,7 @@ export default class LongbridgeApp extends View {
           state: this.candleCache.has(symbol) ? "ready" : "error",
         };
       }
+      this.syncPriceChartView();
       with_cx((cx) => cx.notify());
     });
   }
@@ -431,7 +507,11 @@ export default class LongbridgeApp extends View {
 
   /** @param {"light" | "dark"} mode @param {import("gpui").Context} cx */
   chooseTheme(mode, cx) {
-    if (themes) set_theme(themes[mode]);
+    if (themes) {
+      set_theme(themes[mode]);
+      this.chartThemeRevision += 1;
+      this.syncPriceChartView();
+    }
     cx.notify();
   }
 
@@ -462,9 +542,7 @@ export default class LongbridgeApp extends View {
     this.candleCache.clear();
     this.chartGeneration += 1;
     this.chartState = { symbol: null, state: "idle" };
-    this.chartHover = null;
-    this.chartPointer = null;
-    this.chartHoverFramePending = false;
+    this.releasePriceChartView();
     spawn(async () => {
       await clearTokens();
     });
@@ -582,7 +660,11 @@ export default class LongbridgeApp extends View {
             themeButton(tokens, (_event, cx) =>
               this.chooseTheme(tokens.appearance === "dark" ? "light" : "dark", cx),
             ),
-          ),
+          )
+          // The menu belongs to the session, not to the Watchlist: it signs out
+          // and switches theme, and neither is a property of a list. The
+          // window's own corner is where a session's controls live.
+          .when(this.hasStoredTokens, (element) => element.child(this.userMenu(tokens))),
       );
   }
 
@@ -593,6 +675,10 @@ export default class LongbridgeApp extends View {
     // shared scroll container above them would either clip the panes or nest a
     // second scroll inside the first, which is what made Holdings unreachable
     // in a short window.
+    const page =
+      this.page === "portfolio"
+        ? this.portfolioPage(tokens).id("workspace-page")
+        : this.watchlistPage(tokens);
     return v_flex()
       .flex_1()
       .min_h(0)
@@ -607,13 +693,7 @@ export default class LongbridgeApp extends View {
             .child(action(tokens, "retry-connection", "Retry", (_event, cx) => this.resume(cx))),
         ),
       )
-      .child(
-        (this.page === "portfolio" ? this.portfolioPage(tokens) : this.watchlistPage(tokens))
-          .id("workspace-page")
-          .flex_1()
-          .min_h(0)
-          .transition("opacity", { duration: 160, easing: "ease-out" }),
-      );
+      .child(page.flex_1().min_h(0).transition("opacity", { duration: 160, easing: "ease-out" }));
   }
 
   /** @param {import("gpui").Theme} tokens */
@@ -670,8 +750,7 @@ export default class LongbridgeApp extends View {
               .items_center()
               .gap(tokens.spacing.sm)
               .child(filterInput(tokens, this.watchlistFilter))
-              .child(muted(tokens, status))
-              .child(this.watchlistMenu(tokens)),
+              .child(muted(tokens, status)),
           ),
       )
       .child(rule(tokens))
@@ -688,7 +767,7 @@ export default class LongbridgeApp extends View {
           watchlistHeader(tokens),
           (quote, index) =>
             quoteRow(tokens, quote, quote.symbol === this.selectedSymbol, index, this.lastTick),
-          (index, cx) => this.selectQuote(rows, index, cx),
+          (symbol, cx) => this.selectQuote(symbol, cx),
           this.watchlistQuery
             ? emptyPanel(tokens, "No matches", "Nothing in the watchlist matches that filter.")
             : emptyPanel(
@@ -717,7 +796,7 @@ export default class LongbridgeApp extends View {
    * @param {number} rowHeight
    * @param {import("gpui").Element} header
    * @param {(row: any, index: number) => import("gpui").Element} renderRow
-   * @param {((index: number, cx: import("gpui").Context) => void) | null} onSelect
+   * @param {((key: string, cx: import("gpui").Context) => void) | null} onSelect
    * @param {import("gpui").Element} empty
    */
   instrumentTable(tokens, id, name, rows, rowHeight, header, renderRow, onSelect, empty) {
@@ -727,13 +806,22 @@ export default class LongbridgeApp extends View {
       .min_h(0)
       .child(
         // The renderer runs inside layout, so it registers nothing: selection
-        // is the list's own `on_item_click`, reported as an index into the
-        // rows this render was built from — which is the filtered list, not
-        // the whole collection.
-        v_virtual_list(`${id}-rows`, rows.length, rowHeight, (range) =>
-          rows
-            .slice(range.start, range.end)
-            .map((row, offset) => renderRow(row, range.start + offset)),
+        // is the list's own `on_item_click`, reported as the row's stable
+        // instrument key even if filtering or sorting changes its index before
+        // a queued click is delivered.
+        v_virtual_list(
+          `${id}-rows`,
+          rows.length,
+          rowHeight,
+          // A row's identity is its instrument, not its position. Both lists
+          // reorder under it — the watchlist by session, holdings by market
+          // value — and a key taken from the index would move a click onto
+          // whatever slid into that slot.
+          (index) => String(rows[index]?.symbol ?? index),
+          (range) =>
+            rows
+              .slice(range.start, range.end)
+              .map((row, offset) => renderRow(row, range.start + offset)),
         )
           .size_full()
           .when(Boolean(onSelect), (list) => list.on_item_click(onSelect)),
@@ -751,7 +839,7 @@ export default class LongbridgeApp extends View {
   }
 
   /**
-   * The Watchlist popup menu.
+   * The session menu, in the window's top-right corner.
    *
    * `Popover` owns the press, the anchoring and the dismissal; the rows are
    * ordinary buttons carrying the menu-item role, because the runtime binds no
@@ -759,25 +847,23 @@ export default class LongbridgeApp extends View {
    *
    * @param {import("gpui").Theme} tokens
    */
-  watchlistMenu(tokens) {
+  userMenu(tokens) {
     const selected = this.quotes.find((quote) => quote.symbol === this.selectedSymbol);
     const close = (cx) => {
-      this.watchlistMenuOpen = false;
+      this.userMenuOpen = false;
       cx.notify();
     };
-    return Popover.new("watchlist-menu")
-      .open(this.watchlistMenuOpen)
+    return Popover.new("user-menu")
+      .open(this.userMenuOpen)
       .on_open_change((open, cx) => {
-        this.watchlistMenuOpen = open;
+        this.userMenuOpen = open;
         cx.notify();
       })
-      .trigger(
-        menuTrigger(tokens, "watchlist-menu-trigger", "Watchlist actions", this.watchlistMenuOpen),
-      )
+      .trigger(menuTrigger(tokens, "user-menu-trigger", "Session menu", this.userMenuOpen))
       .content(
         popoverSurface(tokens, { menu: true })
           .child(
-            menuItem(tokens, "watchlist-menu-reconnect", "Reconnect stream", (_event, cx) => {
+            menuItem(tokens, "user-menu-reconnect", "Reconnect stream", (_event, cx) => {
               close(cx);
               this.resume(cx);
             }),
@@ -785,7 +871,7 @@ export default class LongbridgeApp extends View {
           .child(
             menuItem(
               tokens,
-              "watchlist-menu-copy-symbol",
+              "user-menu-copy-symbol",
               "Copy selected symbol",
               (_event, cx) => {
                 close(cx);
@@ -797,7 +883,7 @@ export default class LongbridgeApp extends View {
           .child(
             menuItem(
               tokens,
-              "watchlist-menu-refresh-chart",
+              "user-menu-refresh-chart",
               "Reload 5D chart",
               (_event, cx) => {
                 close(cx);
@@ -811,7 +897,7 @@ export default class LongbridgeApp extends View {
           .child(
             menuItem(
               tokens,
-              "watchlist-menu-theme",
+              "user-menu-theme",
               tokens.appearance === "dark" ? "Light theme" : "Dark theme",
               (_event, cx) => {
                 close(cx);
@@ -826,7 +912,7 @@ export default class LongbridgeApp extends View {
             // reached from here.
             menuItem(
               tokens,
-              "watchlist-menu-sign-out",
+              "user-menu-sign-out",
               "Sign out",
               (_event, cx) => {
                 close(cx);
@@ -839,14 +925,12 @@ export default class LongbridgeApp extends View {
   }
 
   /**
-   * @param {any[]} rows The rows this render drew, which is what the index is into.
-   * @param {number} index
+   * @param {string} symbol The virtual list's stable item key.
    * @param {import("gpui").Context} cx
    */
-  selectQuote(rows, index, cx) {
-    const quote = rows[index];
-    if (!quote || quote.symbol === this.selectedSymbol) return;
-    this.selectedSymbol = quote.symbol;
+  selectQuote(symbol, cx) {
+    if (!symbol || symbol === this.selectedSymbol) return;
+    this.selectedSymbol = symbol;
     this.loadSelectedChart();
     cx.notify();
   }
@@ -855,14 +939,6 @@ export default class LongbridgeApp extends View {
   stockDetail(tokens) {
     const quote =
       this.quotes.find((entry) => entry.symbol === this.selectedSymbol) ?? this.quotes[0];
-    const series = quote
-      ? prepareFiveDaySeries(quote.symbol, this.candleCache.get(quote.symbol) ?? [])
-      : { symbol: "", days: [], points: [] };
-    const geometry = layoutPriceSeries(series, { width: 480, height: 132, dayGap: 8 });
-    const hoveredPoint =
-      this.chartHover?.symbol === quote?.symbol
-        ? geometry.points.find((point) => point.timestamp === this.chartHover.timestamp) ?? null
-        : null;
     return panel(tokens)
       .child(
         h_flex()
@@ -885,40 +961,7 @@ export default class LongbridgeApp extends View {
                 v_flex()
                   .px(tokens.spacing.lg)
                   .pb(tokens.spacing.lg)
-                  .child(
-                    priceChart(
-                      tokens,
-                      geometry,
-                      this.chartState.symbol === quote.symbol ? this.chartState.state : "loading",
-                      hoveredPoint,
-                      (event) => {
-                        const width = event.bounds.width;
-                        if (!(width > 0)) return;
-                        this.chartPointer = {
-                          symbol: quote.symbol,
-                          x: (event.local_position.x / width) * geometry.width,
-                        };
-                        if (this.chartHoverFramePending) return;
-                        this.chartHoverFramePending = true;
-                        timer.after(16, (cx) => {
-                          this.chartHoverFramePending = false;
-                          const pointer = this.chartPointer;
-                          if (!pointer || pointer.symbol !== quote.symbol) return;
-                          const point = findNearestPricePoint(geometry, pointer.x);
-                          if (!point || this.chartHover?.timestamp === point.timestamp) return;
-                          this.chartHover = { symbol: quote.symbol, timestamp: point.timestamp };
-                          cx.notify();
-                        });
-                      },
-                      (hovered, cx) => {
-                        if (hovered) return;
-                        this.chartPointer = null;
-                        if (this.chartHover === null) return;
-                        this.chartHover = null;
-                        cx.notify();
-                      },
-                    ),
-                  ),
+                  .child(child_view(this.priceChart)),
               )
           : emptyPanel(
               tokens,
@@ -1205,19 +1248,7 @@ export default class LongbridgeApp extends View {
   deviceCode(tokens, device) {
     return v_flex()
       .gap(tokens.spacing.sm)
-      .child(step(tokens, 1, "Open the authorization page"))
-      .child(
-        h_flex()
-          .justify_center()
-          .child(
-            externalLink(
-              tokens,
-              "open-authorization-link",
-              device.verificationUri,
-              device.verificationUri,
-            ),
-          ),
-      )
+      .child(step(tokens, 1, "Longbridge is open in your browser"))
       .child(step(tokens, 2, "Enter this code"))
       .child(deviceCodeBox(tokens, device.userCode || "--"))
       .child(step(tokens, 3, "Approve the request in Longbridge"))

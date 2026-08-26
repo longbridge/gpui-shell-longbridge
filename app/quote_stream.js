@@ -1,6 +1,7 @@
 // Quote-only Longbridge WebSocket session.  Transport and protobuf framing are
 // intentionally separated: this module never exposes a trading command.
 import { timer } from "gpui";
+import { WebSocket } from "websocket";
 import { API_LANGUAGE, socketOtp } from "./http.js";
 
 import {

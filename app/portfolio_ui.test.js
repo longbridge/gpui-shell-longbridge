@@ -42,6 +42,8 @@ export default class PortfolioUiProbe extends LongbridgeApp {
     this.candleCache = new Map();
     this.chartState = { symbol: null, state: "idle" };
     this.chartGeneration = 0;
+    this.chartThemeRevision = 0;
+    this.initPriceChartView();
     this.clock = null;
   }
 

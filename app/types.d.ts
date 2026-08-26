@@ -49,3 +49,43 @@ interface LongbridgeHoldingRow {
 }
 
 type LongbridgePage = "watchlist" | "portfolio";
+
+interface PriceChartPreparedPoint {
+  timestamp: number;
+  close: number;
+  date: string;
+  dayIndex: number;
+}
+
+interface PriceChartLaidOutPoint extends PriceChartPreparedPoint {
+  x: number;
+  y: number;
+}
+
+interface PriceChartSeries {
+  symbol: string;
+  days: Array<{ date: string; points: Array<Record<string, unknown>> }>;
+  points: PriceChartPreparedPoint[];
+}
+
+interface PriceChartGeometry {
+  symbol: string;
+  days: Array<{ date: string; points: Array<Record<string, unknown>> }>;
+  points: PriceChartLaidOutPoint[];
+  width: number;
+  height: number;
+  min: number | null;
+  max: number | null;
+}
+
+interface PriceChartProps {
+  symbol: string;
+  series: PriceChartSeries;
+  state: "idle" | "loading" | "ready" | "error";
+  layout: {
+    width: number;
+    height: number;
+    dayGap: number;
+  };
+  themeRevision: number;
+}
