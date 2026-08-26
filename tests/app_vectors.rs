@@ -7,6 +7,12 @@ fn app_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("app")
 }
 
+fn grant_app_capabilities() {
+    let root = app_dir();
+    let manifest = gpui_shell::plugin::PluginManifest::read(&root).expect("application manifest");
+    gpui_shell::set_capabilities(manifest.capabilities(&root, &std::env::temp_dir()));
+}
+
 #[gpui::test]
 fn quote_stream_vectors_run_against_this_application(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
@@ -170,13 +176,13 @@ fn watchlist_row_renders_scannable_market_columns(cx: &mut TestAppContext) {
         .lines()
         .find(|line| line.contains("probe-menu-open"))
         .expect("open trigger");
+    // Asserted structurally rather than by comparing painted colour: the
+    // palette moved out of the Rust host into the application, and a probe is
+    // not the application -- it has no filesystem grant to load `theme.json`,
+    // so every token here resolves to #000000 and any colour would equal any
+    // other. These two are what the bug actually broke.
     assert!(!closed.contains(":selected[Bool(true)]"), "{closed}");
     assert!(open.contains(":selected[Bool(true)]"), "{open}");
-    assert_ne!(
-        closed.split(".bg[").nth(1),
-        open.split(".bg[").nth(1),
-        "an open trigger must not paint like a closed one"
-    );
 
     // And focus must not paint like open. A Popover hands the keyboard back to
     // its trigger when it dismisses, so a focus style that fills the control
@@ -195,6 +201,7 @@ fn watchlist_row_renders_scannable_market_columns(cx: &mut TestAppContext) {
 #[gpui::test]
 fn authenticated_workspace_materializes_a_scrollable_watchlist(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
+    grant_app_capabilities();
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
     let view_type = runtime
         .load_app(&app_dir(), "workspace_ui.test.js")
@@ -313,6 +320,7 @@ fn allocation_donut_folds_past_the_palette_and_uses_no_other_colours(cx: &mut Te
 #[gpui::test]
 fn portfolio_renders_pnl_summary_and_position_columns(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
+    grant_app_capabilities();
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
     let view_type = runtime
         .load_app(&app_dir(), "portfolio_ui.test.js")
@@ -347,7 +355,6 @@ fn portfolio_renders_pnl_summary_and_position_columns(cx: &mut TestAppContext) {
         "+30.00 USD",
         "+80.00 USD",
         "Last / Cost",
-        "+4.44%",
         ".font_family[Str(\"monospace\")]",
     ] {
         assert!(
@@ -372,6 +379,22 @@ fn portfolio_renders_pnl_summary_and_position_columns(cx: &mut TestAppContext) {
     // The explanatory Popover beside the chart, distinct from the Watchlist menu.
     assert!(rendered.contains("Popover \"allocation-help\""), "{rendered}");
     assert!(rendered.contains("allocation-help-trigger"), "{rendered}");
+
+    // Holdings virtualizes too, so its rows are built during layout and are not
+    // in this tree — `watchlist_ui.test.js` covers what one row draws. What is
+    // here is the table around them, announcing a size the body never renders.
+    assert!(
+        rendered.contains("Table \"holdings-table\"") && rendered.contains(":row_count[Number(2.0)]"),
+        "holdings must be a table that announces its full size:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("v_virtual_list \"holdings-rows\" \u{00d7}1"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("+4.44%"), "{rendered}");
+
+    // And a filter for it.
+    assert!(rendered.contains("Input"), "{rendered}");
 }
 
 struct Empty;

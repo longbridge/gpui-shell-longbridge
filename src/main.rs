@@ -2,9 +2,7 @@ use std::{path::PathBuf, rc::Rc, time::Duration};
 
 use gpui::{AppContext as _, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size};
 use gpui_shell::{
-    AppAssets, ShellRoot, ShellRuntime,
-    plugin::PluginManager,
-    theme::{Palettes, ThemeMode, set_mode},
+    AppAssets, ShellRoot, ShellRuntime, plugin::PluginManager,
 };
 
 const PLUGIN_ID: &str = "com.longbridge.gpui-shell-example";
@@ -17,10 +15,6 @@ fn main() {
         .with_assets(assets)
         .run(move |cx| {
             gpui_shell::init(cx);
-            Palettes::parse(include_str!("../app/palette.json"))
-                .expect("invalid Longbridge palette")
-                .install(cx);
-            set_mode(ThemeMode::Dark, cx);
 
             let runtime = ShellRuntime::new(cx).expect("failed to start gpui-shell runtime");
             if std::env::var_os("LONGBRIDGE_PROFILE").is_some() {
@@ -60,7 +54,7 @@ fn main() {
                     .view()
                     .clone();
                 #[cfg(debug_assertions)]
-                gpui_shell::watch::Watch::start(
+                gpui_shell::Watcher::start(
                     &runtime,
                     &view,
                     source_root.clone(),

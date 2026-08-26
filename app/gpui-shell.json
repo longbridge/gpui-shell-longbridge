@@ -5,6 +5,9 @@
   "shell-version": "0.1.0",
   "entry": "main.js",
   "capabilities": {
+    "fs": {
+      "read": ["${pluginDir}"]
+    },
     "network": {
       "hosts": [
         "openapi.longbridge.com",

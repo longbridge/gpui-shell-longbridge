@@ -5,6 +5,7 @@ import {
   foldAllocationSlices,
   normalizeUsdRates,
   portfolioPresentation,
+  quoteIndex,
 } from "./portfolio.js";
 
 const rates = normalizeUsdRates({
@@ -117,5 +118,37 @@ if (Math.abs(folded.reduce((total, slice) => total + slice.value, 0) - wide.tota
 const shuffled = foldAllocationSlices({ ...wide, slices: [...wide.slices].reverse() });
 if (shuffled.map((slice) => slice.symbol).join(",") !== folded.map((s) => s.symbol).join(","))
   throw new Error("the ring does not depend on the order holdings arrived in");
+
+// A page that shows both readings of the same quotes should index them once.
+// Handing either reading a prepared index has to land on the same numbers as
+// handing it the concatenated array, including which of two lists owns a symbol
+// they share: the later list, as the spread it replaces gave.
+const watchlistQuotes = [
+  { symbol: "AAPL.US", last: "200", prevClose: "190" },
+  { symbol: "700.HK", last: "111", prevClose: "111" },
+];
+const positionQuotes = [
+  { symbol: "700.HK", last: "500", prevClose: "495" },
+  { symbol: "MSFT.US", last: "400", prevClose: "390" },
+];
+const indexedHoldings = [
+  { symbol: "AAPL.US", name: "Apple", quantity: "10", costPrice: "180", currency: "USD" },
+  { symbol: "MSFT.US", name: "Microsoft", quantity: "5", costPrice: "300", currency: "USD" },
+  { symbol: "700.HK", name: "Tencent", quantity: "20", costPrice: "600", currency: "HKD" },
+];
+const concatenated = [...watchlistQuotes, ...positionQuotes];
+const shared = quoteIndex(watchlistQuotes, positionQuotes);
+if (shared.get("700.HK").last !== "500")
+  throw new Error("the later quote list owns a symbol both lists carry");
+if (
+  JSON.stringify(portfolioPresentation(indexedHoldings, shared, rates)) !==
+  JSON.stringify(portfolioPresentation(indexedHoldings, concatenated, rates))
+)
+  throw new Error("a shared quote index presents the holdings identically");
+if (
+  JSON.stringify(allocationInUsd(indexedHoldings, shared, rates)) !==
+  JSON.stringify(allocationInUsd(indexedHoldings, concatenated, rates))
+)
+  throw new Error("a shared quote index allocates identically");
 
 export default class PortfolioVectorProbe extends View {}

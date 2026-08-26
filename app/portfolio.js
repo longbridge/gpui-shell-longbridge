@@ -40,9 +40,27 @@ function usdRate(currency, rates) {
   return Number.isFinite(rate) && rate > 0 ? rate : null;
 }
 
+/**
+ * Indexes quotes by symbol, the latest list winning, so a caller that reads the
+ * same quotes twice builds the index once instead of concatenating the lists
+ * and re-indexing them per reading. Both readings below take the result of this
+ * wherever they take an array.
+ */
+export function quoteIndex(...quoteLists) {
+  const bySymbol = new Map();
+  for (const quotes of quoteLists) {
+    for (const quote of quotes) bySymbol.set(quote.symbol, quote);
+  }
+  return bySymbol;
+}
+
+function indexQuotes(quotes) {
+  return quotes instanceof Map ? quotes : quoteIndex(quotes);
+}
+
 /** Consolidates priced holding market values in USD. */
 export function allocationInUsd(holdings, quotes, rates = new Map([["USD", 1]])) {
-  const quotesBySymbol = new Map(quotes.map((quote) => [quote.symbol, quote]));
+  const quotesBySymbol = indexQuotes(quotes);
   const group = { currency: "USD", total: 0, slices: [], unpriced: [] };
 
   for (const holding of holdings) {
@@ -74,7 +92,7 @@ export function allocationInUsd(holdings, quotes, rates = new Map([["USD", 1]]))
 }
 
 export function portfolioPresentation(holdings, quotes, rates = new Map([["USD", 1]])) {
-  const quotesBySymbol = new Map(quotes.map((quote) => [quote.symbol, quote]));
+  const quotesBySymbol = indexQuotes(quotes);
   const summary = { currency: "USD", todayPnlValue: 0, totalPnlValue: 0 };
   let summaryCount = 0;
 

@@ -25,6 +25,7 @@ import {
   v_virtual_list,
   with_cx,
 } from "gpui";
+import { readFile } from "fs/promises";
 import {
   accessToken,
   beginDeviceAuthorization,
@@ -77,6 +78,8 @@ import {
   themeButton,
   watchlistHeader,
 } from "./ui.js";
+
+let themes = null;
 
 // How many Holdings rows the panel shows before the page scrolls instead of
 // the panel growing. Any ceiling would do; this one keeps the summary and the
@@ -145,6 +148,11 @@ function storedTokens() {
 
 export default class LongbridgeApp extends View {
   init() {
+    spawn(async () => {
+      themes = JSON.parse(await readFile("theme.json"));
+      set_theme(themes.dark);
+      with_cx((cx) => cx.notify());
+    });
     this.instruments = [];
     this.quotes = [];
     this.portfolioQuotes = [];
@@ -175,10 +183,27 @@ export default class LongbridgeApp extends View {
     // `on_open_change`, and this is where the answer lives.
     this.watchlistMenuOpen = false;
     this.allocationHelpOpen = false;
-    // Retained text state needs a live host call, so it is created here rather
-    // than in a render. The query is mirrored onto the view because render has
-    // to read it on every frame and reading it off the handle would put a host
-    // call on the frame path.
+    this.initFilters();
+    this.clock = timer.every(1_000, (cx) => {
+      this.lastTick = Date.now();
+      this.quotes = sortLikeTerminal(this.quotes, this.lastTick);
+      cx.notify();
+    });
+    if (this.hasStoredTokens) this.resume();
+  }
+
+  /**
+   * Retained text state for the two list filters.
+   *
+   * Its own method because a render reaches for it unconditionally and a view
+   * that skipped it draws nothing at all: `Input.new(undefined)` throws, and a
+   * probe that replaces `init` wholesale would otherwise take the whole tree
+   * down. `InputState.new()` needs a live host call, so this belongs in an
+   * `init` or an event handler, never in a render. The query is mirrored onto
+   * the view because render reads it every frame and reading it off the handle
+   * would put a host call on the frame path.
+   */
+  initFilters() {
     this.watchlistQuery = "";
     this.holdingsQuery = "";
     this.watchlistFilter = InputState.new({ placeholder: "Filter watchlist" });
@@ -191,12 +216,6 @@ export default class LongbridgeApp extends View {
       this.holdingsQuery = this.holdingsFilter.value();
       cx.notify();
     });
-    this.clock = timer.every(1_000, (cx) => {
-      this.lastTick = Date.now();
-      this.quotes = sortLikeTerminal(this.quotes, this.lastTick);
-      cx.notify();
-    });
-    if (this.hasStoredTokens) this.resume();
   }
 
   /** @param {import("gpui").Context} [cx] */
@@ -408,7 +427,7 @@ export default class LongbridgeApp extends View {
 
   /** @param {"light" | "dark"} mode @param {import("gpui").Context} cx */
   chooseTheme(mode, cx) {
-    set_theme(mode);
+    if (themes) set_theme(themes[mode]);
     cx.notify();
   }
 
@@ -615,6 +634,7 @@ export default class LongbridgeApp extends View {
     return h_resizable("watchlist-workspace")
       .flex_1()
       .min_h(0)
+      .gap_1()
       .child(
         resizable_panel()
           .size(620)

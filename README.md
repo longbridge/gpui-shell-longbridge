@@ -42,7 +42,7 @@ Longbridge OpenAPI
 ### Host boundary
 
 The Rust executable is deliberately small. It selects the application root,
-installs `app/palette.json`, configures assets, creates `ShellRuntime`, loads the
+configures assets, creates `ShellRuntime`, loads the
 plugin, and opens `ShellRoot`. Native concerns stay in the host; product state
 and rendering stay in JavaScript.
 

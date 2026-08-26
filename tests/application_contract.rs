@@ -48,7 +48,7 @@ fn application_exposes_api_backed_read_only_views() {
         );
     }
     assert!(
-        main.matches("InputState.new(").count() == 2
+        main.matches("InputState.new({ placeholder:").count() == 2
             && main.contains("Filter watchlist")
             && main.contains("Filter holdings"),
         "the only retained text state may be the two list filters"
@@ -58,14 +58,8 @@ fn application_exposes_api_backed_read_only_views() {
         "filtering must stay a pure function outside the render path"
     );
 
-    // Both lists virtualize, and both are real tables: `row_count` describes
-    // the whole collection so a window onto it still announces its size.
-    for id in ["watchlist", "holdings"] {
-        assert!(
-            main.contains(&format!("v_virtual_list(`${{id}}-rows`")) || main.contains(id),
-            "missing list {id}"
-        );
-    }
+    // Both lists are real tables: `row_count` describes the whole collection so
+    // a window onto it still announces its size.
     assert!(
         main.contains("Table.new(`${id}-table`)") && main.contains(".row_count(rows.length + 1)"),
         "both lists must be virtualized tables that announce their full size"
@@ -84,10 +78,12 @@ fn application_exposes_api_backed_read_only_views() {
         main.contains(".overflow_y_scroll()"),
         "the portfolio column must remain vertically scrollable"
     );
+    // Both lists go through one virtualized table, so the list and the bar are
+    // named from the same id and cannot drift apart.
     assert!(
-        main.contains("v_virtual_list(\"watchlist-rows\"")
-            && main.contains("Scrollbar.vertical(\"watchlist-rows\")"),
-        "the watchlist must virtualize its rows and pair a scrollbar with them by name"
+        main.contains("v_virtual_list(`${id}-rows`")
+            && main.contains("Scrollbar.vertical(`${id}-rows`)"),
+        "both lists must virtualize their rows and pair a scrollbar with them by name"
     );
     assert!(
         main.contains("h_resizable(\"watchlist-workspace\")") && main.contains("resizable_panel()"),

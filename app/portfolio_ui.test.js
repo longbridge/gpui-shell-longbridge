@@ -2,6 +2,9 @@ import LongbridgeApp from "./main.js";
 
 export default class PortfolioUiProbe extends LongbridgeApp {
   init() {
+    // A probe replaces init wholesale, so it owes the view the state a render
+    // reaches for unconditionally.
+    this.initFilters();
     this.account = {
       net_assets: "25000.00",
       total_cash: "5000.00",
