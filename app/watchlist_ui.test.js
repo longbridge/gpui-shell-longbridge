@@ -1,6 +1,6 @@
 import { View, v_flex } from "gpui";
 
-import { quoteDetail, quoteRow, watchlistHeader } from "./ui.js";
+import { menuTrigger, quoteDetail, quoteRow, watchlistHeader } from "./ui.js";
 
 export default class WatchlistUiProbe extends View {
   render(cx) {
@@ -28,7 +28,11 @@ export default class WatchlistUiProbe extends View {
     };
     return v_flex()
       .child(watchlistHeader(tokens))
-      .child(quoteRow(tokens, quote, true, () => {}, quote.receivedAt + 5_000))
-      .child(quoteDetail(tokens, quote, quote.receivedAt + 5_000));
+      .child(quoteRow(tokens, quote, true, quote.receivedAt + 5_000))
+      .child(quoteDetail(tokens, quote, quote.receivedAt + 5_000))
+      // Closed then open, so the difference between the two is what the test
+      // reads rather than one absolute colour.
+      .child(menuTrigger(tokens, "probe-menu-closed", "Closed"))
+      .child(menuTrigger(tokens, "probe-menu-open", "Open", true));
   }
 }

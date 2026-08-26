@@ -1,7 +1,11 @@
-use std::{path::PathBuf, rc::Rc};
+use std::{path::PathBuf, rc::Rc, time::Duration};
 
 use gpui::{AppContext as _, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size};
-use gpui_shell::{AppAssets, ShellRoot, ShellRuntime, plugin::PluginManager, theme::Palettes};
+use gpui_shell::{
+    AppAssets, ShellRoot, ShellRuntime,
+    plugin::PluginManager,
+    theme::{Palettes, ThemeMode, set_mode},
+};
 
 const PLUGIN_ID: &str = "com.longbridge.gpui-shell-example";
 
@@ -16,8 +20,31 @@ fn main() {
             Palettes::parse(include_str!("../app/palette.json"))
                 .expect("invalid Longbridge palette")
                 .install(cx);
+            set_mode(ThemeMode::Dark, cx);
 
             let runtime = ShellRuntime::new(cx).expect("failed to start gpui-shell runtime");
+            if std::env::var_os("LONGBRIDGE_PROFILE").is_some() {
+                let measured = Rc::clone(&runtime);
+                cx.spawn(async move |cx| {
+                    let mut previous = measured.read_metrics();
+                    loop {
+                        cx.background_executor().timer(Duration::from_secs(1)).await;
+                        let current = measured.read_metrics();
+                        let interval = current.since(&previous);
+                        previous = current;
+                        eprintln!(
+                            "shell-profile script={} mean_script={:.3}ms materialize={} mean_materialize={:.3}ms script_total={:.3}ms materialize_total={:.3}ms",
+                            interval.script_renders(),
+                            interval.mean_script_render().as_secs_f64() * 1_000.0,
+                            interval.materializations(),
+                            interval.mean_materialize().as_secs_f64() * 1_000.0,
+                            interval.script_render_time().as_secs_f64() * 1_000.0,
+                            interval.materialize_time().as_secs_f64() * 1_000.0,
+                        );
+                    }
+                })
+                .detach();
+            }
             let mut plugins = PluginManager::new(vec![app_root.clone()]);
             plugins.discover();
 

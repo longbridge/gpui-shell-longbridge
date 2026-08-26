@@ -7,11 +7,13 @@ import {
   COMMAND,
   FRAME_TYPE,
   decodeFrame,
+  decodeSecurityCandlestickResponse,
   decodePushQuote,
   decodeSecurityQuoteResponse,
   encodeAuthRequest,
   encodeFrame,
   encodeHeartbeat,
+  encodeHistoryCandlestickDateRequest,
   encodeRealtimeQuoteRequest,
   encodeSubscribeRequest,
 } from "./protocol.js";
@@ -141,6 +143,124 @@ function runVectors() {
       0x4b,
     ),
     "realtime quote protobuf",
+  );
+
+  check(COMMAND.HISTORY_CANDLESTICKS === 27, "history candlestick command");
+  checkBytes(
+    encodeHistoryCandlestickDateRequest({
+      symbol: "AAPL.US",
+      startDate: "20260817",
+      endDate: "20260826",
+    }),
+    // SecurityHistoryCandlestickRequest: symbol=1, one-minute period=2,
+    // query-by-date=4, DateQuery=6, intraday trade session=7. Proto3 zero
+    // values (no-adjust and intraday) are omitted.
+    bytes(
+      0x0a,
+      0x07,
+      0x41,
+      0x41,
+      0x50,
+      0x4c,
+      0x2e,
+      0x55,
+      0x53,
+      0x10,
+      0x01,
+      0x20,
+      0x02,
+      0x32,
+      0x14,
+      0x0a,
+      0x08,
+      0x32,
+      0x30,
+      0x32,
+      0x36,
+      0x30,
+      0x38,
+      0x31,
+      0x37,
+      0x12,
+      0x08,
+      0x32,
+      0x30,
+      0x32,
+      0x36,
+      0x30,
+      0x38,
+      0x32,
+      0x36,
+    ),
+    "history candlestick date query protobuf",
+  );
+
+  const history = decodeSecurityCandlestickResponse(
+    bytes(
+      0x0a,
+      0x07,
+      0x41,
+      0x41,
+      0x50,
+      0x4c,
+      0x2e,
+      0x55,
+      0x53,
+      0x12,
+      0x28,
+      0x0a,
+      0x06,
+      0x31,
+      0x38,
+      0x39,
+      0x2e,
+      0x35,
+      0x30,
+      0x12,
+      0x06,
+      0x31,
+      0x38,
+      0x38,
+      0x2e,
+      0x30,
+      0x30,
+      0x1a,
+      0x06,
+      0x31,
+      0x38,
+      0x37,
+      0x2e,
+      0x30,
+      0x30,
+      0x22,
+      0x06,
+      0x31,
+      0x39,
+      0x30,
+      0x2e,
+      0x30,
+      0x30,
+      0x28,
+      0x64,
+      0x38,
+      0x80,
+      0xe2,
+      0xcf,
+      0xaa,
+      0x06,
+    ),
+  );
+  check(
+    history.symbol === "AAPL.US" &&
+      history.candlesticks.length === 1 &&
+      history.candlesticks[0].close === "189.50" &&
+      history.candlesticks[0].open === "188.00" &&
+      history.candlesticks[0].low === "187.00" &&
+      history.candlesticks[0].high === "190.00" &&
+      history.candlesticks[0].volume === 100n &&
+      history.candlesticks[0].timestamp === 1_700_000_000n &&
+      history.candlesticks[0].tradeSession === 0,
+    "SecurityCandlestickResponse protobuf",
   );
 
   const pushFrame = bytes(

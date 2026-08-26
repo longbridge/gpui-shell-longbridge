@@ -33,15 +33,11 @@ fn application_exposes_api_backed_read_only_views() {
     for expected in ["Watchlist", "Stock Details", "Portfolio", "Holdings"] {
         assert!(main.contains(expected), "missing view copy {expected}");
     }
-    for forbidden in [
-        "Add symbol",
-        "Remove",
-        "InputState",
-        "Trades",
-        "Bid",
-        "Ask",
-        "chart",
-    ] {
+    assert!(
+        main.contains("priceChart") && main.contains("allocationChart"),
+        "read-only market and allocation charts must remain wired"
+    );
+    for forbidden in ["Add symbol", "Remove", "InputState", "Trades", "Bid", "Ask"] {
         assert!(
             !main.contains(forbidden) && !ui.contains(forbidden) && !market.contains(forbidden),
             "forbidden editing or trading surface {forbidden}"
@@ -50,4 +46,40 @@ fn application_exposes_api_backed_read_only_views() {
     assert!(main.contains("const tokens = cx.theme()"));
     assert!(!main.contains(".text_color(\"") && !ui.contains(".text_color(\""));
     assert!(!main.contains("rgb(") && !ui.contains("rgb("));
+    // Each page owns its scrolling now, and each does it the way its content
+    // needs: Portfolio is one scrolling column, Watchlist virtualizes its rows
+    // and pairs a Scrollbar with them by name. Neither paints a window bar.
+    assert!(
+        main.contains(".overflow_y_scroll()"),
+        "the portfolio column must remain vertically scrollable"
+    );
+    assert!(
+        main.contains("v_virtual_list(\"watchlist-rows\"")
+            && main.contains("Scrollbar.vertical(\"watchlist-rows\")"),
+        "the watchlist must virtualize its rows and pair a scrollbar with them by name"
+    );
+    assert!(
+        main.contains("h_resizable(\"watchlist-workspace\")") && main.contains("resizable_panel()"),
+        "the watchlist and detail panes must be panels of one resizable group"
+    );
+
+    // A row inside a virtual list cannot register a handler: it is rebuilt on
+    // every scrolled frame, so selection belongs to the list.
+    assert!(
+        main.contains(".on_item_click(") && !ui.contains(".on_click(onSelect)"),
+        "watchlist selection must come from the list's on_item_click"
+    );
+
+    // Both bound anchored surfaces are exercised, and the pointer affordances
+    // with them.
+    assert!(
+        main.contains("Popover.new(\"watchlist-menu\")")
+            && main.contains("Popover.new(\"allocation-help\")"),
+        "both Popover scenarios must stay wired"
+    );
+    assert!(
+        ui.contains(".role(\"menu_item\")") && ui.contains(".role(\"menu\")"),
+        "the popup menu must announce itself as a menu"
+    );
+    assert!(ui.contains(".tooltip("), "pointer hints must stay wired");
 }

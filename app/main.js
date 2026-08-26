@@ -1,7 +1,27 @@
 // A standalone, read-only Longbridge desktop client. OAuth uses direct HTTP,
 // quotes use the documented WebSocket protocol, and no trading API is exposed.
 
-import { View, clipboard, h_flex, image, set_theme, spawn, timer, v_flex, with_cx } from "gpui";
+import {
+  Popover,
+  Scrollbar,
+  Tab,
+  Tabs,
+  View,
+  clipboard,
+  div,
+  fps_monitor,
+  h_flex,
+  h_resizable,
+  image,
+  resizable_panel,
+  set_theme,
+  spawn,
+  text,
+  timer,
+  v_flex,
+  v_virtual_list,
+  with_cx,
+} from "gpui";
 import {
   accessToken,
   beginDeviceAuthorization,
@@ -18,21 +38,34 @@ import {
   watchlistInstruments,
 } from "./market.js";
 import { createQuoteStream } from "./quote_stream.js";
-import { portfolioPresentation } from "./portfolio.js";
+import {
+  findNearestPricePoint,
+  layoutPriceSeries,
+  mergeLiveQuote,
+  prepareFiveDaySeries,
+} from "./chart.js";
+import { allocationInUsd, normalizeUsdRates, portfolioPresentation } from "./portfolio.js";
 import {
   action,
+  allocationChart,
   connectionPill,
+  detailGrid,
   emptyPanel,
   errorMessage,
   externalLink,
   holdingRow,
   holdingsHeader,
   label,
+  menuItem,
+  menuTrigger,
   muted,
   panel,
+  popoverSurface,
   portfolioSummary,
+  priceChart,
   quoteDetail,
   quoteRow,
+  QUOTE_ROW_HEIGHT,
   rule,
   themeButton,
   watchlistHeader,
@@ -110,6 +143,7 @@ export default class LongbridgeApp extends View {
     this.status = { state: this.hasStoredTokens ? "saved session" : "offline" };
     this.authorization = null;
     this.account = null;
+    this.fxRates = new Map([["USD", 1]]);
     /** @type {LongbridgeHoldingRow[]} */
     this.holdings = [];
     this.error = "";
@@ -119,6 +153,16 @@ export default class LongbridgeApp extends View {
     this.connectedToken = null;
     this.lastTick = Date.now();
     this.quotePulse = 1;
+    this.candleCache = new Map();
+    this.chartState = { symbol: null, state: "idle" };
+    this.chartHover = null;
+    this.chartPointer = null;
+    this.chartHoverFramePending = false;
+    this.chartGeneration = 0;
+    // Both popovers are controlled: the shell reports every open/close through
+    // `on_open_change`, and this is where the answer lives.
+    this.watchlistMenuOpen = false;
+    this.allocationHelpOpen = false;
     this.clock = timer.every(1_000, (cx) => {
       this.lastTick = Date.now();
       this.quotes = sortLikeTerminal(this.quotes, this.lastTick);
@@ -129,7 +173,7 @@ export default class LongbridgeApp extends View {
 
   /** @param {import("gpui").Context} [cx] */
   resume(cx) {
-    this.status = { state: "connecting" };
+    this.status = { state: "restoring_token" };
     this.error = "";
     this.streamError = "";
     if (cx) cx.notify();
@@ -176,7 +220,7 @@ export default class LongbridgeApp extends View {
     this.stream = null;
     if (previous) await previous.stop();
     if (generation !== this.streamGeneration) return;
-    this.status = { state: "connecting" };
+    this.status = { state: "loading_watchlist" };
     with_cx((cx) => cx.notify());
 
     const instruments = watchlistInstruments(await get("/v1/watchlist/groups"));
@@ -184,6 +228,11 @@ export default class LongbridgeApp extends View {
     this.instruments = instruments;
     this.quotes = sortLikeTerminal(initialQuotes(instruments), Date.now());
     this.selectedSymbol = instruments[0]?.symbol ?? null;
+    // The primary workspace is usable as soon as Watchlist has loaded. Asset
+    // reads are a separate, slower boundary and must not leave navigation in a
+    // misleading global Connecting state.
+    this.status = { state: "connected" };
+    with_cx((cx) => cx.notify());
     await this.refreshPortfolio();
     if (generation !== this.streamGeneration) return;
     const symbols = [
@@ -218,6 +267,7 @@ export default class LongbridgeApp extends View {
       await stream.stop();
       return;
     }
+    this.loadSelectedChart();
   }
 
   /** @param {unknown} quote */
@@ -228,6 +278,12 @@ export default class LongbridgeApp extends View {
     );
     this.portfolioQuotes = this.portfolioQuotes.map((current) => mergeQuote(current, quote));
     if (quote && typeof quote === "object" && quote.symbol === this.selectedSymbol) {
+      const candles = this.candleCache.get(this.selectedSymbol);
+      if (candles)
+        this.candleCache.set(
+          this.selectedSymbol,
+          mergeLiveQuote(this.selectedSymbol, candles, quote),
+        );
       this.quotePulse = 0.72;
       timer.after(160, (cx) => {
         this.quotePulse = 1;
@@ -235,6 +291,40 @@ export default class LongbridgeApp extends View {
       });
     }
     with_cx((cx) => cx.notify());
+  }
+
+  loadSelectedChart() {
+    const symbol = this.selectedSymbol;
+    const stream = this.stream;
+    if (!symbol || !stream) return;
+    const generation = ++this.chartGeneration;
+    this.chartState = {
+      symbol,
+      state: this.candleCache.has(symbol) ? "ready" : "loading",
+    };
+    with_cx((cx) => cx.notify());
+    const end = new Date();
+    const start = new Date(end.getTime() - 14 * 86_400_000);
+    const compact = (date) => date.toISOString().slice(0, 10).replaceAll("-", "");
+    spawn(async () => {
+      try {
+        const response = await stream.queryCandlesticks({
+          symbol,
+          startDate: compact(start),
+          endDate: compact(end),
+        });
+        if (generation !== this.chartGeneration || symbol !== this.selectedSymbol) return;
+        this.candleCache.set(symbol, response.candlesticks);
+        this.chartState = { symbol, state: "ready" };
+      } catch (_) {
+        if (generation !== this.chartGeneration || symbol !== this.selectedSymbol) return;
+        this.chartState = {
+          symbol,
+          state: this.candleCache.has(symbol) ? "ready" : "error",
+        };
+      }
+      with_cx((cx) => cx.notify());
+    });
   }
 
   /** @param {unknown} status */
@@ -261,9 +351,17 @@ export default class LongbridgeApp extends View {
   async refreshPortfolio() {
     // Keep authenticated reads sequential: if both discover an expired access
     // token together, two refresh-token rotations could race.
-    const account = await get("/v1/asset/account");
+    const account = await get("/v1/asset/account", { currency: "USD" });
     const positions = await get("/v1/asset/stock");
+    let exchangeRates = null;
+    try {
+      exchangeRates = await get("/v1/asset/exchange_rates");
+    } catch (_) {
+      // The account snapshot is already USD. Native-currency holdings remain
+      // visibly unpriced until the optional exchange-rate read succeeds.
+    }
     this.account = firstRecord(account);
+    this.fxRates = normalizeUsdRates(exchangeRates);
     this.holdings = normalizeHoldings(positions);
     const previous = new Map(this.portfolioQuotes.map((quote) => [quote.symbol, quote]));
     this.portfolioQuotes = initialQuotes(
@@ -301,6 +399,7 @@ export default class LongbridgeApp extends View {
     this.connectedToken = null;
     this.authorization = null;
     this.account = null;
+    this.fxRates = new Map([["USD", 1]]);
     this.holdings = [];
     this.status = { state: "offline" };
     this.streamError = "";
@@ -309,6 +408,12 @@ export default class LongbridgeApp extends View {
     this.quotes = [];
     this.portfolioQuotes = [];
     this.selectedSymbol = null;
+    this.candleCache.clear();
+    this.chartGeneration += 1;
+    this.chartState = { symbol: null, state: "idle" };
+    this.chartHover = null;
+    this.chartPointer = null;
+    this.chartHoverFramePending = false;
     spawn(async () => {
       await clearTokens();
     });
@@ -317,15 +422,38 @@ export default class LongbridgeApp extends View {
 
   /** @param {import("gpui").Context} cx */
   render(cx) {
+    const __r0 = Date.now();
+    const __result = this.__renderBody(cx);
+    const __total = Date.now() - __r0;
+    globalThis.__renderMs = (globalThis.__renderMs || 0) + __total;
+    globalThis.__renders = (globalThis.__renders || 0) + 1;
+    if (globalThis.__renders % 20 === 0) {
+      log.info(
+        `RENDERPROF renders=${globalThis.__renders} total=${globalThis.__renderMs}ms ` +
+        `compute=${globalThis.__computeMs || 0}ms quotes=${globalThis.__quoteCount} ` +
+        `holdings=${globalThis.__holdingCount}`
+      );
+    }
+    return __result;
+  }
+
+  __renderBody(cx) {
     const tokens = cx.theme();
-    return v_flex()
+    return div()
+      .relative()
       .size_full()
-      .bg(tokens.background)
-      .p(tokens.spacing.sm)
-      .gap(tokens.spacing.sm)
-      .child(this.header(tokens))
-      .child(this.hasStoredTokens ? this.workspace(tokens) : this.loginGate(tokens))
-      .child(this.footer(tokens));
+      .child(
+        v_flex()
+          .w_full()
+          .h_full()
+          .bg(tokens.background)
+          .p(tokens.spacing.sm)
+          .gap(tokens.spacing.sm)
+          .child(this.header(tokens))
+          .child(this.hasStoredTokens ? this.workspace(tokens) : this.loginGate(tokens))
+          .child(this.footer(tokens)),
+      )
+      .child(fps_monitor().anchor("bottom_left"));
   }
 
   /** @param {import("gpui").Theme} tokens */
@@ -355,33 +483,57 @@ export default class LongbridgeApp extends View {
           )
           .when(this.hasStoredTokens, (element) =>
             element.child(
-              h_flex()
+              Tabs.new("workspace-tabs")
+                .axis("horizontal")
+                .flex()
                 .items_center()
                 .gap(tokens.spacing.xs)
                 .child(
-                  action(
-                    tokens,
-                    "page-watchlist",
-                    "Watchlist",
-                    (_event, cx) => {
+                  Tab.new("page-watchlist")
+                    .selected(this.page === "watchlist")
+                    .on_click((_event, cx) => {
                       this.page = "watchlist";
                       cx.notify();
-                    },
-                    { variant: "ghost", selected: this.page === "watchlist" },
-                  ),
+                    })
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .h(32)
+                    .px(tokens.spacing.sm)
+                    .rounded(tokens.radius.sm)
+                    .bg(this.page === "watchlist" ? tokens.secondary : tokens.surface)
+                    .text_size(11)
+                    .font_weight(this.page === "watchlist" ? 600 : 400)
+                    .text_color(
+                      this.page === "watchlist" ? tokens.foreground : tokens.muted_foreground,
+                    )
+                    .hover((style) => style.bg(tokens.accent))
+                    .focus((style) => style.bg(tokens.accent).text_color(tokens.accent_foreground))
+                    .child(text("Watchlist")),
                 )
                 .child(
-                  action(
-                    tokens,
-                    "page-portfolio",
-                    "Portfolio",
-                    (_event, cx) => {
+                  Tab.new("page-portfolio")
+                    .selected(this.page === "portfolio")
+                    .on_click((_event, cx) => {
                       this.page = "portfolio";
                       this.loadPortfolio();
                       cx.notify();
-                    },
-                    { variant: "ghost", selected: this.page === "portfolio" },
-                  ),
+                    })
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .h(32)
+                    .px(tokens.spacing.sm)
+                    .rounded(tokens.radius.sm)
+                    .bg(this.page === "portfolio" ? tokens.secondary : tokens.surface)
+                    .text_size(11)
+                    .font_weight(this.page === "portfolio" ? 600 : 400)
+                    .text_color(
+                      this.page === "portfolio" ? tokens.foreground : tokens.muted_foreground,
+                    )
+                    .hover((style) => style.bg(tokens.accent))
+                    .focus((style) => style.bg(tokens.accent).text_color(tokens.accent_foreground))
+                    .child(text("Portfolio")),
                 ),
             ),
           ),
@@ -401,14 +553,30 @@ export default class LongbridgeApp extends View {
 
   /** @param {import("gpui").Theme} tokens */
   workspace(tokens) {
+    // Each page owns its own scrolling. Watchlist is a master-detail layout
+    // whose panes scroll independently, and Portfolio is one long column — a
+    // shared scroll container above them would either clip the panes or nest a
+    // second scroll inside the first, which is what made Holdings unreachable
+    // in a short window.
     return v_flex()
       .flex_1()
       .min_h(0)
       .gap(tokens.spacing.sm)
-      .when(Boolean(this.error), (element) => element.child(errorMessage(tokens, this.error)))
+      .when(Boolean(this.error), (element) =>
+        element.child(
+          h_flex()
+            .items_center()
+            .justify_between()
+            .gap(tokens.spacing.sm)
+            .child(errorMessage(tokens, this.error).flex_1())
+            .child(action(tokens, "retry-connection", "Retry", (_event, cx) => this.resume(cx))),
+        ),
+      )
       .child(
         (this.page === "portfolio" ? this.portfolioPage(tokens) : this.watchlistPage(tokens))
           .id("workspace-page")
+          .flex_1()
+          .min_h(0)
           .transition("opacity", { duration: 160, easing: "ease-out" }),
       );
   }
@@ -424,28 +592,27 @@ export default class LongbridgeApp extends View {
 
   /** @param {import("gpui").Theme} tokens */
   watchlistPage(tokens) {
-    return h_flex()
-      .items_stretch()
+    // The divider is base's, and so is the position it settles at: the group
+    // files its panel sizes under its own id, which is why that id is a written
+    // name and not one built from anything that changes. Nothing on the view
+    // needs to hold the layout for a drag to survive a repaint.
+    //
+    // The panes no longer wrap at narrow widths — a resizable group cannot, and
+    // the runtime exposes no window width to switch on — so each carries a
+    // minimum instead and a short window shrinks them rather than stacking.
+    return h_resizable("watchlist-workspace")
       .flex_1()
       .min_h(0)
-      .flex_wrap()
-      .gap(tokens.spacing.sm)
-      .overflow_y_scrollbar()
       .child(
-        this.watchlist(tokens)
-          .id("watchlist-pane")
-          .flex_basis(560)
-          .flex_grow(1)
-          .min_w(360)
-          .h_full(),
+        resizable_panel()
+          .size(620)
+          .size_range(360)
+          .child(this.watchlist(tokens).id("watchlist-pane").size_full()),
       )
       .child(
-        this.stockDetail(tokens)
-          .id("stock-detail-pane")
-          .flex_basis(300)
-          .flex_grow(1)
-          .min_w(280)
-          .h_full(),
+        resizable_panel()
+          .size_range(280)
+          .child(this.stockDetail(tokens).id("stock-detail-pane").size_full()),
       );
   }
 
@@ -460,7 +627,13 @@ export default class LongbridgeApp extends View {
           .px(tokens.spacing.md)
           .py(tokens.spacing.sm)
           .child(v_flex().gap(tokens.spacing.xxs).child(label(tokens, "Watchlist")))
-          .child(muted(tokens, status)),
+          .child(
+            h_flex()
+              .items_center()
+              .gap(tokens.spacing.sm)
+              .child(muted(tokens, status))
+              .child(this.watchlistMenu(tokens)),
+          ),
       )
       .child(rule(tokens))
       .when(Boolean(this.streamError), (element) =>
@@ -469,32 +642,126 @@ export default class LongbridgeApp extends View {
       .child(watchlistHeader(tokens))
       .child(rule(tokens))
       .child(
+        // One element per row on screen rather than one per instrument. The
+        // renderer runs inside layout, so it registers nothing: selection is
+        // the list's own `on_item_click`, reported by index into `this.quotes`.
         v_flex()
-          .id("watchlist-scroll")
+          .relative()
           .flex_1()
           .min_h(0)
-          .overflow_y_scrollbar()
-          .children(
-            this.quotes.map((quote) =>
-              quoteRow(
-                tokens,
-                quote,
-                quote.symbol === this.selectedSymbol,
-                (_event, cx) => {
-                  this.selectedSymbol = quote.symbol;
-                  cx.notify();
-                },
-                this.lastTick,
-              ),
+          .child(
+            v_virtual_list("watchlist-rows", this.quotes.length, QUOTE_ROW_HEIGHT, (range) =>
+              this.quotes
+                .slice(range.start, range.end)
+                .map((quote) =>
+                  quoteRow(
+                    tokens,
+                    quote,
+                    quote.symbol === this.selectedSymbol,
+                    this.lastTick,
+                  ),
+                ),
+            )
+              .size_full()
+              .on_item_click((index, cx) => this.selectQuote(index, cx)),
+          )
+          .child(Scrollbar.vertical("watchlist-rows").absolute().inset_0()),
+      );
+  }
+
+  /**
+   * The Watchlist popup menu.
+   *
+   * `Popover` owns the press, the anchoring and the dismissal; the rows are
+   * ordinary buttons carrying the menu-item role, because the runtime binds no
+   * menu component to build them from.
+   *
+   * @param {import("gpui").Theme} tokens
+   */
+  watchlistMenu(tokens) {
+    const selected = this.quotes.find((quote) => quote.symbol === this.selectedSymbol);
+    const close = (cx) => {
+      this.watchlistMenuOpen = false;
+      cx.notify();
+    };
+    return Popover.new("watchlist-menu")
+      .open(this.watchlistMenuOpen)
+      .on_open_change((open, cx) => {
+        this.watchlistMenuOpen = open;
+        cx.notify();
+      })
+      .trigger(
+        menuTrigger(tokens, "watchlist-menu-trigger", "Watchlist actions", this.watchlistMenuOpen),
+      )
+      .content(
+        popoverSurface(tokens, { menu: true })
+          .child(
+            menuItem(tokens, "watchlist-menu-reconnect", "Reconnect stream", (_event, cx) => {
+              close(cx);
+              this.resume(cx);
+            }),
+          )
+          .child(
+            menuItem(
+              tokens,
+              "watchlist-menu-copy-symbol",
+              "Copy selected symbol",
+              (_event, cx) => {
+                close(cx);
+                if (selected) this.copyAuthorization(selected.symbol, "Symbol");
+              },
+              { detail: selected ? selected.code : "", disabled: !selected },
+            ),
+          )
+          .child(
+            menuItem(
+              tokens,
+              "watchlist-menu-refresh-chart",
+              "Reload 5D chart",
+              (_event, cx) => {
+                close(cx);
+                this.candleCache.delete(this.selectedSymbol);
+                this.loadSelectedChart();
+              },
+              { disabled: !selected },
+            ),
+          )
+          .child(rule(tokens))
+          .child(
+            menuItem(
+              tokens,
+              "watchlist-menu-theme",
+              tokens.mode === "dark" ? "Light theme" : "Dark theme",
+              (_event, cx) => {
+                close(cx);
+                this.chooseTheme(tokens.mode === "dark" ? "light" : "dark", cx);
+              },
             ),
           ),
       );
+  }
+
+  /** @param {number} index @param {import("gpui").Context} cx */
+  selectQuote(index, cx) {
+    const quote = this.quotes[index];
+    if (!quote || quote.symbol === this.selectedSymbol) return;
+    this.selectedSymbol = quote.symbol;
+    this.loadSelectedChart();
+    cx.notify();
   }
 
   /** @param {import("gpui").Theme} tokens */
   stockDetail(tokens) {
     const quote =
       this.quotes.find((entry) => entry.symbol === this.selectedSymbol) ?? this.quotes[0];
+    const series = quote
+      ? prepareFiveDaySeries(quote.symbol, this.candleCache.get(quote.symbol) ?? [])
+      : { symbol: "", days: [], points: [] };
+    const geometry = layoutPriceSeries(series, { width: 480, height: 132, dayGap: 8 });
+    const hoveredPoint =
+      this.chartHover?.symbol === quote?.symbol
+        ? geometry.points.find((point) => point.timestamp === this.chartHover.timestamp) ?? null
+        : null;
     return panel(tokens)
       .child(
         h_flex()
@@ -508,7 +775,50 @@ export default class LongbridgeApp extends View {
       .child(rule(tokens))
       .child(
         quote
-          ? quoteDetail(tokens, quote, this.lastTick, this.quotePulse ?? 1)
+          ? v_flex()
+              .flex_1()
+              .min_h(0)
+              .overflow_y_scrollbar()
+              .child(quoteDetail(tokens, quote, this.lastTick, this.quotePulse ?? 1))
+              .child(
+                v_flex()
+                  .px(tokens.spacing.lg)
+                  .pb(tokens.spacing.lg)
+                  .child(
+                    priceChart(
+                      tokens,
+                      geometry,
+                      this.chartState.symbol === quote.symbol ? this.chartState.state : "loading",
+                      hoveredPoint,
+                      (event) => {
+                        const width = event.bounds.width;
+                        if (!(width > 0)) return;
+                        this.chartPointer = {
+                          symbol: quote.symbol,
+                          x: (event.local_position.x / width) * geometry.width,
+                        };
+                        if (this.chartHoverFramePending) return;
+                        this.chartHoverFramePending = true;
+                        timer.after(16, (cx) => {
+                          this.chartHoverFramePending = false;
+                          const pointer = this.chartPointer;
+                          if (!pointer || pointer.symbol !== quote.symbol) return;
+                          const point = findNearestPricePoint(geometry, pointer.x);
+                          if (!point || this.chartHover?.timestamp === point.timestamp) return;
+                          this.chartHover = { symbol: quote.symbol, timestamp: point.timestamp };
+                          cx.notify();
+                        });
+                      },
+                      (hovered, cx) => {
+                        if (hovered) return;
+                        this.chartPointer = null;
+                        if (this.chartHover === null) return;
+                        this.chartHover = null;
+                        cx.notify();
+                      },
+                    ),
+                  ),
+              )
           : emptyPanel(
               tokens,
               "Watchlist is empty",
@@ -523,26 +833,40 @@ export default class LongbridgeApp extends View {
       this.account && typeof this.account === "object"
         ? /** @type {Record<string, unknown>} */ (this.account)
         : null;
-    const presentation = portfolioPresentation(this.holdings, [
-      ...this.quotes,
-      ...this.portfolioQuotes,
-    ]);
+    const __t0 = Date.now();
+    const presentation = portfolioPresentation(
+      this.holdings,
+      [...this.quotes, ...this.portfolioQuotes],
+      this.fxRates,
+    );
+    const allocation = allocationInUsd(
+      this.holdings,
+      [...this.quotes, ...this.portfolioQuotes],
+      this.fxRates,
+    );
+    globalThis.__computeMs = (globalThis.__computeMs || 0) + (Date.now() - __t0);
+    globalThis.__quoteCount = this.quotes.length + this.portfolioQuotes.length;
+    globalThis.__holdingCount = this.holdings.length;
     const account = balance
       ? {
           netAssets: stringValue(balance.net_assets ?? balance.netAssets),
           totalCash: stringValue(balance.total_cash ?? balance.totalCash),
           buyingPower: stringValue(balance.buy_power ?? balance.buyPower),
-          currency: stringValue(balance.currency),
+          currency: "USD",
           risk: stringValue(balance.risk_level ?? balance.riskLevel),
         }
       : null;
 
+    // One scrolling column, and every panel in it sized by its own content.
+    // Nothing here is `flex_1`: a panel that took the leftover height would be
+    // squeezed to nothing in a short window, and its inner scroll — a second
+    // scroll inside this one — is where Holdings used to disappear.
     return v_flex()
-      .flex_1()
-      .min_h(0)
+      .overflow_y_scroll()
       .gap(tokens.spacing.md)
       .child(
         panel(tokens)
+          .flex_none()
           .child(
             h_flex()
               .items_center()
@@ -559,9 +883,41 @@ export default class LongbridgeApp extends View {
               : emptyPanel(tokens, "No account snapshot", "Waiting for Longbridge account assets."),
           ),
       )
+      .when(allocation.slices.length > 0 || allocation.unpriced.length > 0, (element) =>
+        element.child(
+          panel(tokens)
+            .flex_none()
+            .child(
+              h_flex()
+                .items_center()
+                .justify_between()
+                .px(tokens.spacing.md)
+                .py(tokens.spacing.sm)
+                .child(label(tokens, "Asset allocation"))
+                .child(
+                  h_flex()
+                    .items_center()
+                    .gap(tokens.spacing.sm)
+                    .child(muted(tokens, "Market value in USD"))
+                    .child(this.allocationHelp(tokens, allocation)),
+                ),
+            )
+            .child(rule(tokens))
+            .child(
+              h_flex()
+                .flex_wrap()
+                .items_start()
+                .gap(tokens.spacing.xl)
+                .p(tokens.spacing.md)
+                .child(
+                  v_flex().flex_basis(360).flex_grow(1).child(allocationChart(tokens, allocation)),
+                ),
+            ),
+        ),
+      )
       .child(
         panel(tokens)
-          .flex_1()
+          .flex_none()
           .child(
             h_flex()
               .items_center()
@@ -576,17 +932,60 @@ export default class LongbridgeApp extends View {
           .child(rule(tokens))
           .child(
             this.holdings.length
-              ? v_flex()
-                  .id("holdings-scroll")
-                  .flex_1()
-                  .min_h(0)
-                  .overflow_y_scrollbar()
-                  .children(presentation.holdings.map((holding) => holdingRow(tokens, holding)))
+              ? v_flex().children(
+                  presentation.holdings.map((holding) => holdingRow(tokens, holding)),
+                )
               : emptyPanel(
                   tokens,
                   "No stock positions",
                   "This account currently reports no stock holdings.",
                 ),
+          ),
+      );
+  }
+
+  /**
+   * The second `Popover` in the application, and deliberately a different
+   * shape from the Watchlist menu: a card of explanatory text rather than a
+   * list of commands, so it announces itself as a group and not a menu.
+   *
+   * @param {import("gpui").Theme} tokens
+   * @param {ReturnType<import("./portfolio.js").allocationInUsd>} allocation
+   */
+  allocationHelp(tokens, allocation) {
+    const priced = allocation.slices.length;
+    return Popover.new("allocation-help")
+      .open(this.allocationHelpOpen)
+      .on_open_change((open, cx) => {
+        this.allocationHelpOpen = open;
+        cx.notify();
+      })
+      .trigger(
+        menuTrigger(
+          tokens,
+          "allocation-help-trigger",
+          "How this chart is built",
+          this.allocationHelpOpen,
+        ),
+      )
+      .content(
+        popoverSurface(tokens, { width: 280 })
+          .child(label(tokens, "How this chart is built"))
+          .child(
+            muted(
+              tokens,
+              "Positions are ranked by market value in USD. The five largest keep a colour of " +
+                "their own; everything after them is folded into one grey Other, because a " +
+                "sixth hue would repeat one that already means a different holding.",
+            ),
+          )
+          .child(rule(tokens))
+          .child(
+            detailGrid(tokens, [
+              { title: "Priced positions", value: String(priced) },
+              { title: "Unpriced", value: String(allocation.unpriced.length) },
+              { title: "Wedges drawn", value: String(Math.min(priced, 6)) },
+            ]),
           ),
       );
   }

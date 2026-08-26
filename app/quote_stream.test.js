@@ -129,6 +129,7 @@ class MockWebSocket {
       packet.command === COMMAND.AUTH ||
       packet.command === COMMAND.SUBSCRIBE ||
       packet.command === COMMAND.REALTIME_QUOTE ||
+      packet.command === COMMAND.HISTORY_CANDLESTICKS ||
       packet.command === COMMAND.HEARTBEAT
     ) {
       socket.deliver(
@@ -180,7 +181,9 @@ class MockWebSocket {
                   0x80,
                   0x20,
                 )
-              : bytes(),
+              : packet.command === COMMAND.HISTORY_CANDLESTICKS
+                ? bytes(0x0a, 0x07, 0x41, 0x41, 0x50, 0x4c, 0x2e, 0x55, 0x53)
+                : bytes(),
         }),
       );
     }
@@ -255,13 +258,20 @@ async function runVectors() {
     transport.urls[0] === "wss://openapi-quote.longbridge.com/v2?version=1&codec=1&platform=9",
     "quote URL includes Longbridge websocket negotiation parameters",
   );
-  check(transport.options[0].headers["accept-language"] === "en-US", "quote language header");
+  check(transport.options[0].headers["accept-language"] === "en", "quote language header");
   check(transport.options[0].headers["x-dc-region"] === "ap", "AP token region header");
   check(first.writes.length === 3, "auth, subscribe, then initial quote snapshot writes");
   check(decodeFrame(first.writes[0]).command === COMMAND.AUTH, "auth is first");
   check(
-    sameBytes(decodeFrame(first.writes[0]).body, encodeAuthRequest({ token: "otp-1" })),
+    sameBytes(
+      decodeFrame(first.writes[0]).body,
+      encodeAuthRequest({ token: "otp-1", metadata: { "accept-language": "en" } }),
+    ),
     "websocket auth uses a fresh OTP instead of the OAuth access token",
+  );
+  check(
+    !sameBytes(decodeFrame(first.writes[0]).body, encodeAuthRequest({ token: "otp-1" })),
+    "websocket auth carries the English language metadata Longbridge localizes pushes with",
   );
   check(decodeFrame(first.writes[1]).command === COMMAND.SUBSCRIBE, "subscribe follows auth");
   check(
@@ -277,13 +287,33 @@ async function runVectors() {
     "snapshot quote callback",
   );
   check(
+    quotes.some(
+      (quote) =>
+        quote.symbol === "AAPL.US" &&
+        quote.prevClose === "180.00" &&
+        quote.tradeSession === undefined,
+    ),
+    "snapshot does not invent an authoritative trade session",
+  );
+  check(
     quotes.some((quote) => quote.symbol === "AAPL.US" && quote.lastDone === "189.50"),
     "push quote callback",
   );
 
+  const history = await stream.queryCandlesticks({
+    symbol: "AAPL.US",
+    startDate: "20260817",
+    endDate: "20260826",
+  });
+  check(history.symbol === "AAPL.US", "history query returns decoded candlesticks");
+  check(
+    decodeFrame(first.writes[3]).command === COMMAND.HISTORY_CANDLESTICKS,
+    "history query uses command 27",
+  );
+
   timers.fireHeartbeat();
   await settle();
-  check(decodeFrame(first.writes[3]).command === COMMAND.HEARTBEAT, "heartbeat write");
+  check(decodeFrame(first.writes[4]).command === COMMAND.HEARTBEAT, "heartbeat write");
 
   first.disconnect();
   await settle();

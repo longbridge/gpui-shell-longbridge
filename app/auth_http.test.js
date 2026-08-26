@@ -2,7 +2,7 @@
 
 import { View, sleep, spawn, text, v_flex, with_cx } from "gpui";
 import { beginDeviceAuthorization, formBody, pollDeviceAuthorization } from "./auth.js";
-import { get } from "./http.js";
+import { get, socketOtp } from "./http.js";
 
 // Keep the read-only HTTP module imported: a broken relative import is a
 // startup failure, while this expression never invokes it.
@@ -163,6 +163,36 @@ async function permanentOauthErrorTerminates() {
   );
 }
 
+// Longbridge returns security names in the language the request asks for, so an
+// authenticated read must pin English rather than inherit the account default.
+async function authenticatedReadsRequestEnglish() {
+  const original = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    return {
+      ok: true,
+      status: 200,
+      async text() {
+        return JSON.stringify({ code: 0, data: { otp: "one-time" } });
+      },
+      async json() {
+        return { code: 0, data: { otp: "one-time" } };
+      },
+    };
+  };
+  try {
+    await socketOtp("test-token");
+  } finally {
+    globalThis.fetch = original;
+  }
+  check(calls.length === 1, "socket token is fetched once");
+  check(
+    calls[0].options.headers["Accept-Language"] === "en",
+    "authenticated Longbridge reads request English content",
+  );
+}
+
 async function runVectors() {
   check(
     formBody({ client_id: "public client", grant_type: "refresh_token" }) ===
@@ -174,6 +204,7 @@ async function runVectors() {
   await slowDownIsSharedOncePerRound();
   await transientRegionDoesNotAbortItsSibling();
   await permanentOauthErrorTerminates();
+  await authenticatedReadsRequestEnglish();
 }
 
 export default class AuthHttpContract extends View {

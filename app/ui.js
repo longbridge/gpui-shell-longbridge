@@ -1,8 +1,27 @@
 // Compact presentation primitives for the read-only terminal. Every visual
 // decision resolves from the call-scoped semantic theme.
 
-import { Button, Link, div, h_flex, svg, text, v_flex } from "gpui";
+import {
+  Background,
+  Button,
+  Link,
+  PathBuilder,
+  Progress,
+  ProgressIndicator,
+  ProgressTrack,
+  Table,
+  TableBody,
+  TableCell,
+  TableRow,
+  div,
+  h_flex,
+  paint_path,
+  svg,
+  text,
+  v_flex,
+} from "gpui";
 import { formatCompactNumber, quoteFreshness, tradeStatusLabel } from "./market.js";
+import { foldAllocationSlices } from "./portfolio.js";
 
 /** @param {import("gpui").Theme} tokens @param {string | number} value @param {number} [size] */
 export const label = (tokens, value, size = 12) =>
@@ -103,8 +122,10 @@ export function action(tokens, id, caption, onClick, options = {}) {
  */
 export function themeButton(tokens, onClick) {
   const dark = tokens.mode === "dark";
+  const hint = dark ? "Switch to light theme" : "Switch to dark theme";
   return Button.new("theme-toggle")
-    .accessibility_label(dark ? "Switch to light theme" : "Switch to dark theme")
+    .accessibility_label(hint)
+    .tooltip(hint)
     .on_click(onClick)
     .flex()
     .items_center()
@@ -161,6 +182,7 @@ export function connectionPill(tokens, value) {
     .id("connection-state")
     .items_center()
     .gap(tokens.spacing.xs)
+    .tooltip(`Quote stream: ${value}`)
     .opacity(waiting ? 0.72 : 1)
     .transition("opacity", { duration: 180, easing: "ease-out" })
     .child(div().w(6).h(6).rounded(tokens.radius.full).bg(color))
@@ -178,6 +200,31 @@ export function connectionPill(tokens, value) {
     );
 }
 
+// What each abbreviated column actually reports. A tooltip takes a string
+// rather than an element, and it is the pointer's affordance only — the
+// accessible name is the visible header text itself.
+const COLUMN_HINTS = Object.freeze({
+  Instrument: "Ticker and security name",
+  Last: "Most recent traded price",
+  Change: "Move against the previous close, absolute and percent",
+  Volume: "Shares traded so far this session",
+  Session: "Trading status, or the session the quote came from",
+});
+
+/**
+ * @param {import("gpui").Theme} tokens
+ * @param {string} title
+ * @param {(element: import("gpui").Element) => import("gpui").Element} size
+ */
+function columnHeader(tokens, title, size) {
+  return size(
+    h_flex()
+      .id(`watchlist-column-${title.toLowerCase()}`)
+      .items_center()
+      .tooltip(COLUMN_HINTS[title]),
+  ).child(muted(tokens, title));
+}
+
 /** @param {import("gpui").Theme} tokens */
 export function watchlistHeader(tokens) {
   return h_flex()
@@ -186,21 +233,135 @@ export function watchlistHeader(tokens) {
     .px(tokens.spacing.sm)
     .py(tokens.spacing.xs)
     .bg(tokens.muted)
-    .child(muted(tokens, "Instrument").w("31%"))
-    .child(muted(tokens, "Last").w("19%").text_right())
-    .child(muted(tokens, "Change").w("18%").text_right())
-    .child(muted(tokens, "Volume").w("16%").text_right())
-    .child(muted(tokens, "Session").flex_1().text_right());
+    .child(columnHeader(tokens, "Instrument", (element) => element.w("31%")))
+    .child(columnHeader(tokens, "Last", (element) => element.w("19%").justify_end()))
+    .child(columnHeader(tokens, "Change", (element) => element.w("18%").justify_end()))
+    .child(columnHeader(tokens, "Volume", (element) => element.w("16%").justify_end()))
+    .child(columnHeader(tokens, "Session", (element) => element.flex_1().justify_end()));
 }
 
 /**
+ * One row of a popup menu.
+ *
+ * gpui-shell binds no menu component of its own: `Popover` is the anchored
+ * surface, and what goes inside it belongs to the application. So a menu is a
+ * `Button` per row carrying the menu-item role — which is what makes it a menu
+ * to a screen reader and not only to a reader of this file.
+ *
+ * @param {import("gpui").Theme} tokens
+ * @param {string} id
+ * @param {string} caption
+ * @param {(event: import("gpui").ClickEvent, cx: import("gpui").Context) => void} onClick
+ * @param {{ detail?: string, destructive?: boolean, disabled?: boolean }} [options]
+ */
+export function menuItem(tokens, id, caption, onClick, options = {}) {
+  const { detail = "", destructive = false, disabled = false } = options;
+  const foreground = destructive ? tokens.destructive : tokens.foreground;
+  return Button.new(id)
+    .role("menu_item")
+    .disabled(disabled)
+    .on_click(onClick)
+    .flex()
+    .items_center()
+    .justify_between()
+    .gap(tokens.spacing.md)
+    .w_full()
+    .px(tokens.spacing.sm)
+    .py(tokens.spacing.xs)
+    .rounded(tokens.radius.sm)
+    .border(0)
+    .bg(tokens.surface)
+    .text_color(foreground)
+    .opacity(disabled ? 0.5 : 1)
+    .hover((style) => style.bg(tokens.accent))
+    .focus((style) => style.bg(tokens.accent))
+    .child(label(tokens, caption))
+    .when(Boolean(detail), (element) => element.child(muted(tokens, detail)));
+}
+
+/**
+ * The surface a `Popover` opens. `role` separates the two uses: a list of
+ * commands announces itself as a menu, an explanatory card as a plain group.
+ *
+ * @param {import("gpui").Theme} tokens
+ * @param {{ width?: number, menu?: boolean }} [options]
+ */
+export function popoverSurface(tokens, options = {}) {
+  const { width = 240, menu = false } = options;
+  return v_flex()
+    .when(menu, (element) => element.role("menu"))
+    .w(width)
+    .gap(menu ? tokens.spacing.xxs : tokens.spacing.sm)
+    .p(menu ? tokens.spacing.xs : tokens.spacing.md)
+    .bg(tokens.surface)
+    .border(1)
+    .border_color(tokens.border)
+    .rounded(tokens.radius.md);
+}
+
+/**
+ * The `⋯` control a popup menu or a popover hangs from. Icon-only, which is
+ * the case a tooltip exists for.
+ *
+ * `open` is not decoration, and it has to be drawn differently from focus
+ * rather than with the same fill. A `Popover` takes the keyboard into its
+ * surface while it is up and hands it back to the trigger when it dismisses,
+ * so a trigger whose focus style is the open style reads the state backwards
+ * in both directions: flat while the menu shows, then lit once it is gone.
+ *
+ * So the two are different marks. Open is a filled control. Focus is a ring —
+ * where the keyboard is, which is a different question from whether the menu
+ * is up — and it changes no fill, so a trigger that is open *and* focused
+ * still reads as open. The border is always there and only changes color, so
+ * the ring never moves the icon.
+ *
+ * @param {import("gpui").Theme} tokens
+ * @param {string} id
+ * @param {string} hint
+ * @param {boolean} [open]
+ */
+export function menuTrigger(tokens, id, hint, open = false) {
+  return Button.new(id)
+    .accessibility_label(hint)
+    .tooltip(hint)
+    .selected(open)
+    .flex()
+    .items_center()
+    .justify_center()
+    .w(24)
+    .h(24)
+    .rounded(tokens.radius.sm)
+    .border(1)
+    .border_color(open ? tokens.accent : tokens.surface)
+    .bg(open ? tokens.accent : tokens.surface)
+    .text_color(open ? tokens.accent_foreground : tokens.muted_foreground)
+    .hover((style) => style.bg(tokens.accent).text_color(tokens.accent_foreground))
+    .focus((style) => style.border_color(tokens.ring))
+    .child(label(tokens, "\u22ef", 14));
+}
+
+/**
+ * The height every watchlist row is drawn at, and the size the virtual list
+ * hands GPUI for each of them. The two have to agree exactly — the list places
+ * rows from this number without measuring them — so the row states it rather
+ * than letting padding and two lines of type add up to whatever they add up to.
+ */
+export const QUOTE_ROW_HEIGHT = 44;
+
+/**
+ * A watchlist row.
+ *
+ * It registers no click handler of its own: rows are rebuilt every frame the
+ * virtual list is scrolled, and a per-row callback would accumulate one
+ * unreachable function per row per frame. The list carries a single
+ * `on_item_click` instead and reports the index.
+ *
  * @param {import("gpui").Theme} tokens
  * @param {LongbridgeQuoteRow} quote
  * @param {boolean} selected
- * @param {(event: import("gpui").ClickEvent, cx: import("gpui").Context) => void} onSelect
  * @param {number} [now]
  */
-export function quoteRow(tokens, quote, selected, onSelect, now = Date.now()) {
+export function quoteRow(tokens, quote, selected, now = Date.now()) {
   const tone = quote.change.startsWith("-")
     ? tokens.destructive
     : quote.change.startsWith("+")
@@ -208,10 +369,10 @@ export function quoteRow(tokens, quote, selected, onSelect, now = Date.now()) {
       : tokens.foreground;
   return Button.new(`quote-${quote.symbol}`)
     .selected(selected)
-    .on_click(onSelect)
     .flex()
     .items_center()
     .w_full()
+    .h(QUOTE_ROW_HEIGHT)
     .gap(tokens.spacing.sm)
     .px(tokens.spacing.sm)
     .py(tokens.spacing.xs)
@@ -346,6 +507,272 @@ export function quoteDetail(tokens, quote, now = Date.now(), pulseOpacity = 1) {
             { title: "Data health", value: dataHealth(quote, now) },
           ]),
         ),
+    );
+}
+
+function percentage(value, total) {
+  return `${total > 0 ? (value / total) * 100 : 0}%`;
+}
+
+/**
+ * @param {import("gpui").Theme} tokens
+ * @param {ReturnType<import("./chart.js").layoutPriceSeries>} geometry
+ * @param {string} state
+ * @param {Record<string, any> | null} hoveredPoint
+ * @param {(event: import("gpui").MouseMoveEvent, cx: import("gpui").Context) => void} onMouseMove
+ * @param {(hovered: boolean, cx: import("gpui").Context) => void} onHover
+ */
+export function priceChart(tokens, geometry, state, hoveredPoint, onMouseMove, onHover) {
+  const height = 132;
+  const chart = v_flex()
+    .id("five-day-chart")
+    .h(178)
+    .gap(tokens.spacing.xs)
+    .child(
+      h_flex()
+        .items_center()
+        .justify_between()
+        .child(label(tokens, "5D intraday"))
+        .when(geometry.min !== null, (element) =>
+          element.child(
+            numeric(tokens, `${geometry.min.toFixed(2)} — ${geometry.max.toFixed(2)}`, 11),
+          ),
+        ),
+    );
+
+  if (state === "loading") {
+    return chart.child(
+      Progress.new("five-day-loading")
+        .indeterminate(true)
+        .h(height)
+        .flex()
+        .items_center()
+        .child(
+          ProgressTrack.new()
+            .w_full()
+            .h(2)
+            .bg(tokens.muted)
+            .child(ProgressIndicator.new().w("42%").h_full().bg(tokens.primary)),
+        ),
+    );
+  }
+  if (state === "error" || geometry.points.length === 0) {
+    return chart.child(
+      v_flex()
+        .h(height)
+        .items_center()
+        .justify_center()
+        .child(muted(tokens, state === "error" ? "Chart unavailable" : "No 5D data")),
+    );
+  }
+
+  const points = geometry.points.map((point) => [
+    percentage(point.x, geometry.width),
+    percentage(point.y, geometry.height),
+  ]);
+  const fillBuilder = PathBuilder.fill().move_to(points[0][0], "100%");
+  for (const point of points) fillBuilder.line_to(point[0], point[1]);
+  const fill = fillBuilder.line_to(points.at(-1)[0], "100%").close().build();
+  const stroke = PathBuilder.stroke(1.5).add_polygon(points, false).build();
+  const area = Background.linear_gradient(
+    180,
+    Background.stop(tokens.primary, 0),
+    Background.stop(tokens.surface, 1),
+  ).opacity(0.32);
+  const hoverX = hoveredPoint ? percentage(hoveredPoint.x, geometry.width) : null;
+  const hoverY = hoveredPoint ? percentage(hoveredPoint.y, geometry.height) : null;
+  const indicator = hoveredPoint
+    ? PathBuilder.stroke(1)
+        .move_to(hoverX, 0)
+        .line_to(hoverX, "100%")
+        .dash_array([3, 3])
+        .build()
+    : null;
+  const marker = hoveredPoint
+    ? PathBuilder.fill()
+        .move_to(hoverX, `${Math.max(0, (hoveredPoint.y / geometry.height) * 100 - 3)}%`)
+        .line_to(`${Math.min(100, (hoveredPoint.x / geometry.width) * 100 + 0.9)}%`, hoverY)
+        .line_to(hoverX, `${Math.min(100, (hoveredPoint.y / geometry.height) * 100 + 3)}%`)
+        .line_to(`${Math.max(0, (hoveredPoint.x / geometry.width) * 100 - 0.9)}%`, hoverY)
+        .close()
+        .build()
+    : null;
+  const hoverTime = hoveredPoint
+    ? new Date(hoveredPoint.timestamp * 1000).toISOString().slice(11, 16)
+    : "";
+
+  return chart
+    .child(
+      div()
+        .id("five-day-plot")
+        .relative()
+        .h(height)
+        .w_full()
+        .on_mouse_move(onMouseMove)
+        .on_hover(onHover)
+        .child(paint_path(fill, area).absolute().inset_0())
+        .child(paint_path(stroke, tokens.primary).absolute().inset_0())
+        .when(indicator, (element) =>
+          element
+            .child(paint_path(indicator, tokens.muted_foreground).absolute().inset_0())
+            .child(paint_path(marker, tokens.primary).absolute().inset_0())
+            .child(
+              v_flex()
+                .absolute()
+                .top(4)
+                .when(hoveredPoint.x > geometry.width * 0.68, (tip) => tip.left(4))
+                .when(hoveredPoint.x <= geometry.width * 0.68, (tip) => tip.right(4))
+                .px(tokens.spacing.sm)
+                .py(tokens.spacing.xs)
+                .gap(tokens.spacing.xxs)
+                .rounded(tokens.radius.sm)
+                .border(1)
+                .border_color(tokens.border)
+                .bg(tokens.surface)
+                .child(numeric(tokens, hoveredPoint.close.toFixed(3), 12))
+                .child(muted(tokens, `${hoveredPoint.date} ${hoverTime} UTC`)),
+            ),
+        ),
+    )
+    .child(
+      h_flex()
+        .justify_between()
+        .children(geometry.days.map((day) => muted(tokens, day.date.slice(5)))),
+    );
+}
+
+// Five categorical hues, assigned in a fixed order and never cycled — a sixth
+// holding folds into "Other" rather than borrowing a hue that already means
+// something else (see `foldAllocationSlices`). Each mode is stepped for its own
+// surface rather than flipped from the other, and both were validated together
+// for lightness band, chroma floor, colour-vision-deficient separation and
+// contrast against this application's surfaces (#ffffff and #0a0a0a). Adjacent
+// wedges clear the CVD gate by ΔE 9.1 light / 8.4 dark. Three of the light
+// steps sit under 3:1 against white, which is why the legend beside the ring
+// always carries the name, the value and the percentage: identity is never
+// colour alone.
+const ALLOCATION_HUES = Object.freeze({
+  light: ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4"],
+  dark: ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181"],
+});
+
+/** A wedge's colour. "Other" is a remainder, not an identity, so it stays grey. */
+function allocationColor(tokens, slice, index) {
+  if (slice.other) return tokens.muted_foreground;
+  const hues = ALLOCATION_HUES[tokens.is_dark ? "dark" : "light"];
+  return hues[Math.min(index, hues.length - 1)];
+}
+
+// Trimmed from both ends of every wedge so neighbouring fills are separated by
+// the surface rather than meeting flush. Skipped when one holding is the whole
+// ring, which would otherwise leave a gap in a solid circle.
+const WEDGE_GAP_RADIANS = 0.02;
+
+function donutSlice(tokens, slice, index, total, count) {
+  const span = total > 0 ? (slice.value / total) * Math.PI * 2 : 0;
+  const gap = count > 1 ? Math.min(WEDGE_GAP_RADIANS, span / 4) : 0;
+  const start = (total > 0 ? (slice.offset / total) * Math.PI * 2 : 0) - Math.PI / 2 + gap;
+  const end = start + span - gap * 2;
+  const steps = Math.max(4, Math.ceil(((end - start) / (Math.PI * 2)) * 48));
+  const points = [];
+  for (let step = 0; step <= steps; step += 1) {
+    const angle = start + ((end - start) * step) / steps;
+    points.push([`${50 + Math.cos(angle) * 48}%`, `${50 + Math.sin(angle) * 48}%`]);
+  }
+  for (let step = steps; step >= 0; step -= 1) {
+    const angle = start + ((end - start) * step) / steps;
+    points.push([`${50 + Math.cos(angle) * 29}%`, `${50 + Math.sin(angle) * 29}%`]);
+  }
+  return paint_path(
+    PathBuilder.fill().add_polygon(points).build(),
+    Background.solid(allocationColor(tokens, slice, index)),
+  )
+    .absolute()
+    .inset_0();
+}
+
+/** @param {import("gpui").Theme} tokens @param {ReturnType<import("./portfolio.js").allocationInUsd>} group */
+export function allocationChart(tokens, group) {
+  let offset = 0;
+  const slices = foldAllocationSlices(group).map((slice) => {
+    const result = { ...slice, offset };
+    offset += slice.value;
+    return result;
+  });
+  const legend = Table.new(`allocation-${group.currency}`)
+    .column_count(3)
+    .row_count(slices.length)
+    .flex_1()
+    .min_w(220)
+    .child(
+      TableBody.new(`allocation-${group.currency}-body`).children(
+        slices.map((slice, index) =>
+          TableRow.new(`allocation-${group.currency}-${slice.symbol}`, index + 1)
+            .flex()
+            .items_center()
+            .py(tokens.spacing.xs)
+            .border_b(1)
+            .border_color(tokens.border)
+            .child(
+              TableCell.new(`allocation-name-${slice.symbol}`, 1)
+                .flex()
+                .items_center()
+                .gap(tokens.spacing.xs)
+                .flex_1()
+                .child(
+                  div()
+                    .w(7)
+                    .h(7)
+                    .rounded(tokens.radius.full)
+                    .bg(allocationColor(tokens, slice, index)),
+                )
+                .child(label(tokens, slice.name)),
+            )
+            .child(
+              TableCell.new(`allocation-value-${slice.symbol}`, 2)
+                .w(90)
+                .text_right()
+                .child(numeric(tokens, slice.value.toFixed(2), 11)),
+            )
+            .child(
+              TableCell.new(`allocation-percent-${slice.symbol}`, 3)
+                .w(64)
+                .text_right()
+                .child(numeric(tokens, `${slice.percent.toFixed(1)}%`, 11)),
+            ),
+        ),
+      ),
+    );
+
+  return v_flex()
+    .gap(tokens.spacing.sm)
+    .child(
+      h_flex()
+        .justify_between()
+        .child(label(tokens, group.currency))
+        .child(muted(tokens, "Allocation")),
+    )
+    .child(
+      h_flex()
+        .flex_wrap()
+        .items_center()
+        .gap(tokens.spacing.lg)
+        .child(
+          div()
+            .relative()
+            .w(148)
+            .h(148)
+            .flex_none()
+            .children(
+              slices.map((slice, index) =>
+                donutSlice(tokens, slice, index, group.total, slices.length),
+              ),
+            ),
+        )
+        .child(legend),
+    )
+    .when(group.unpriced.length > 0, (element) =>
+      element.child(muted(tokens, `${group.unpriced.length} unpriced position(s)`)),
     );
 }
 

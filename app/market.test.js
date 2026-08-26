@@ -64,16 +64,16 @@ function runVectors() {
 
   const inferredSession = sortLikeTerminal(
     [
-      { ...waiting[1], market: "US" },
-      { ...waiting[0], market: "HK" },
-      { ...waiting[2], market: "SG" },
-      { ...waiting[0], symbol: "600000.SH", market: "SH" },
+      { ...waiting[1], market: "US", last: "1" },
+      { ...waiting[0], market: "HK", last: "1" },
+      { ...waiting[2], market: "SG", last: "1" },
+      { ...waiting[0], symbol: "600000.SH", market: "SH", last: "1" },
     ],
-    Date.UTC(2026, 7, 26, 7, 59),
+    Date.UTC(2026, 7, 26, 6, 59),
   );
   check(
-    inferredSession.map((quote) => quote.symbol).join(",") === "AAPL.US,700.HK,600000.SH,D05.SG",
-    "rows without a usable session follow market priority instead of local-clock inference",
+    inferredSession.map((quote) => quote.symbol).join(",") === "700.HK,600000.SH,D05.SG,AAPL.US",
+    "rows without an authoritative session infer the open market group while preserving market priority",
   );
 
   const mixedMarketSessions = sortLikeTerminal(
@@ -211,8 +211,19 @@ function runVectors() {
     "halt status is visible",
   );
   check(
+    tradeStatusLabel({ tradeStatus: 0, tradeSession: 0 }) === "Trading",
+    "regular session uses the trading label",
+  );
+  check(
     tradeStatusLabel({ tradeStatus: 0, tradeSession: 2 }) === "Post-market",
     "extended session is visible",
+  );
+  check(
+    tradeStatusLabel(
+      { tradeStatus: 0, market: "HK", receivedAt: 1 },
+      Date.UTC(2026, 7, 26, 12, 0),
+    ) === "Closed",
+    "a snapshot without an authoritative session does not claim HK is trading after close",
   );
   check(
     formatCompactNumber(8_589_934_592n) === "8.59B",

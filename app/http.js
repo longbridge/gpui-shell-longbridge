@@ -2,11 +2,22 @@
 // owns the two necessary form POSTs in auth.js, and no order-writing method is
 // available from this module.
 
+import { sleep } from "gpui";
+
 import { OPENAPI_BASE_URL, accessToken, refreshAccessToken } from "./auth.js";
+
+const REQUEST_TIMEOUT_MS = 15_000;
+
+// Longbridge localizes security names, statuses and error messages from
+// Accept-Language. Only "zh-CN", "zh-HK" and "en" are recognized: a
+// region-tagged variant such as "en-US" falls back to the account default,
+// which is usually Chinese.
+export const API_LANGUAGE = "en";
 
 const READ_ONLY_PREFIXES = ["/v1/quote/"];
 const READ_ONLY_PATHS = new Set([
   "/v1/asset/account",
+  "/v1/asset/exchange_rates",
   "/v1/asset/stock",
   "/v1/socket/token",
   "/v1/watchlist/groups",
@@ -39,12 +50,18 @@ function endpoint(path, query) {
 
 /** @param {string} url @param {string} token */
 async function request(url, token) {
-  return fetch(url, {
-    headers: {
-      Accept: "application/json",
-      Authorization: `Bearer ${token}`,
-    },
-  });
+  return Promise.race([
+    fetch(url, {
+      headers: {
+        Accept: "application/json",
+        "Accept-Language": API_LANGUAGE,
+        Authorization: `Bearer ${token}`,
+      },
+    }),
+    sleep(REQUEST_TIMEOUT_MS).then(() => {
+      throw new Error("Longbridge API request timed out");
+    }),
+  ]);
 }
 
 /** @param {Response} response */

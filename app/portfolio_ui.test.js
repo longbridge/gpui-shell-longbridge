@@ -9,6 +9,7 @@ export default class PortfolioUiProbe extends LongbridgeApp {
       currency: "USD",
       risk_level: "1",
     };
+    this.fxRates = new Map([["USD", 1]]);
     this.holdings = [
       {
         symbol: "AAPL.US",
@@ -35,6 +36,9 @@ export default class PortfolioUiProbe extends LongbridgeApp {
     this.error = "";
     this.streamError = "";
     this.stream = null;
+    this.candleCache = new Map();
+    this.chartState = { symbol: null, state: "idle" };
+    this.chartGeneration = 0;
     this.clock = null;
   }
 

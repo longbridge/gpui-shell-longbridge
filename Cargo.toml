@@ -19,5 +19,7 @@ split-debuginfo = "unpacked"
 
 [profile.dev.package]
 gpui = { opt-level = 3 }
+gpui-base = { opt-level = 3 }
 gpui_platform = { opt-level = 3 }
+gpui-shell = { opt-level = 3 }
 rquickjs = { opt-level = 3 }

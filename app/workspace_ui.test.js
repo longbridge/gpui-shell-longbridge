@@ -42,6 +42,7 @@ export default class WorkspaceUiProbe extends LongbridgeApp {
     this.status = { state: "connected" };
     this.authorization = null;
     this.account = null;
+    this.fxRates = new Map([["USD", 1]]);
     this.holdings = [];
     this.error = "";
     this.streamError = "";
@@ -50,6 +51,17 @@ export default class WorkspaceUiProbe extends LongbridgeApp {
     this.connectedToken = "test";
     this.lastTick = 1_700_000_006_000;
     this.quotePulse = 1;
+    this.candleCache = new Map([
+      [
+        this.selectedSymbol,
+        [
+          { timestamp: 1_699_920_000n, close: "98", tradeSession: 0 },
+          { timestamp: 1_700_006_400n, close: "100", tradeSession: 0 },
+        ],
+      ],
+    ]);
+    this.chartState = { symbol: this.selectedSymbol, state: "ready" };
+    this.chartGeneration = 0;
     this.clock = null;
   }
 

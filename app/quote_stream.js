@@ -1,7 +1,7 @@
 // Quote-only Longbridge WebSocket session.  Transport and protobuf framing are
 // intentionally separated: this module never exposes a trading command.
 import { timer } from "gpui";
-import { socketOtp } from "./http.js";
+import { API_LANGUAGE, socketOtp } from "./http.js";
 
 import {
   COMMAND,
@@ -10,10 +10,12 @@ import {
   decodeErrorResponse,
   decodeFrame,
   decodePushQuote,
+  decodeSecurityCandlestickResponse,
   decodeSecurityQuoteResponse,
   encodeAuthRequest,
   encodeFrame,
   encodeHeartbeat,
+  encodeHistoryCandlestickDateRequest,
   encodeRealtimeQuoteRequest,
   encodeSubscribeRequest,
 } from "./protocol.js";
@@ -89,7 +91,7 @@ export function createQuoteStream(options) {
   const getOtp = options.getOtp ?? socketOtp;
   if (typeof getOtp !== "function") throw new TypeError("getOtp must be a function");
   const handshakeHeaders = {
-    "accept-language": "en-US",
+    "accept-language": API_LANGUAGE,
     "x-dc-region": accessToken.startsWith("us_") ? "us" : "ap",
   };
   const symbols = requireSymbols(options.symbols);
@@ -289,7 +291,11 @@ export function createQuoteStream(options) {
 
       emitStatus("authenticating");
       const otp = requireString(await getOtp(accessToken), "OTP");
-      await request(session, COMMAND.AUTH, encodeAuthRequest({ token: otp }));
+      await request(
+        session,
+        COMMAND.AUTH,
+        encodeAuthRequest({ token: otp, metadata: { "accept-language": API_LANGUAGE } }),
+      );
       if (!active(session)) throw new Error("quote stream disconnected during authentication");
 
       emitStatus("subscribing");
@@ -312,9 +318,9 @@ export function createQuoteStream(options) {
       );
       for (const quote of decodeSecurityQuoteResponse(snapshot)) {
         try {
-          // SecurityQuote has no trade_session. Match longbridge-terminal's
-          // Intraday default until an authoritative PushQuote arrives.
-          onQuote({ tradeSession: 0, ...quote });
+          // SecurityQuote has no trade_session. Preserve that distinction so
+          // market hours can be inferred until PushQuote supplies the session.
+          onQuote(quote);
         } catch (error) {
           emitStatus("callback_error", { error: String(error?.message ?? error) });
         }
@@ -359,6 +365,17 @@ export function createQuoteStream(options) {
         }
       }
       emitStatus("stopped");
+    },
+
+    async queryCandlesticks({ symbol, startDate, endDate }) {
+      const session = current;
+      if (!session || !active(session)) throw new Error("quote stream is not connected");
+      const body = await request(
+        session,
+        COMMAND.HISTORY_CANDLESTICKS,
+        encodeHistoryCandlestickDateRequest({ symbol, startDate, endDate }),
+      );
+      return decodeSecurityCandlestickResponse(body);
     },
   };
 }

@@ -44,7 +44,7 @@ const TRADE_STATUS = Object.freeze({
 });
 
 const TRADE_SESSION = Object.freeze({
-  0: "Regular",
+  0: "Trading",
   1: "Pre",
   2: "Post-market",
   3: "Overnight",
@@ -155,7 +155,7 @@ function marketKey(market) {
   return market === "SH" || market === "SZ" ? "CN" : market;
 }
 
-function marketSessionRanks(quotes) {
+function marketSessionRanks(quotes, now) {
   const counts = new Map();
   for (const quote of quotes) {
     if (quote.tradeSession === undefined || quote.tradeSession === null) continue;
@@ -173,7 +173,10 @@ function marketSessionRanks(quotes) {
     if (ranks.has(market)) continue;
     const marketCounts = counts.get(market);
     if (!marketCounts) {
-      ranks.set(market, 2);
+      const hasUsableSnapshot = quotes.some(
+        (candidate) => marketKey(candidate.market) === market && Number(candidate.last) > 0,
+      );
+      ranks.set(market, hasUsableSnapshot && marketIsOpen(quote.market, now) ? 0 : 2);
       continue;
     }
     const highestCount = Math.max(...marketCounts);
@@ -186,7 +189,7 @@ function marketSessionRanks(quotes) {
 }
 
 export function sortLikeTerminal(quotes, now = Date.now()) {
-  const sessionRanks = marketSessionRanks(quotes);
+  const sessionRanks = marketSessionRanks(quotes, now);
   return quotes
     .map((quote, index) => ({ quote, index }))
     .sort((left, right) => {
@@ -237,12 +240,14 @@ export function quoteFreshness(quote, now = Date.now()) {
   return now - quote.receivedAt < 15_000 ? "live" : "stale";
 }
 
-export function tradeStatusLabel(quote) {
+export function tradeStatusLabel(quote, now = Date.now()) {
   if (quote?.tradeStatus !== undefined && quote.tradeStatus !== 0) {
     return TRADE_STATUS[quote.tradeStatus] ?? `Status ${quote.tradeStatus}`;
   }
   if (quote?.tradeSession !== undefined) return TRADE_SESSION[quote.tradeSession] ?? "Trading";
-  return quote?.receivedAt ? "Trading" : "Waiting";
+  if (!quote?.receivedAt) return "Waiting";
+  if (!quote.market) return "Trading";
+  return marketIsOpen(quote.market, now) ? "Trading" : "Closed";
 }
 
 export function formatCompactNumber(value) {
@@ -267,6 +272,8 @@ export function streamStatusSummary(status) {
   const labels = {
     offline: "Offline",
     connecting: "Connecting",
+    restoring_token: "Restoring session",
+    loading_watchlist: "Loading watchlist",
     authenticating: "Authenticating",
     subscribing: "Subscribing",
     snapshotting: "Loading snapshot",

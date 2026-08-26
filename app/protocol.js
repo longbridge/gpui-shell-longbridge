@@ -26,6 +26,7 @@ export const COMMAND = Object.freeze({
   SUBSCRIBE: 6,
   UNSUBSCRIBE: 7,
   REALTIME_QUOTE: 11,
+  HISTORY_CANDLESTICKS: 27,
   PUSH_QUOTE: 101,
 });
 
@@ -404,6 +405,29 @@ export function encodeRealtimeQuoteRequest(symbols) {
   return concat(symbols.map((symbol, index) => stringField(1, symbol, `symbols[${index}]`)));
 }
 
+function requireCompactDate(value, name) {
+  requireString(value, name);
+  if (!/^\d{8}$/.test(value)) fail(`${name} must use YYYYMMDD format`);
+  return value;
+}
+
+/**
+ * Encodes quote.SecurityHistoryCandlestickRequest for a one-minute,
+ * no-adjust, regular-session query by date (command 27).
+ */
+export function encodeHistoryCandlestickDateRequest({ symbol, startDate, endDate }) {
+  const dateQuery = concat([
+    stringField(1, requireCompactDate(startDate, "startDate"), "startDate"),
+    stringField(2, requireCompactDate(endDate, "endDate"), "endDate"),
+  ]);
+  return concat([
+    stringField(1, symbol, "symbol"),
+    varintField(2, 1n, "period"),
+    varintField(4, 2n, "queryType"),
+    bytesField(6, dateQuery),
+  ]);
+}
+
 class ProtoReader {
   constructor(bytes) {
     this.bytes = requireBytes(bytes, "protobuf data");
@@ -568,6 +592,48 @@ export function decodeSecurityQuoteResponse(data) {
     return true;
   });
   return quotes;
+}
+
+function decodeCandlestick(data) {
+  const candlestick = { tradeSession: 0 };
+  decodeMessage(data, (reader, field, wireType) => {
+    if (field >= 1 && field <= 4) {
+      expectWireType(wireType, 2, field);
+      const names = ["close", "open", "low", "high"];
+      candlestick[names[field - 1]] = reader.readString(`candlestick ${names[field - 1]}`);
+    } else if (field === 5 || field === 7) {
+      expectWireType(wireType, 0, field);
+      const name = field === 5 ? "volume" : "timestamp";
+      candlestick[name] = signed64(reader.readVarint(`candlestick ${name}`));
+    } else if (field === 6) {
+      expectWireType(wireType, 2, field);
+      candlestick.turnover = reader.readString("candlestick turnover");
+    } else if (field === 8) {
+      expectWireType(wireType, 0, field);
+      candlestick.tradeSession = unsigned32(
+        reader.readVarint("candlestick trade_session"),
+        "trade_session",
+      );
+    } else return false;
+    return true;
+  });
+  return candlestick;
+}
+
+/** Decodes quote.SecurityCandlestickResponse returned by commands 19 and 27. */
+export function decodeSecurityCandlestickResponse(data) {
+  const response = { candlesticks: [] };
+  decodeMessage(data, (reader, field, wireType) => {
+    if (field === 1) {
+      expectWireType(wireType, 2, field);
+      response.symbol = reader.readString("candlestick response symbol");
+    } else if (field === 2) {
+      expectWireType(wireType, 2, field);
+      response.candlesticks.push(decodeCandlestick(reader.readBytes("candlestick")));
+    } else return false;
+    return true;
+  });
+  return response;
 }
 
 /** Decodes quote.PushQuote delivered by push command 101. */
