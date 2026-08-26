@@ -312,7 +312,9 @@ export function createQuoteStream(options) {
       );
       for (const quote of decodeSecurityQuoteResponse(snapshot)) {
         try {
-          onQuote(quote);
+          // SecurityQuote has no trade_session. Match longbridge-terminal's
+          // Intraday default until an authoritative PushQuote arrives.
+          onQuote({ tradeSession: 0, ...quote });
         } catch (error) {
           emitStatus("callback_error", { error: String(error?.message ?? error) });
         }

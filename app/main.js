@@ -1,7 +1,7 @@
 // A standalone, read-only Longbridge desktop client. OAuth uses direct HTTP,
 // quotes use the documented WebSocket protocol, and no trading API is exposed.
 
-import { View, clipboard, h_flex, set_theme, spawn, svg, timer, v_flex, with_cx } from "gpui";
+import { View, clipboard, h_flex, image, set_theme, spawn, timer, v_flex, with_cx } from "gpui";
 import {
   accessToken,
   beginDeviceAuthorization,
@@ -18,17 +18,19 @@ import {
   watchlistInstruments,
 } from "./market.js";
 import { createQuoteStream } from "./quote_stream.js";
+import { portfolioPresentation } from "./portfolio.js";
 import {
   action,
   connectionPill,
-  detailGrid,
   emptyPanel,
   errorMessage,
   externalLink,
   holdingRow,
+  holdingsHeader,
   label,
   muted,
   panel,
+  portfolioSummary,
   quoteDetail,
   quoteRow,
   rule,
@@ -100,6 +102,7 @@ export default class LongbridgeApp extends View {
   init() {
     this.instruments = [];
     this.quotes = [];
+    this.portfolioQuotes = [];
     this.selectedSymbol = null;
     /** @type {LongbridgePage} */
     this.page = "watchlist";
@@ -181,7 +184,15 @@ export default class LongbridgeApp extends View {
     this.instruments = instruments;
     this.quotes = sortLikeTerminal(initialQuotes(instruments), Date.now());
     this.selectedSymbol = instruments[0]?.symbol ?? null;
-    if (instruments.length === 0) {
+    await this.refreshPortfolio();
+    if (generation !== this.streamGeneration) return;
+    const symbols = [
+      ...new Set([
+        ...instruments.map((instrument) => instrument.symbol),
+        ...this.holdings.map((holding) => holding.symbol),
+      ]),
+    ];
+    if (symbols.length === 0) {
       this.status = { state: "connected" };
       with_cx((cx) => cx.notify());
       this.loadPortfolio();
@@ -191,7 +202,7 @@ export default class LongbridgeApp extends View {
     let stream;
     stream = createQuoteStream({
       accessToken: token,
-      symbols: instruments.map((instrument) => instrument.symbol),
+      symbols,
       onQuote: (quote) => {
         if (generation === this.streamGeneration && this.stream === stream)
           this.receiveQuote(quote);
@@ -207,7 +218,6 @@ export default class LongbridgeApp extends View {
       await stream.stop();
       return;
     }
-    this.loadPortfolio();
   }
 
   /** @param {unknown} quote */
@@ -216,6 +226,7 @@ export default class LongbridgeApp extends View {
       this.quotes.map((current) => mergeQuote(current, quote)),
       this.lastTick,
     );
+    this.portfolioQuotes = this.portfolioQuotes.map((current) => mergeQuote(current, quote));
     if (quote && typeof quote === "object" && quote.symbol === this.selectedSymbol) {
       this.quotePulse = 0.72;
       timer.after(160, (cx) => {
@@ -237,12 +248,7 @@ export default class LongbridgeApp extends View {
   loadPortfolio() {
     spawn(async () => {
       try {
-        // Keep authenticated reads sequential: if both discover an expired
-        // access token together, two refresh-token rotations could race.
-        const account = await get("/v1/asset/account");
-        const positions = await get("/v1/asset/stock");
-        this.account = firstRecord(account);
-        this.holdings = normalizeHoldings(positions);
+        await this.refreshPortfolio();
         this.error = "";
         with_cx((cx) => cx.notify());
       } catch (error) {
@@ -250,6 +256,28 @@ export default class LongbridgeApp extends View {
         with_cx((cx) => cx.notify());
       }
     });
+  }
+
+  async refreshPortfolio() {
+    // Keep authenticated reads sequential: if both discover an expired access
+    // token together, two refresh-token rotations could race.
+    const account = await get("/v1/asset/account");
+    const positions = await get("/v1/asset/stock");
+    this.account = firstRecord(account);
+    this.holdings = normalizeHoldings(positions);
+    const previous = new Map(this.portfolioQuotes.map((quote) => [quote.symbol, quote]));
+    this.portfolioQuotes = initialQuotes(
+      this.holdings.map((holding) => {
+        const [code, market = ""] = holding.symbol.split(".");
+        return {
+          symbol: holding.symbol,
+          code,
+          name: holding.name,
+          market,
+          currency: holding.currency,
+        };
+      }),
+    ).map((quote) => previous.get(quote.symbol) ?? quote);
   }
 
   /** @param {"light" | "dark"} mode @param {import("gpui").Context} cx */
@@ -279,6 +307,7 @@ export default class LongbridgeApp extends View {
     this.hasStoredTokens = false;
     this.instruments = [];
     this.quotes = [];
+    this.portfolioQuotes = [];
     this.selectedSymbol = null;
     spawn(async () => {
       await clearTokens();
@@ -312,7 +341,7 @@ export default class LongbridgeApp extends View {
           .items_center()
           .gap(tokens.spacing.lg)
           .child(
-            svg(tokens.mode === "dark" ? "assets/logo-dark.svg" : "assets/logo-light.svg")
+            image(tokens.mode === "dark" ? "assets/logo-dark.svg" : "assets/logo-light.svg")
               .w(28)
               .h(28)
               .flex_none()
@@ -494,16 +523,18 @@ export default class LongbridgeApp extends View {
       this.account && typeof this.account === "object"
         ? /** @type {Record<string, unknown>} */ (this.account)
         : null;
-    const risk = balance ? stringValue(balance.risk_level ?? balance.riskLevel) : "--";
-    const overview = balance
-      ? [
-          { title: "Net assets", value: stringValue(balance.net_assets ?? balance.netAssets) },
-          { title: "Total cash", value: stringValue(balance.total_cash ?? balance.totalCash) },
-          { title: "Buying power", value: stringValue(balance.buy_power ?? balance.buyPower) },
-          { title: "Currency", value: stringValue(balance.currency) },
-          { title: "Risk level", value: risk },
-          { title: "Margin call", value: stringValue(balance.margin_call ?? balance.marginCall) },
-        ]
+    const presentation = portfolioPresentation(this.holdings, [
+      ...this.quotes,
+      ...this.portfolioQuotes,
+    ]);
+    const account = balance
+      ? {
+          netAssets: stringValue(balance.net_assets ?? balance.netAssets),
+          totalCash: stringValue(balance.total_cash ?? balance.totalCash),
+          buyingPower: stringValue(balance.buy_power ?? balance.buyPower),
+          currency: stringValue(balance.currency),
+          risk: stringValue(balance.risk_level ?? balance.riskLevel),
+        }
       : null;
 
     return v_flex()
@@ -518,22 +549,14 @@ export default class LongbridgeApp extends View {
               .justify_between()
               .px(tokens.spacing.md)
               .py(tokens.spacing.sm)
-              .child(label(tokens, "Overview"))
-              .child(muted(tokens, "Read only")),
+              .child(label(tokens, "Portfolio summary"))
+              .child(muted(tokens, account ? `Risk level ${account.risk}` : "Read only")),
           )
           .child(rule(tokens))
           .child(
-            v_flex()
-              .p(tokens.spacing.md)
-              .child(
-                overview
-                  ? detailGrid(tokens, overview)
-                  : emptyPanel(
-                      tokens,
-                      "No account snapshot",
-                      "Waiting for Longbridge account assets.",
-                    ),
-              ),
+            account
+              ? portfolioSummary(tokens, account, presentation.summaries)
+              : emptyPanel(tokens, "No account snapshot", "Waiting for Longbridge account assets."),
           ),
       )
       .child(
@@ -549,17 +572,7 @@ export default class LongbridgeApp extends View {
               .child(muted(tokens, `${this.holdings.length} positions`)),
           )
           .child(rule(tokens))
-          .child(
-            h_flex()
-              .gap(tokens.spacing.md)
-              .px(tokens.spacing.md)
-              .py(tokens.spacing.sm)
-              .child(muted(tokens, "Code / name").w("28%"))
-              .child(muted(tokens, "Quantity").w("16%").text_right())
-              .child(muted(tokens, "Available").w("16%").text_right())
-              .child(muted(tokens, "Cost").w("20%").text_right())
-              .child(muted(tokens, "Currency").flex_1().text_right()),
-          )
+          .child(holdingsHeader(tokens))
           .child(rule(tokens))
           .child(
             this.holdings.length
@@ -568,7 +581,7 @@ export default class LongbridgeApp extends View {
                   .flex_1()
                   .min_h(0)
                   .overflow_y_scrollbar()
-                  .children(this.holdings.map((holding) => holdingRow(tokens, holding)))
+                  .children(presentation.holdings.map((holding) => holdingRow(tokens, holding)))
               : emptyPanel(
                   tokens,
                   "No stock positions",

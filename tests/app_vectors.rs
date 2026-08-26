@@ -55,6 +55,15 @@ fn market_state_vectors_run_against_this_application(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn portfolio_vectors_run_against_this_application(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    runtime
+        .load_app(&app_dir(), "portfolio.test.js")
+        .expect("current portfolio vectors execute in QuickJS");
+}
+
+#[gpui::test]
 fn watchlist_row_renders_scannable_market_columns(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -91,7 +100,6 @@ fn watchlist_row_renders_scannable_market_columns(cx: &mut TestAppContext) {
         "+4.44%",
         "8.59B",
         "Regular",
-        "LIVE",
         "Previous close",
         "Open",
         "Day range",
@@ -108,6 +116,7 @@ fn watchlist_row_renders_scannable_market_columns(cx: &mut TestAppContext) {
         );
     }
     assert!(!rendered.contains("text \"US · AAPL\""), "{rendered}");
+    assert!(rendered.contains(".font_family[Str(\"monospace\")]"), "{rendered}");
 }
 
 #[gpui::test]
@@ -142,6 +151,46 @@ fn authenticated_workspace_materializes_a_scrollable_watchlist(cx: &mut TestAppC
     assert!(rendered.contains("watchlist-pane"), "{rendered}");
     assert!(rendered.contains("stock-detail-pane"), "{rendered}");
     assert!(rendered.contains(":overflow_y_scrollbar"), "{rendered}");
+}
+
+#[gpui::test]
+fn portfolio_renders_pnl_summary_and_position_columns(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let view_type = runtime
+        .load_app(&app_dir(), "portfolio_ui.test.js")
+        .expect("load Portfolio UI probe");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let view = context
+        .update(|window, cx| runtime.instantiate_view(&view_type, window, cx))
+        .expect("instantiate Portfolio UI probe");
+    context.run_until_parked();
+    let draw_view = view.clone();
+    context.draw(
+        gpui::Point::default(),
+        gpui::size(gpui::px(900.), gpui::px(600.)),
+        move |_, _| draw_view.into_any_element(),
+    );
+    let rendered = context.update(|_, cx| {
+        view.read(cx)
+            .snapshot()
+            .map(gpui_shell::RenderSnapshot::debug_tree)
+            .unwrap_or_default()
+    });
+    for expected in [
+        "Portfolio summary",
+        "Net assets",
+        "Today's P/L",
+        "Total P/L",
+        "+30.00 USD",
+        "+80.00 USD",
+        "Last / Cost",
+        "+4.44%",
+        ".font_family[Str(\"monospace\")]",
+    ] {
+        assert!(rendered.contains(expected), "missing {expected}:\n{rendered}");
+    }
 }
 
 struct Empty;

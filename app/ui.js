@@ -8,6 +8,10 @@ import { formatCompactNumber, quoteFreshness, tradeStatusLabel } from "./market.
 export const label = (tokens, value, size = 12) =>
   text(value).text_size(size).line_height(1.25).text_color(tokens.foreground);
 
+/** @param {import("gpui").Theme} tokens @param {string | number} value @param {number} [size] */
+export const numeric = (tokens, value, size = 12) =>
+  label(tokens, value, size).font_family("monospace");
+
 /** @param {import("gpui").Theme} tokens @param {string | number} value */
 export const muted = (tokens, value) =>
   text(value).text_size(11).line_height(1.25).text_color(tokens.muted_foreground);
@@ -202,7 +206,6 @@ export function quoteRow(tokens, quote, selected, onSelect, now = Date.now()) {
     : quote.change.startsWith("+")
       ? tokens.primary
       : tokens.foreground;
-  const freshness = quoteFreshness(quote, now).toUpperCase();
   return Button.new(`quote-${quote.symbol}`)
     .selected(selected)
     .on_click(onSelect)
@@ -228,21 +231,14 @@ export function quoteRow(tokens, quote, selected, onSelect, now = Date.now()) {
         .child(label(tokens, quote.code))
         .child(muted(tokens, quote.name)),
     )
-    .child(
-      v_flex()
-        .w("19%")
-        .items_end()
-        .gap(tokens.spacing.xxs)
-        .child(label(tokens, quote.last))
-        .child(muted(tokens, quote.currency)),
-    )
+    .child(h_flex().w("19%").justify_end().child(numeric(tokens, quote.last)))
     .child(
       v_flex()
         .w("18%")
         .items_end()
         .gap(tokens.spacing.xxs)
-        .child(label(tokens, quote.changePercent).text_color(tone))
-        .child(label(tokens, quote.change).text_color(tone)),
+        .child(numeric(tokens, quote.changePercent).text_color(tone))
+        .child(numeric(tokens, quote.change).text_color(tone)),
     )
     .child(
       h_flex()
@@ -251,12 +247,10 @@ export function quoteRow(tokens, quote, selected, onSelect, now = Date.now()) {
         .child(muted(tokens, formatCompactNumber(quote.volume))),
     )
     .child(
-      v_flex()
+      h_flex()
         .flex_1()
-        .items_end()
-        .gap(tokens.spacing.xxs)
-        .child(muted(tokens, tradeStatusLabel(quote)))
-        .child(muted(tokens, freshness)),
+        .justify_end()
+        .child(muted(tokens, tradeStatusLabel(quote))),
     );
 }
 
@@ -289,7 +283,7 @@ function metricRows(tokens, entries) {
         v_flex()
           .gap(tokens.spacing.xxs)
           .child(muted(tokens, entry.title))
-          .child(label(tokens, entry.value, 13)),
+          .child(numeric(tokens, entry.value, 13)),
       ),
     );
 }
@@ -302,8 +296,6 @@ export function quoteDetail(tokens, quote, now = Date.now(), pulseOpacity = 1) {
     .flex_1()
     .p(tokens.spacing.lg)
     .gap(tokens.spacing.lg)
-    .opacity(quote.receivedAt ? pulseOpacity : 0.72)
-    .transition("opacity", { duration: 180, easing: "ease-out" })
     .child(
       h_flex()
         .items_center()
@@ -318,10 +310,15 @@ export function quoteDetail(tokens, quote, now = Date.now(), pulseOpacity = 1) {
         )
         .child(
           v_flex()
+            .id("quote-detail-price")
             .items_end()
             .gap(tokens.spacing.xs)
-            .child(label(tokens, quote.last, 28))
-            .child(label(tokens, `${quote.change} · ${quote.changePercent}`, 13).text_color(tone)),
+            .opacity(quote.receivedAt ? pulseOpacity : 0.72)
+            .transition("opacity", { duration: 180, easing: "ease-out" })
+            .child(numeric(tokens, quote.last, 28))
+            .child(
+              numeric(tokens, `${quote.change} · ${quote.changePercent}`, 13).text_color(tone),
+            ),
         ),
     )
     .child(rule(tokens))
@@ -368,8 +365,81 @@ export function detailGrid(tokens, entries) {
     );
 }
 
+function pnlTone(tokens, value) {
+  return value < 0 ? tokens.destructive : value > 0 ? tokens.primary : tokens.foreground;
+}
+
+/**
+ * @param {import("gpui").Theme} tokens
+ * @param {{ netAssets: string, totalCash: string, buyingPower: string, currency: string }} account
+ * @param {{ currency: string, todayPnl: string, todayPnlValue: number, totalPnl: string, totalPnlValue: number }[]} summaries
+ */
+export function portfolioSummary(tokens, account, summaries) {
+  const metric = (title, value, tone = tokens.foreground) =>
+    v_flex()
+      .flex_basis(170)
+      .flex_grow(1)
+      .gap(tokens.spacing.xs)
+      .child(muted(tokens, title))
+      .child(numeric(tokens, value, 18).text_color(tone));
+  const pnl = summaries.length
+    ? summaries
+    : [
+        {
+          currency: account.currency,
+          todayPnl: "--",
+          totalPnl: "--",
+          todayPnlValue: 0,
+          totalPnlValue: 0,
+        },
+      ];
+
+  return h_flex()
+    .flex_wrap()
+    .items_start()
+    .gap(tokens.spacing.xl)
+    .p(tokens.spacing.md)
+    .child(metric("Net assets", `${account.netAssets} ${account.currency}`))
+    .children(
+      pnl.map((summary) =>
+        metric(
+          "Today's P/L",
+          `${summary.todayPnl} ${summary.currency}`,
+          pnlTone(tokens, summary.todayPnlValue),
+        ),
+      ),
+    )
+    .children(
+      pnl.map((summary) =>
+        metric(
+          "Total P/L",
+          `${summary.totalPnl} ${summary.currency}`,
+          pnlTone(tokens, summary.totalPnlValue),
+        ),
+      ),
+    )
+    .child(metric("Cash", `${account.totalCash} ${account.currency}`))
+    .child(metric("Buying power", `${account.buyingPower} ${account.currency}`));
+}
+
+/** @param {import("gpui").Theme} tokens */
+export function holdingsHeader(tokens) {
+  return h_flex()
+    .gap(tokens.spacing.md)
+    .px(tokens.spacing.md)
+    .py(tokens.spacing.xs)
+    .bg(tokens.muted)
+    .child(muted(tokens, "Instrument").w("26%"))
+    .child(muted(tokens, "Quantity").w("12%").text_right())
+    .child(muted(tokens, "Last / Cost").w("20%").text_right())
+    .child(muted(tokens, "Today's P/L").w("20%").text_right())
+    .child(muted(tokens, "Total P/L").flex_1().text_right());
+}
+
 /** @param {import("gpui").Theme} tokens @param {LongbridgeHoldingRow} holding */
 export function holdingRow(tokens, holding) {
+  const todayTone = pnlTone(tokens, holding.todayPnlValue);
+  const totalTone = pnlTone(tokens, holding.totalPnlValue);
   return h_flex()
     .id(`holding-${holding.symbol}`)
     .items_center()
@@ -381,15 +451,34 @@ export function holdingRow(tokens, holding) {
     .hover((style) => style.bg(tokens.muted))
     .child(
       v_flex()
-        .w("28%")
+        .w("26%")
         .gap(tokens.spacing.xxs)
         .child(label(tokens, holding.symbol))
         .child(muted(tokens, holding.name)),
     )
-    .child(h_flex().w("16%").justify_end().child(label(tokens, holding.quantity)))
-    .child(h_flex().w("16%").justify_end().child(label(tokens, holding.available)))
-    .child(h_flex().w("20%").justify_end().child(label(tokens, holding.costPrice)))
-    .child(h_flex().flex_1().justify_end().child(muted(tokens, holding.currency)));
+    .child(h_flex().w("12%").justify_end().child(numeric(tokens, holding.quantity)))
+    .child(
+      v_flex()
+        .w("20%")
+        .items_end()
+        .gap(tokens.spacing.xxs)
+        .child(numeric(tokens, holding.last))
+        .child(muted(tokens, holding.costPrice)),
+    )
+    .child(
+      h_flex()
+        .w("20%")
+        .justify_end()
+        .child(numeric(tokens, holding.todayPnl).text_color(todayTone)),
+    )
+    .child(
+      v_flex()
+        .flex_1()
+        .items_end()
+        .gap(tokens.spacing.xxs)
+        .child(numeric(tokens, holding.totalPnl).text_color(totalTone))
+        .child(numeric(tokens, holding.totalPnlPercent, 11).text_color(totalTone)),
+    );
 }
 
 /** @param {import("gpui").Theme} tokens @param {string} title @param {string} detail */

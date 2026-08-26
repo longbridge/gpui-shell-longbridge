@@ -53,9 +53,9 @@ function runVectors() {
     "initial row is waiting",
   );
   const sorted = sortLikeTerminal([
-    { ...waiting[0], tradeSession: 0 },
-    { ...waiting[1], tradeSession: 2 },
-    { ...waiting[2], tradeSession: 0 },
+    { ...waiting[0], tradeSession: 0, last: "1" },
+    { ...waiting[1], tradeSession: 2, last: "1" },
+    { ...waiting[2], tradeSession: 0, last: "1" },
   ]);
   check(
     sorted.map((quote) => quote.symbol).join(",") === "700.HK,D05.SG,AAPL.US",
@@ -72,8 +72,38 @@ function runVectors() {
     Date.UTC(2026, 7, 26, 7, 59),
   );
   check(
-    inferredSession.map((quote) => quote.symbol).join(",") === "700.HK,D05.SG,AAPL.US,600000.SH",
-    "snapshot rows infer open markets before the first trade-session push",
+    inferredSession.map((quote) => quote.symbol).join(",") === "AAPL.US,700.HK,600000.SH,D05.SG",
+    "rows without a usable session follow market priority instead of local-clock inference",
+  );
+
+  const mixedMarketSessions = sortLikeTerminal(
+    [
+      { ...waiting[1], symbol: ".SPX.US", market: "US", tradeSession: 0, last: "1" },
+      { ...waiting[1], symbol: "AAPL.US", market: "US", tradeSession: 1, last: "1" },
+      { ...waiting[1], symbol: "MSFT.US", market: "US", tradeSession: 1, last: "1" },
+      { ...waiting[1], symbol: "AMD.US", market: "US", tradeSession: 1, last: "1" },
+      { ...waiting[0], symbol: "700.HK", market: "HK", tradeSession: 0, last: "1" },
+      { ...waiting[0], symbol: "300001.SZ", market: "SZ", tradeSession: 0, last: "1" },
+      { ...waiting[0], symbol: "600000.SH", market: "SH", tradeSession: 0, last: "1" },
+      { ...waiting[0], symbol: "300002.SZ", market: "SZ", tradeSession: 0, last: "1" },
+      { ...waiting[2], symbol: "D05.SG", market: "SG", tradeSession: 0, last: "0.000" },
+    ],
+    Date.UTC(2026, 7, 26, 7, 0),
+  );
+  check(
+    mixedMarketSessions.map((quote) => quote.symbol).join(",") ===
+      "700.HK,300001.SZ,600000.SH,300002.SZ,.SPX.US,AAPL.US,MSFT.US,AMD.US,D05.SG",
+    "market groups require usable quotes and retain their original item order",
+  );
+
+  const sessionPriority = sortLikeTerminal([
+    { ...waiting[1], symbol: "AAPL.US", market: "US", tradeSession: 2, last: "1" },
+    { ...waiting[0], symbol: "700.HK", market: "HK", tradeSession: 1, last: "1" },
+    { ...waiting[2], symbol: "D05.SG", market: "SG", tradeSession: 0, last: "1" },
+  ]);
+  check(
+    sessionPriority.map((quote) => quote.symbol).join(",") === "D05.SG,700.HK,AAPL.US",
+    "open markets precede pre-market, which precedes all other sessions",
   );
 
   const snapshot = mergeQuote(

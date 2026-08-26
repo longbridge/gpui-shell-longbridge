@@ -45,7 +45,7 @@ const TRADE_STATUS = Object.freeze({
 
 const TRADE_SESSION = Object.freeze({
   0: "Regular",
-  1: "Pre-market",
+  1: "Pre",
   2: "Post-market",
   3: "Overnight",
 });
@@ -151,23 +151,51 @@ export function marketIsOpen(market, now = Date.now()) {
   return false;
 }
 
-function isNormalTrading(quote, now) {
-  if (quote.tradeSession !== undefined && quote.tradeSession !== null) {
-    return quote.tradeSession === 0;
+function marketKey(market) {
+  return market === "SH" || market === "SZ" ? "CN" : market;
+}
+
+function marketSessionRanks(quotes) {
+  const counts = new Map();
+  for (const quote of quotes) {
+    if (quote.tradeSession === undefined || quote.tradeSession === null) continue;
+    if (!(Number(quote.last) > 0)) continue;
+    const market = marketKey(quote.market);
+    const rank = quote.tradeSession === 0 ? 0 : quote.tradeSession === 1 ? 1 : 2;
+    const marketCounts = counts.get(market) ?? [0, 0, 0];
+    marketCounts[rank] += 1;
+    counts.set(market, marketCounts);
   }
-  return marketIsOpen(quote.market, now);
+
+  const ranks = new Map();
+  for (const quote of quotes) {
+    const market = marketKey(quote.market);
+    if (ranks.has(market)) continue;
+    const marketCounts = counts.get(market);
+    if (!marketCounts) {
+      ranks.set(market, 2);
+      continue;
+    }
+    const highestCount = Math.max(...marketCounts);
+    ranks.set(
+      market,
+      marketCounts.findIndex((count) => count === highestCount),
+    );
+  }
+  return ranks;
 }
 
 export function sortLikeTerminal(quotes, now = Date.now()) {
+  const sessionRanks = marketSessionRanks(quotes);
   return quotes
     .map((quote, index) => ({ quote, index }))
     .sort((left, right) => {
       const leftKey = [
-        isNormalTrading(left.quote, now) ? 0 : 1,
+        sessionRanks.get(marketKey(left.quote.market)) ?? 2,
         MARKET_PRIORITY[left.quote.market] ?? 99,
       ];
       const rightKey = [
-        isNormalTrading(right.quote, now) ? 0 : 1,
+        sessionRanks.get(marketKey(right.quote.market)) ?? 2,
         MARKET_PRIORITY[right.quote.market] ?? 99,
       ];
       return leftKey[0] - rightKey[0] || leftKey[1] - rightKey[1] || left.index - right.index;

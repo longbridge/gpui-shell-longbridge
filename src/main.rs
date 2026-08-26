@@ -41,6 +41,7 @@ fn main() {
                     window,
                     cx,
                 )
+                .expect("failed to watch Longbridge application sources")
                 .forget();
                 let content = view.into();
                 cx.new(|cx| ShellRoot::new(content, window, cx))
