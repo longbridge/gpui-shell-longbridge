@@ -2,8 +2,11 @@
 // quotes use the documented WebSocket protocol, and no trading API is exposed.
 
 import {
+  InputState,
   Popover,
   Scrollbar,
+  Table,
+  TableBody,
   Tab,
   Tabs,
   View,
@@ -31,6 +34,7 @@ import {
 } from "./auth.js";
 import { get } from "./http.js";
 import {
+  filterRows,
   initialQuotes,
   mergeQuote,
   sortLikeTerminal,
@@ -53,6 +57,9 @@ import {
   emptyPanel,
   errorMessage,
   externalLink,
+  filterInput,
+  HOLDING_ROW_HEIGHT,
+  TABLE_HEADER_HEIGHT,
   holdingRow,
   holdingsHeader,
   label,
@@ -70,6 +77,11 @@ import {
   themeButton,
   watchlistHeader,
 } from "./ui.js";
+
+// How many Holdings rows the panel shows before the page scrolls instead of
+// the panel growing. Any ceiling would do; this one keeps the summary and the
+// allocation chart reachable above it without a scroll.
+const HOLDINGS_VIEWPORT_ROWS = 10;
 
 /** @param {unknown} value */
 function stringValue(value) {
@@ -163,6 +175,22 @@ export default class LongbridgeApp extends View {
     // `on_open_change`, and this is where the answer lives.
     this.watchlistMenuOpen = false;
     this.allocationHelpOpen = false;
+    // Retained text state needs a live host call, so it is created here rather
+    // than in a render. The query is mirrored onto the view because render has
+    // to read it on every frame and reading it off the handle would put a host
+    // call on the frame path.
+    this.watchlistQuery = "";
+    this.holdingsQuery = "";
+    this.watchlistFilter = InputState.new({ placeholder: "Filter watchlist" });
+    this.watchlistFilter.on("change", (_event, cx) => {
+      this.watchlistQuery = this.watchlistFilter.value();
+      cx.notify();
+    });
+    this.holdingsFilter = InputState.new({ placeholder: "Filter holdings" });
+    this.holdingsFilter.on("change", (_event, cx) => {
+      this.holdingsQuery = this.holdingsFilter.value();
+      cx.notify();
+    });
     this.clock = timer.every(1_000, (cx) => {
       this.lastTick = Date.now();
       this.quotes = sortLikeTerminal(this.quotes, this.lastTick);
@@ -422,22 +450,6 @@ export default class LongbridgeApp extends View {
 
   /** @param {import("gpui").Context} cx */
   render(cx) {
-    const __r0 = Date.now();
-    const __result = this.__renderBody(cx);
-    const __total = Date.now() - __r0;
-    globalThis.__renderMs = (globalThis.__renderMs || 0) + __total;
-    globalThis.__renders = (globalThis.__renders || 0) + 1;
-    if (globalThis.__renders % 20 === 0) {
-      log.info(
-        `RENDERPROF renders=${globalThis.__renders} total=${globalThis.__renderMs}ms ` +
-        `compute=${globalThis.__computeMs || 0}ms quotes=${globalThis.__quoteCount} ` +
-        `holdings=${globalThis.__holdingCount}`
-      );
-    }
-    return __result;
-  }
-
-  __renderBody(cx) {
     const tokens = cx.theme();
     return div()
       .relative()
@@ -469,7 +481,7 @@ export default class LongbridgeApp extends View {
           .items_center()
           .gap(tokens.spacing.lg)
           .child(
-            image(tokens.mode === "dark" ? "assets/logo-dark.svg" : "assets/logo-light.svg")
+            image(tokens.appearance === "dark" ? "assets/logo-dark.svg" : "assets/logo-light.svg")
               .w(28)
               .h(28)
               .flex_none()
@@ -545,7 +557,7 @@ export default class LongbridgeApp extends View {
           .child(connectionPill(tokens, this.status.state))
           .child(
             themeButton(tokens, (_event, cx) =>
-              this.chooseTheme(tokens.mode === "dark" ? "light" : "dark", cx),
+              this.chooseTheme(tokens.appearance === "dark" ? "light" : "dark", cx),
             ),
           ),
       );
@@ -619,6 +631,7 @@ export default class LongbridgeApp extends View {
   /** @param {import("gpui").Theme} tokens */
   watchlist(tokens) {
     const status = streamStatusSummary({ state: this.status.state, delay: this.status.delay });
+    const rows = filterRows(this.quotes, this.watchlistQuery, ["code", "name", "symbol"]);
     return panel(tokens)
       .child(
         h_flex()
@@ -631,6 +644,7 @@ export default class LongbridgeApp extends View {
             h_flex()
               .items_center()
               .gap(tokens.spacing.sm)
+              .child(filterInput(tokens, this.watchlistFilter))
               .child(muted(tokens, status))
               .child(this.watchlistMenu(tokens)),
           ),
@@ -639,34 +653,76 @@ export default class LongbridgeApp extends View {
       .when(Boolean(this.streamError), (element) =>
         element.child(errorMessage(tokens, streamStatusSummary(this.status))),
       )
-      .child(watchlistHeader(tokens))
-      .child(rule(tokens))
       .child(
-        // One element per row on screen rather than one per instrument. The
-        // renderer runs inside layout, so it registers nothing: selection is
-        // the list's own `on_item_click`, reported by index into `this.quotes`.
-        v_flex()
-          .relative()
+        this.instrumentTable(
+          tokens,
+          "watchlist",
+          "Watchlist",
+          rows,
+          QUOTE_ROW_HEIGHT,
+          watchlistHeader(tokens),
+          (quote, index) =>
+            quoteRow(tokens, quote, quote.symbol === this.selectedSymbol, index, this.lastTick),
+          (index, cx) => this.selectQuote(rows, index, cx),
+          this.watchlistQuery
+            ? emptyPanel(tokens, "No matches", "Nothing in the watchlist matches that filter.")
+            : emptyPanel(
+                tokens,
+                "Watchlist is empty",
+                "Add securities in Longbridge, then reconnect to refresh this read-only view.",
+              ),
+        )
           .flex_1()
-          .min_h(0)
-          .child(
-            v_virtual_list("watchlist-rows", this.quotes.length, QUOTE_ROW_HEIGHT, (range) =>
-              this.quotes
-                .slice(range.start, range.end)
-                .map((quote) =>
-                  quoteRow(
-                    tokens,
-                    quote,
-                    quote.symbol === this.selectedSymbol,
-                    this.lastTick,
-                  ),
-                ),
-            )
-              .size_full()
-              .on_item_click((index, cx) => this.selectQuote(index, cx)),
-          )
-          .child(Scrollbar.vertical("watchlist-rows").absolute().inset_0()),
+          .min_h(0),
       );
+  }
+
+  /**
+   * A virtualized table: a header row group, and a body whose rows are built
+   * during layout for the range on screen.
+   *
+   * `row_count` describes the whole collection rather than what is drawn —
+   * which is exactly what it is for, so a screen reader can say "row 5 of 200"
+   * for a window onto a long list. It counts the header, which is row one.
+   *
+   * @param {import("gpui").Theme} tokens
+   * @param {string} id
+   * @param {string} name
+   * @param {any[]} rows
+   * @param {number} rowHeight
+   * @param {import("gpui").Element} header
+   * @param {(row: any, index: number) => import("gpui").Element} renderRow
+   * @param {((index: number, cx: import("gpui").Context) => void) | null} onSelect
+   * @param {import("gpui").Element} empty
+   */
+  instrumentTable(tokens, id, name, rows, rowHeight, header, renderRow, onSelect, empty) {
+    const body = TableBody.new(`${id}-body`)
+      .relative()
+      .flex_1()
+      .min_h(0)
+      .child(
+        // The renderer runs inside layout, so it registers nothing: selection
+        // is the list's own `on_item_click`, reported as an index into the
+        // rows this render was built from — which is the filtered list, not
+        // the whole collection.
+        v_virtual_list(`${id}-rows`, rows.length, rowHeight, (range) =>
+          rows
+            .slice(range.start, range.end)
+            .map((row, offset) => renderRow(row, range.start + offset)),
+        )
+          .size_full()
+          .when(Boolean(onSelect), (list) => list.on_item_click(onSelect)),
+      )
+      .child(Scrollbar.vertical(`${id}-rows`).absolute().inset_0());
+
+    return Table.new(`${id}-table`)
+      .accessibility_label(name)
+      .row_count(rows.length + 1)
+      .column_count(5)
+      .flex()
+      .flex_col()
+      .child(header)
+      .child(rows.length ? body : empty);
   }
 
   /**
@@ -731,19 +787,23 @@ export default class LongbridgeApp extends View {
             menuItem(
               tokens,
               "watchlist-menu-theme",
-              tokens.mode === "dark" ? "Light theme" : "Dark theme",
+              tokens.appearance === "dark" ? "Light theme" : "Dark theme",
               (_event, cx) => {
                 close(cx);
-                this.chooseTheme(tokens.mode === "dark" ? "light" : "dark", cx);
+                this.chooseTheme(tokens.appearance === "dark" ? "light" : "dark", cx);
               },
             ),
           ),
       );
   }
 
-  /** @param {number} index @param {import("gpui").Context} cx */
-  selectQuote(index, cx) {
-    const quote = this.quotes[index];
+  /**
+   * @param {any[]} rows The rows this render drew, which is what the index is into.
+   * @param {number} index
+   * @param {import("gpui").Context} cx
+   */
+  selectQuote(rows, index, cx) {
+    const quote = rows[index];
     if (!quote || quote.symbol === this.selectedSymbol) return;
     this.selectedSymbol = quote.symbol;
     this.loadSelectedChart();
@@ -833,7 +893,6 @@ export default class LongbridgeApp extends View {
       this.account && typeof this.account === "object"
         ? /** @type {Record<string, unknown>} */ (this.account)
         : null;
-    const __t0 = Date.now();
     const presentation = portfolioPresentation(
       this.holdings,
       [...this.quotes, ...this.portfolioQuotes],
@@ -844,9 +903,6 @@ export default class LongbridgeApp extends View {
       [...this.quotes, ...this.portfolioQuotes],
       this.fxRates,
     );
-    globalThis.__computeMs = (globalThis.__computeMs || 0) + (Date.now() - __t0);
-    globalThis.__quoteCount = this.quotes.length + this.portfolioQuotes.length;
-    globalThis.__holdingCount = this.holdings.length;
     const account = balance
       ? {
           netAssets: stringValue(balance.net_assets ?? balance.netAssets),
@@ -856,6 +912,8 @@ export default class LongbridgeApp extends View {
           risk: stringValue(balance.risk_level ?? balance.riskLevel),
         }
       : null;
+
+    const holdingRows = filterRows(presentation.holdings, this.holdingsQuery, ["symbol", "name"]);
 
     // One scrolling column, and every panel in it sized by its own content.
     // Nothing here is `flex_1`: a panel that took the leftover height would be
@@ -925,21 +983,49 @@ export default class LongbridgeApp extends View {
               .px(tokens.spacing.md)
               .py(tokens.spacing.sm)
               .child(label(tokens, "Holdings"))
-              .child(muted(tokens, `${this.holdings.length} positions`)),
+              .child(
+                h_flex()
+                  .items_center()
+                  .gap(tokens.spacing.sm)
+                  .child(filterInput(tokens, this.holdingsFilter, 160))
+                  .child(
+                    muted(
+                      tokens,
+                      holdingRows.length === this.holdings.length
+                        ? `${this.holdings.length} positions`
+                        : `${holdingRows.length} of ${this.holdings.length} positions`,
+                    ),
+                  ),
+              ),
           )
           .child(rule(tokens))
-          .child(holdingsHeader(tokens))
-          .child(rule(tokens))
           .child(
-            this.holdings.length
-              ? v_flex().children(
-                  presentation.holdings.map((holding) => holdingRow(tokens, holding)),
-                )
-              : emptyPanel(
-                  tokens,
-                  "No stock positions",
-                  "This account currently reports no stock holdings.",
-                ),
+            this.instrumentTable(
+              tokens,
+              "holdings",
+              "Holdings",
+              holdingRows,
+              HOLDING_ROW_HEIGHT,
+              holdingsHeader(tokens),
+              (holding, index) => holdingRow(tokens, holding, index),
+              null,
+              this.holdingsQuery
+                ? emptyPanel(tokens, "No matches", "No holding matches that filter.")
+                : emptyPanel(
+                    tokens,
+                    "No stock positions",
+                    "This account currently reports no stock holdings.",
+                  ),
+            )
+              // A definite height is what makes virtualization possible at all,
+              // and this page is a scrolling column with no leftover height to
+              // claim. So the body is as tall as its rows up to a ceiling, and
+              // the page scrolls past the panel once it hits it.
+              .h(
+                TABLE_HEADER_HEIGHT +
+                  Math.min(holdingRows.length, HOLDINGS_VIEWPORT_ROWS) * HOLDING_ROW_HEIGHT,
+              )
+              .when(holdingRows.length === 0, (element) => element.h_auto()),
           ),
       );
   }

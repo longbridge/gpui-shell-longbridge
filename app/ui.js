@@ -4,6 +4,7 @@
 import {
   Background,
   Button,
+  Input,
   Link,
   PathBuilder,
   Progress,
@@ -12,6 +13,8 @@ import {
   Table,
   TableBody,
   TableCell,
+  TableHead,
+  TableHeader,
   TableRow,
   div,
   h_flex,
@@ -121,7 +124,7 @@ export function action(tokens, id, caption, onClick, options = {}) {
  * @param {(event: import("gpui").ClickEvent, cx: import("gpui").Context) => void} onClick
  */
 export function themeButton(tokens, onClick) {
-  const dark = tokens.mode === "dark";
+  const dark = tokens.appearance === "dark";
   const hint = dark ? "Switch to light theme" : "Switch to dark theme";
   return Button.new("theme-toggle")
     .accessibility_label(hint)
@@ -209,35 +212,67 @@ const COLUMN_HINTS = Object.freeze({
   Change: "Move against the previous close, absolute and percent",
   Volume: "Shares traded so far this session",
   Session: "Trading status, or the session the quote came from",
+  Quantity: "Shares held, and how many of them are available",
+  "Last / Cost": "Latest price over the average cost of the position",
+  "Today's P/L": "Move since the previous close, in USD",
+  "Total P/L": "Move against cost, in USD and percent",
 });
 
 /**
- * @param {import("gpui").Theme} tokens
- * @param {string} title
- * @param {(element: import("gpui").Element) => import("gpui").Element} size
+ * The height a table's header row is drawn at, stated for the same reason the
+ * row heights are: a virtualized body sized against a ceiling has to know how
+ * much of the panel the header above it already took.
  */
-function columnHeader(tokens, title, size) {
-  return size(
-    h_flex()
-      .id(`watchlist-column-${title.toLowerCase()}`)
-      .items_center()
-      .tooltip(COLUMN_HINTS[title]),
-  ).child(muted(tokens, title));
+export const TABLE_HEADER_HEIGHT = 24;
+
+/**
+ * A table's header row group. `TableHead` carries a one-based column index
+ * because a cell that does not know its column announces itself out of place.
+ *
+ * @param {import("gpui").Theme} tokens
+ * @param {string} id
+ * @param {{ title: string, size: (el: import("gpui").Element) => import("gpui").Element }[]} columns
+ */
+function tableHeaderRow(tokens, id, columns) {
+  return TableHeader.new(`${id}-header`)
+    .child(
+      // Row one of the table's rows: the body rows below start at two, the way
+      // an accessible row index counts every row including this one.
+      TableRow.new(`${id}-header-row`, 1)
+        .flex()
+        .items_center()
+        .h(TABLE_HEADER_HEIGHT)
+        .gap(tokens.spacing.sm)
+        .px(tokens.spacing.sm)
+        .bg(tokens.muted)
+        .border_b(1)
+        .border_color(tokens.border)
+        .children(
+          columns.map((column, index) =>
+            column
+              .size(
+                TableHead.new(`${id}-head-${index + 1}`, index + 1)
+                  .flex()
+                  .items_center()
+                  .tooltip(COLUMN_HINTS[column.title] ?? column.title),
+              )
+              .child(muted(tokens, column.title)),
+          ),
+        ),
+    );
 }
+
+const WATCHLIST_COLUMNS = [
+  { title: "Instrument", size: (el) => el.w("31%") },
+  { title: "Last", size: (el) => el.w("19%").justify_end() },
+  { title: "Change", size: (el) => el.w("18%").justify_end() },
+  { title: "Volume", size: (el) => el.w("16%").justify_end() },
+  { title: "Session", size: (el) => el.flex_1().justify_end() },
+];
 
 /** @param {import("gpui").Theme} tokens */
 export function watchlistHeader(tokens) {
-  return h_flex()
-    .items_center()
-    .gap(tokens.spacing.sm)
-    .px(tokens.spacing.sm)
-    .py(tokens.spacing.xs)
-    .bg(tokens.muted)
-    .child(columnHeader(tokens, "Instrument", (element) => element.w("31%")))
-    .child(columnHeader(tokens, "Last", (element) => element.w("19%").justify_end()))
-    .child(columnHeader(tokens, "Change", (element) => element.w("18%").justify_end()))
-    .child(columnHeader(tokens, "Volume", (element) => element.w("16%").justify_end()))
-    .child(columnHeader(tokens, "Session", (element) => element.flex_1().justify_end()));
+  return tableHeaderRow(tokens, "watchlist", WATCHLIST_COLUMNS);
 }
 
 /**
@@ -300,6 +335,32 @@ export function popoverSurface(tokens, options = {}) {
 }
 
 /**
+ * The frame around a list's filter box.
+ *
+ * A filter is the one text input a read-only terminal has: it narrows what is
+ * already on screen and reaches nothing outside the window. The state it draws
+ * lives on the view — `InputState.new()` needs a live host call and belongs in
+ * `init`, never in a render.
+ *
+ * @param {import("gpui").Theme} tokens
+ * @param {import("gpui").InputStateHandle} state
+ * @param {number} [width]
+ */
+export function filterInput(tokens, state, width = 180) {
+  return Input.new(state)
+    .w(width)
+    .h(26)
+    .px(tokens.spacing.sm)
+    .rounded(tokens.radius.sm)
+    .border(1)
+    .border_color(tokens.border)
+    .bg(tokens.surface)
+    .text_size(11)
+    .text_color(tokens.foreground)
+    .focus((style) => style.border_color(tokens.ring));
+}
+
+/**
  * The `⋯` control a popup menu or a popover hangs from. Icon-only, which is
  * the case a tooltip exists for.
  *
@@ -349,26 +410,31 @@ export function menuTrigger(tokens, id, hint, open = false) {
 export const QUOTE_ROW_HEIGHT = 44;
 
 /**
- * A watchlist row.
+ * A watchlist row, as a table row rather than a button that looks like one.
  *
  * It registers no click handler of its own: rows are rebuilt every frame the
  * virtual list is scrolled, and a per-row callback would accumulate one
  * unreachable function per row per frame. The list carries a single
  * `on_item_click` instead and reports the index.
  *
+ * `rowIndex` is the row's zero-based position in the whole collection; what is
+ * announced is that plus two, because the header above it is row one.
+ *
  * @param {import("gpui").Theme} tokens
  * @param {LongbridgeQuoteRow} quote
  * @param {boolean} selected
+ * @param {number} rowIndex
  * @param {number} [now]
  */
-export function quoteRow(tokens, quote, selected, now = Date.now()) {
+export function quoteRow(tokens, quote, selected, rowIndex = 0, now = Date.now()) {
   const tone = quote.change.startsWith("-")
     ? tokens.destructive
     : quote.change.startsWith("+")
       ? tokens.primary
       : tokens.foreground;
-  return Button.new(`quote-${quote.symbol}`)
-    .selected(selected)
+  const cell = (column, build) =>
+    build(TableCell.new(`quote-${quote.symbol}-${column}`, column));
+  return TableRow.new(`quote-${quote.symbol}`, rowIndex + 2)
     .flex()
     .items_center()
     .w_full()
@@ -376,7 +442,6 @@ export function quoteRow(tokens, quote, selected, now = Date.now()) {
     .gap(tokens.spacing.sm)
     .px(tokens.spacing.sm)
     .py(tokens.spacing.xs)
-    .border(0)
     .border_b(1)
     .border_color(tokens.border)
     .bg(selected ? tokens.accent : tokens.surface)
@@ -384,34 +449,47 @@ export function quoteRow(tokens, quote, selected, now = Date.now()) {
     .transition("opacity", { duration: 160, easing: "ease-out" })
     .text_color(selected ? tokens.accent_foreground : tokens.foreground)
     .hover((style) => style.bg(tokens.accent).text_color(tokens.accent_foreground))
-    .focus((style) => style.bg(tokens.accent).text_color(tokens.accent_foreground))
     .child(
-      v_flex()
-        .w("31%")
-        .gap(tokens.spacing.xxs)
-        .child(label(tokens, quote.code))
-        .child(muted(tokens, quote.name)),
-    )
-    .child(h_flex().w("19%").justify_end().child(numeric(tokens, quote.last)))
-    .child(
-      v_flex()
-        .w("18%")
-        .items_end()
-        .gap(tokens.spacing.xxs)
-        .child(numeric(tokens, quote.changePercent).text_color(tone))
-        .child(numeric(tokens, quote.change).text_color(tone)),
+      cell(1, (element) =>
+        element
+          .flex()
+          .flex_col()
+          .w("31%")
+          .gap(tokens.spacing.xxs)
+          .child(label(tokens, quote.code))
+          .child(muted(tokens, quote.name)),
+      ),
     )
     .child(
-      h_flex()
-        .w("16%")
-        .justify_end()
-        .child(muted(tokens, formatCompactNumber(quote.volume))),
+      cell(2, (element) =>
+        element.flex().w("19%").justify_end().child(numeric(tokens, quote.last)),
+      ),
     )
     .child(
-      h_flex()
-        .flex_1()
-        .justify_end()
-        .child(muted(tokens, tradeStatusLabel(quote))),
+      cell(3, (element) =>
+        element
+          .flex()
+          .flex_col()
+          .w("18%")
+          .items_end()
+          .gap(tokens.spacing.xxs)
+          .child(numeric(tokens, quote.changePercent).text_color(tone))
+          .child(numeric(tokens, quote.change).text_color(tone)),
+      ),
+    )
+    .child(
+      cell(4, (element) =>
+        element
+          .flex()
+          .w("16%")
+          .justify_end()
+          .child(muted(tokens, formatCompactNumber(quote.volume))),
+      ),
+    )
+    .child(
+      cell(5, (element) =>
+        element.flex().flex_1().justify_end().child(muted(tokens, tradeStatusLabel(quote))),
+      ),
     );
 }
 
@@ -850,61 +928,96 @@ export function portfolioSummary(tokens, account, summaries) {
 }
 
 /** @param {import("gpui").Theme} tokens */
+const HOLDINGS_COLUMNS = [
+  { title: "Instrument", size: (el) => el.w("26%") },
+  { title: "Quantity", size: (el) => el.w("12%").justify_end() },
+  { title: "Last / Cost", size: (el) => el.w("20%").justify_end() },
+  { title: "Today's P/L", size: (el) => el.w("20%").justify_end() },
+  { title: "Total P/L", size: (el) => el.flex_1().justify_end() },
+];
+
 export function holdingsHeader(tokens) {
-  return h_flex()
-    .gap(tokens.spacing.md)
-    .px(tokens.spacing.md)
-    .py(tokens.spacing.xs)
-    .bg(tokens.muted)
-    .child(muted(tokens, "Instrument").w("26%"))
-    .child(muted(tokens, "Quantity").w("12%").text_right())
-    .child(muted(tokens, "Last / Cost").w("20%").text_right())
-    .child(muted(tokens, "Today's P/L").w("20%").text_right())
-    .child(muted(tokens, "Total P/L").flex_1().text_right());
+  return tableHeaderRow(tokens, "holdings", HOLDINGS_COLUMNS);
 }
 
-/** @param {import("gpui").Theme} tokens @param {LongbridgeHoldingRow} holding */
-export function holdingRow(tokens, holding) {
+/**
+ * The height Holdings rows are drawn at. See `QUOTE_ROW_HEIGHT`.
+ *
+ * Tighter than a watchlist row: two lines of type and a hairline come to 39.75,
+ * so this is that plus a little, and no more. A portfolio is read as a block —
+ * how much of it fits at once matters more than how much air each row has.
+ */
+export const HOLDING_ROW_HEIGHT = 42;
+
+/**
+ * @param {import("gpui").Theme} tokens
+ * @param {LongbridgeHoldingRow} holding
+ * @param {number} rowIndex
+ */
+export function holdingRow(tokens, holding, rowIndex = 0) {
   const todayTone = pnlTone(tokens, holding.todayPnlValue);
   const totalTone = pnlTone(tokens, holding.totalPnlValue);
-  return h_flex()
-    .id(`holding-${holding.symbol}`)
+  const cell = (column, build) =>
+    build(TableCell.new(`holding-${holding.symbol}-${column}`, column));
+  return TableRow.new(`holding-${holding.symbol}`, rowIndex + 2)
+    .flex()
     .items_center()
-    .gap(tokens.spacing.md)
-    .px(tokens.spacing.md)
-    .py(tokens.spacing.sm)
+    .w_full()
+    .h(HOLDING_ROW_HEIGHT)
+    .gap(tokens.spacing.sm)
+    .px(tokens.spacing.sm)
+    .py(tokens.spacing.xs)
     .border_b(1)
     .border_color(tokens.border)
     .hover((style) => style.bg(tokens.muted))
     .child(
-      v_flex()
-        .w("26%")
-        .gap(tokens.spacing.xxs)
-        .child(label(tokens, holding.symbol))
-        .child(muted(tokens, holding.name)),
-    )
-    .child(h_flex().w("12%").justify_end().child(numeric(tokens, holding.quantity)))
-    .child(
-      v_flex()
-        .w("20%")
-        .items_end()
-        .gap(tokens.spacing.xxs)
-        .child(numeric(tokens, holding.last))
-        .child(muted(tokens, holding.costPrice)),
+      cell(1, (element) =>
+        element
+          .flex()
+          .flex_col()
+          .w("26%")
+          .gap(tokens.spacing.xxs)
+          .child(label(tokens, holding.symbol))
+          .child(muted(tokens, holding.name)),
+      ),
     )
     .child(
-      h_flex()
-        .w("20%")
-        .justify_end()
-        .child(numeric(tokens, holding.todayPnl).text_color(todayTone)),
+      cell(2, (element) =>
+        element.flex().w("12%").justify_end().child(numeric(tokens, holding.quantity)),
+      ),
     )
     .child(
-      v_flex()
-        .flex_1()
-        .items_end()
-        .gap(tokens.spacing.xxs)
-        .child(numeric(tokens, holding.totalPnl).text_color(totalTone))
-        .child(numeric(tokens, holding.totalPnlPercent, 11).text_color(totalTone)),
+      cell(3, (element) =>
+        element
+          .flex()
+          .flex_col()
+          .w("20%")
+          .items_end()
+          .gap(tokens.spacing.xxs)
+          .child(numeric(tokens, holding.last))
+          .child(muted(tokens, holding.costPrice)),
+      ),
+    )
+    .child(
+      cell(4, (element) =>
+        element
+          .flex()
+          .w("20%")
+          .justify_end()
+          .child(numeric(tokens, holding.todayPnl).text_color(todayTone)),
+      ),
+    )
+    .child(
+      cell(5, (element) =>
+        element
+          .flex()
+          .flex_col()
+          .flex_1()
+          .items_end()
+          .gap(tokens.spacing.xxs)
+          .child(numeric(tokens, holding.totalPnl).text_color(totalTone))
+          .child(numeric(tokens, holding.totalPnlPercent, 11).text_color(totalTone)),
+      ),
     );
 }
 

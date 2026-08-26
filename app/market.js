@@ -288,3 +288,21 @@ export function streamStatusSummary(status) {
   }
   return labels[state] ?? String(state);
 }
+
+/**
+ * Narrows rows to those whose named fields contain `query`, case-insensitively.
+ *
+ * Pure and shared, because Watchlist and Holdings ask the same question of
+ * different shapes. An empty or blank query is not a filter — it returns the
+ * rows untouched rather than an empty list.
+ */
+export function filterRows(rows, query, fields) {
+  const needle = typeof query === "string" ? query.trim().toLowerCase() : "";
+  if (!Array.isArray(rows) || needle === "") return Array.isArray(rows) ? rows : [];
+  return rows.filter((row) =>
+    fields.some((field) => {
+      const value = row?.[field];
+      return typeof value === "string" && value.toLowerCase().includes(needle);
+    }),
+  );
+}

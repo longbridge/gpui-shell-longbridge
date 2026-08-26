@@ -37,12 +37,43 @@ fn application_exposes_api_backed_read_only_views() {
         main.contains("priceChart") && main.contains("allocationChart"),
         "read-only market and allocation charts must remain wired"
     );
-    for forbidden in ["Add symbol", "Remove", "InputState", "Trades", "Bid", "Ask"] {
+    // The forbidden list is about surfaces that would edit a watchlist or reach
+    // the order book -- not about text state as such. `InputState` came off it
+    // when the lists grew filters: a filter narrows what is already on screen,
+    // writes nothing, and asks the API for nothing.
+    for forbidden in ["Add symbol", "Remove", "Trades", "Bid", "Ask"] {
         assert!(
             !main.contains(forbidden) && !ui.contains(forbidden) && !market.contains(forbidden),
             "forbidden editing or trading surface {forbidden}"
         );
     }
+    assert!(
+        main.matches("InputState.new(").count() == 2
+            && main.contains("Filter watchlist")
+            && main.contains("Filter holdings"),
+        "the only retained text state may be the two list filters"
+    );
+    assert!(
+        market.contains("export function filterRows"),
+        "filtering must stay a pure function outside the render path"
+    );
+
+    // Both lists virtualize, and both are real tables: `row_count` describes
+    // the whole collection so a window onto it still announces its size.
+    for id in ["watchlist", "holdings"] {
+        assert!(
+            main.contains(&format!("v_virtual_list(`${{id}}-rows`")) || main.contains(id),
+            "missing list {id}"
+        );
+    }
+    assert!(
+        main.contains("Table.new(`${id}-table`)") && main.contains(".row_count(rows.length + 1)"),
+        "both lists must be virtualized tables that announce their full size"
+    );
+    assert!(
+        ui.contains("TableHead.new(") && ui.contains("TableCell.new(") && ui.contains("TableRow.new("),
+        "rows and headers must be table parts rather than styled flex containers"
+    );
     assert!(main.contains("const tokens = cx.theme()"));
     assert!(!main.contains(".text_color(\"") && !ui.contains(".text_color(\""));
     assert!(!main.contains("rgb(") && !ui.contains("rgb("));

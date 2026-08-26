@@ -1,4 +1,4 @@
-import { View, v_flex } from "gpui";
+import { Table, View, v_flex } from "gpui";
 
 import { menuTrigger, quoteDetail, quoteRow, watchlistHeader } from "./ui.js";
 
@@ -27,8 +27,17 @@ export default class WatchlistUiProbe extends View {
       changePercent: "+4.44%",
     };
     return v_flex()
-      .child(watchlistHeader(tokens))
-      .child(quoteRow(tokens, quote, true, quote.receivedAt + 5_000))
+      // A row and a header are table parts now, so the probe puts them in the
+      // table they belong to rather than loose in a column.
+      .child(
+        Table.new("probe-watchlist")
+          .row_count(2)
+          .column_count(5)
+          .flex()
+          .flex_col()
+          .child(watchlistHeader(tokens))
+          .child(quoteRow(tokens, quote, true, 0, quote.receivedAt + 5_000)),
+      )
       .child(quoteDetail(tokens, quote, quote.receivedAt + 5_000))
       // Closed then open, so the difference between the two is what the test
       // reads rather than one absolute colour.
