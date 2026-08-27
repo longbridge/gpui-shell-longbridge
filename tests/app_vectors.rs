@@ -332,10 +332,56 @@ fn authenticated_workspace_materializes_a_scrollable_watchlist(cx: &mut TestAppC
             .unwrap_or_default()
     });
 
-    // The rows are not in this tree, and that is the point of the change: a
-    // virtual list describes itself and its item count, and its rows are built
-    // during layout for the range on screen. `watchlist_ui.test.js` covers what
-    // one row draws.
+    // The panes are dock panels, so the description of this view is the area
+    // and its chrome handlers — nothing else. Everything the panes draw belongs
+    // to their own snapshots, which is the whole reason a drag or a collapse no
+    // longer needs this view to render at all.
+    let area = rendered
+        .lines()
+        .find(|line| line.contains("dock_area"))
+        .expect("workspace dock area");
+    for handler in [":tab_bar(fn)", ":empty_group(fn)", ":drop_indicator(fn)", ":dock(fn)"] {
+        assert!(
+            area.contains(handler),
+            "the dock draws its own {handler}: {area}"
+        );
+    }
+    assert!(
+        !rendered.contains("h_resizable"),
+        "the resizable workspace was replaced by the dock: {rendered}"
+    );
+}
+
+/// The panes still draw what they always drew; they simply draw it inside a
+/// panel now. This probe renders one of them directly, which is the only way to
+/// read a panel's own description from here.
+#[gpui::test]
+fn the_watchlist_pane_still_virtualizes_its_rows(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    grant_app_capabilities();
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("watchlist_click.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let (_root, view) = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+
+    context.run_until_parked();
+    let draw_view = view.clone();
+    context.draw(
+        gpui::Point::default(),
+        gpui::size(gpui::px(1120.), gpui::px(760.)),
+        move |_, _| draw_view.into_any_element(),
+    );
+    let rendered = context.update(|_, cx| {
+        view.read(cx)
+            .snapshot()
+            .map(gpui_shell::RenderSnapshot::debug_tree)
+            .unwrap_or_default()
+    });
+
+    // The rows are not in this tree, and that is the point: a virtual list
+    // describes itself and its item count, and its rows are built during layout
+    // for the range on screen. `watchlist_ui.test.js` covers what one row draws.
     assert!(
         rendered.contains("v_virtual_list \"watchlist-rows\" \u{00d7}12"),
         "{rendered}"
@@ -345,33 +391,9 @@ fn authenticated_workspace_materializes_a_scrollable_watchlist(cx: &mut TestAppC
         "{rendered}"
     );
     assert!(!rendered.contains("Test security 12"), "{rendered}");
-
-    // Both panes are panels of one resizable group rather than wrapped flex
-    // children, so the divider between them is base's and its position is the
-    // window's.
-    let workspace_group = rendered
-        .lines()
-        .find(|line| line.contains("h_resizable \"watchlist-workspace\""))
-        .expect("watchlist resizable group");
-    assert!(
-        !workspace_group.contains(":id"),
-        "h_resizable must use only its constructor id: {workspace_group}"
-    );
-    assert!(rendered.contains("resizable_panel"), "{rendered}");
     assert!(rendered.contains("watchlist-pane"), "{rendered}");
-    assert!(rendered.contains("stock-detail-pane"), "{rendered}");
-
-    // Column tooltips remain on shell-owned descendants. The session menu now
-    // lives in the window header, outside this page-only probe.
+    // Column tooltips remain on shell-owned descendants.
     assert!(rendered.contains(":tooltip"), "{rendered}");
-
-    // The price chart is a retained child. Its chart labels and paths belong
-    // to the child's snapshot rather than being rebuilt with this root tree.
-    assert!(rendered.contains("child_view #"), "{rendered}");
-    assert!(!rendered.contains("5D intraday"), "{rendered}");
-    assert!(!rendered.contains("path fill"), "{rendered}");
-    assert!(!rendered.contains("path stroke"), "{rendered}");
-    assert!(rendered.contains(":overflow_y_scrollbar"), "{rendered}");
 }
 
 #[gpui::test]
@@ -589,14 +611,14 @@ fn clicking_a_watchlist_row_selects_that_instruments_details(cx: &mut TestAppCon
     cx.update(gpui_shell::init);
     grant_app_capabilities();
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
-    let fixture = ApplicationFixture::new("workspace_ui.test.js");
+    let fixture = ApplicationFixture::new("watchlist_click.test.js");
     let fixture_root = fixture.root.clone();
     let runtime_for_view = runtime.clone();
     let window = cx.add_window(move |window, cx| {
         WorkspaceRoot(
             runtime_for_view
                 .try_load(&fixture_root, window, cx)
-                .expect("load authenticated workspace UI probe"),
+                .expect("load authenticated watchlist click probe"),
         )
     });
     let mut context = VisualTestContext::from_window(*window.deref(), cx);
@@ -1013,13 +1035,13 @@ fn a_bound_chord_reaches_the_action_that_switches_page(cx: &mut TestAppContext) 
     context.update(|window, cx| window.draw(cx).clear(cx));
     let back = tree(&mut context);
     assert!(
-        back.contains("watchlist-workspace"),
+        back.contains("watchlist-pane"),
         "cmd-1 must reach `workspace::watchlist`:\n{back}"
     );
 }
 
 #[gpui::test]
-fn a_short_window_stacks_the_panes_the_wide_one_puts_side_by_side(cx: &mut TestAppContext) {
+fn the_window_readout_follows_the_window_it_is_measuring(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     grant_app_capabilities();
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -1065,22 +1087,17 @@ fn a_short_window_stacks_the_panes_the_wide_one_puts_side_by_side(cx: &mut TestA
         })
     };
 
+    // Where the panes sit is the dock's business now, and the user's. What is
+    // still this view's is the readout: it measures the window on every render,
+    // and a resize is not an invalidation, so the value has to follow the
+    // notification rather than the resize.
     let wide = redraw(&mut context, 1400., "ctrl-alt-y");
-    assert!(
-        wide.contains("h_resizable \"watchlist-workspace\"")
-            && !wide.contains("watchlist-workspace-stacked"),
-        "a wide window puts the panes side by side:\n{wide}"
-    );
     assert!(wide.contains("1400\u{d7}800"), "{wide}");
-    assert!(!wide.contains("stacked"), "{wide}");
+    assert!(!wide.contains("narrow"), "{wide}");
 
     let narrow = redraw(&mut context, 700., "ctrl-alt-u");
     assert!(
-        narrow.contains("v_resizable \"watchlist-workspace-stacked\""),
-        "a short window stacks them:\n{narrow}"
-    );
-    assert!(
-        narrow.contains("700\u{d7}800 \u{b7} 16px/rem \u{b7} light \u{b7} background \u{b7} stacked"),
+        narrow.contains("700\u{d7}800 \u{b7} 16px/rem \u{b7} light \u{b7} background \u{b7} narrow"),
         "the readout must follow the window:\n{narrow}"
     );
 }
@@ -1126,12 +1143,11 @@ fn escape_puts_away_what_the_workspace_opened_and_then_carries_on(cx: &mut TestA
 
     let opened = tree(&mut context);
     assert!(opened.contains("chart-calendar-surface"), "{opened}");
-    // The session menu's trigger is the other half of the avatar's slot
-    // choice: this one has an image, the watchlist rows' badges do not.
-    assert!(
-        opened.contains("Avatar") && opened.contains("AvatarImage"),
-        "{opened}"
-    );
+    // Every avatar in the application is a fallback: it knows no faces, and
+    // the product mark is already in the header rather than in a circle.
+    // `avatar_slots.test.js` is where the image slot is checked.
+    assert!(opened.contains("AvatarFallback"), "{opened}");
+    assert!(!opened.contains("AvatarImage"), "{opened}");
 
     context.simulate_keystrokes("escape");
     context.run_until_parked();
@@ -1299,4 +1315,37 @@ fn a_dispatched_action_reaches_the_handler_a_chord_would(cx: &mut TestAppContext
         after.contains("Restoring session"),
         "a dispatched action must reach the same handler a chord would:\n{after}"
     );
+}
+
+#[gpui::test]
+fn an_avatar_draws_its_image_when_it_has_one_and_its_fallback_otherwise(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    grant_app_capabilities();
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("avatar_slots.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let (_root, view) = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+    context.run_until_parked();
+    let draw_view = view.clone();
+    context.draw(
+        gpui::Point::default(),
+        gpui::size(gpui::px(200.), gpui::px(100.)),
+        move |_, _| draw_view.into_any_element(),
+    );
+    let rendered = context.update(|_, cx| {
+        view.read(cx)
+            .snapshot()
+            .map(gpui_shell::RenderSnapshot::debug_tree)
+            .unwrap_or_default()
+    });
+
+    // The slot is chosen by the avatar, so both are described and only the
+    // image is drawn where there is one.
+    assert!(
+        rendered.contains("AvatarImage \"assets/logo-light.svg\""),
+        "the image slot must carry the application-relative path:\n{rendered}"
+    );
+    assert!(rendered.contains("AvatarFallback"), "{rendered}");
+    assert!(rendered.contains("text \"LB\"") && rendered.contains("text \"US\""), "{rendered}");
 }

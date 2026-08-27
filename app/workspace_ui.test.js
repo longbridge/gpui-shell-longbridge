@@ -69,18 +69,11 @@ export default class WorkspaceUiProbe extends LongbridgeApp {
     this.chartGeneration = 0;
     this.chartThemeRevision = 0;
     this.initPriceChartView(cx);
+    this.initWorkspaceDock(cx);
     this.clock = null;
   }
 
   render(cx) {
-    return (
-      v_flex()
-        .size_full()
-        .child(this.watchlistPage(cx.theme()))
-        // A probe-only state read used by the host interaction test. The table
-        // itself is still real: a click must travel through its virtual-list
-        // wrapper before this value can change.
-        .child(`Selected ${this.selectedSymbol}`)
-    );
+    return v_flex().size_full().child(this.watchlistPage(cx.theme()));
   }
 }

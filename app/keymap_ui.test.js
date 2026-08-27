@@ -1,6 +1,8 @@
 // The application keymap, end to end: a chord the host delivers reaches the
 // action the root registered, and the workspace switches page.
 
+import { h_flex, v_flex } from "gpui-base";
+
 import LongbridgeApp from "./main.js";
 
 const QUOTE = Object.freeze({
@@ -83,6 +85,34 @@ export default class KeymapUiProbe extends LongbridgeApp {
       window.dispatch_action("workspace::reconnect");
     }
     super.observeKey(event, down, cx);
+  }
+
+  /**
+   * The two panes, drawn inline rather than in the dock.
+   *
+   * What this probe is for is the keymap and the actions the root registers,
+   * and both of those are answered by what the panes *contain* — the calendar
+   * the picker opens, the diagnostics readout, the row a right press copies
+   * from. In the application those live in dock panels, whose descriptions
+   * belong to the panels rather than to this view; drawing them here is what
+   * keeps the assertions able to see them, and changes nothing about the
+   * dispatch under test.
+   *
+   * Creating no dock is the other half: `super.init` is not called, so nothing
+   * has mounted the panes anywhere else.
+   *
+   * @param {import("gpui-base").Theme} tokens
+   */
+  watchlistPage(tokens) {
+    // `h_flex` centres its children, so each pane is told to fill the row's
+    // height; a dock does that for itself, which is one reason the application
+    // no longer has this code.
+    return h_flex()
+      .flex_1()
+      .min_h(0)
+      .gap(tokens.spacing.sm)
+      .child(v_flex().w(620).h_full().min_w(0).child(this.watchlist(tokens).size_full()))
+      .child(v_flex().flex_1().h_full().min_w(0).child(this.stockDetail(tokens).size_full()));
   }
 
   render(cx) {

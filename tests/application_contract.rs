@@ -88,9 +88,30 @@ fn application_exposes_api_backed_read_only_views() {
             && main.contains("Scrollbar.vertical(`${id}-rows`)"),
         "both lists must virtualize their rows and pair a scrollbar with them by name"
     );
+    // The panes are dock panels now, which is what makes the layout the user's:
+    // it is a value they edit and the application only draws it. Both halves
+    // have to stay — a panel that nothing registered a class for cannot come
+    // back after a restart.
     assert!(
-        main.contains("h_resizable(\"watchlist-workspace\")") && main.contains("resizable_panel()"),
-        "the watchlist and detail panes must be panels of one resizable group"
+        main.contains("dock_area(this.workspaceDock)")
+            && main.contains("DockArea.register_panel(\"watchlist\", WatchlistPanel)")
+            && main.contains("DockArea.register_panel(\"detail\", DetailPanel)"),
+        "the watchlist and detail panes must be panels of the workspace dock"
+    );
+    // Base draws no chrome, so a dock with none would be a workspace with no
+    // tab bar, no title strip and nothing to drag.
+    let ui_source = &ui;
+    for chrome in ["dockTabBar", "dockFrame", "dockDropHint"] {
+        assert!(
+            main.contains(chrome) && ui_source.contains(&format!("export function {chrome}")),
+            "the dock's {chrome} must be drawn by the application"
+        );
+    }
+    // A layout the user rearranged and lost on the next launch is worse than
+    // one that never moved.
+    assert!(
+        main.contains("WORKSPACE_LAYOUT_KEY") && main.contains("this.workspaceDock.dump()"),
+        "the workspace layout must be written back to storage"
     );
 
     // A row inside a virtual list cannot register a handler: it is rebuilt on

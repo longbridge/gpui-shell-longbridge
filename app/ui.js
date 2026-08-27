@@ -10,7 +10,6 @@ import {
   AccordionTrigger,
   Avatar,
   AvatarFallback,
-  AvatarImage,
   Button,
   Input,
   Link,
@@ -1044,12 +1043,17 @@ export function marketAvatar(tokens, market, size = 26) {
 }
 
 /**
- * The session menu's trigger: the product mark in a circle, with initials
- * behind it.
+ * The session menu's trigger: an avatar with no picture behind it.
  *
- * The counterpart of `marketAvatar` — this one does have an image, so between
- * the two both halves of the slot choice are on screen at once. The theme
- * decides which mark, the same way the header's does.
+ * The counterpart of `marketAvatar` — both fill the fallback slot, because
+ * this application knows no faces. A read-only terminal is signed in to an
+ * account, not to a person with a portrait, and the product mark is already
+ * in the header two elements to the left; putting it in a circle here would
+ * repeat it and crop its bars against the mask.
+ *
+ * So the fallback is what an avatar with nothing to show is everywhere else:
+ * a head and a pair of shoulders. The shoulders are a circle wider than the
+ * frame, so the avatar's own mask is what cuts them into a shape.
  *
  * @param {import("gpui-base").Theme} tokens
  * @param {string} id
@@ -1057,7 +1061,6 @@ export function marketAvatar(tokens, market, size = 26) {
  * @param {boolean} [open]
  */
 export function sessionAvatar(tokens, id, hint, open = false) {
-  const mark = tokens.appearance === "dark" ? "assets/logo-dark.svg" : "assets/logo-light.svg";
   return Button.new(id)
     .accessibility_label(hint)
     .tooltip(hint)
@@ -1067,10 +1070,11 @@ export function sessionAvatar(tokens, id, hint, open = false) {
     .justify_center()
     .w(26)
     .h(26)
+    .flex_none()
     .rounded_full()
     .border(1)
     .border_color(open ? tokens.ring : tokens.border)
-    .bg(tokens.surface)
+    .bg(open ? tokens.accent : tokens.surface)
     .hover((style) => style.border_color(tokens.ring))
     .focus((style) => style.border_color(tokens.ring))
     .child(
@@ -1079,17 +1083,16 @@ export function sessionAvatar(tokens, id, hint, open = false) {
         .h(20)
         .rounded_full()
         .overflow_hidden()
-        .image(AvatarImage.new(mark).size_full())
         .fallback(
           AvatarFallback.new()
             .size_full()
             .flex()
+            .flex_col()
             .items_center()
-            .justify_center()
-            .text_size(9)
-            .font_weight(600)
-            .text_color(tokens.muted_foreground)
-            .child("LB"),
+            .pt(4)
+            .gap(1)
+            .child(div().w(7).h(7).flex_none().rounded_full().bg(tokens.muted_foreground))
+            .child(div().w(13).h(10).flex_none().rounded_full().bg(tokens.muted_foreground)),
         ),
     );
 }
@@ -1129,28 +1132,37 @@ export function accordionSection(tokens, options) {
           .on_change(onToggle)
           .flex()
           .w_full()
-          .items_center()
-          .justify_between()
-          .gap(tokens.spacing.sm)
-          .px(tokens.spacing.md)
-          .py(tokens.spacing.sm)
-          .hover((style) => style.bg(tokens.accent))
-          .focus((style) => style.bg(tokens.accent))
+          // The hover is on a plain element inside the trigger rather than on
+          // the trigger. A component is rebuilt from its description as a
+          // value, so there is no interactive element on it for a hover to
+          // land on -- the runtime says so in the log -- and this row fills the
+          // trigger, so the lit area is the same one either way.
           .child(
             h_flex()
+              .id(`${id}-trigger-surface`)
+              .w_full()
               .items_center()
+              .justify_between()
               .gap(tokens.spacing.sm)
+              .px(tokens.spacing.md)
+              .py(tokens.spacing.sm)
+              .hover((style) => style.bg(tokens.accent))
               .child(
-                div()
-                  .w(10)
-                  .text_size(9)
-                  .line_height(1)
-                  .text_color(tokens.muted_foreground)
-                  .child(open ? "▾" : "▸"),
+                h_flex()
+                  .items_center()
+                  .gap(tokens.spacing.sm)
+                  .child(
+                    div()
+                      .w(10)
+                      .text_size(9)
+                      .line_height(1)
+                      .text_color(tokens.muted_foreground)
+                      .child(open ? "▾" : "▸"),
+                  )
+                  .child(label(tokens, title)),
               )
-              .child(label(tokens, title)),
-          )
-          .when(Boolean(detail), (element) => element.child(muted(tokens, detail))),
+              .when(Boolean(detail), (element) => element.child(muted(tokens, detail))),
+          ),
       ).aria_level(level),
     )
     .panel(
@@ -1383,4 +1395,158 @@ export function kbd(tokens, keystroke, state = {}) {
     .font_family("monospace")
     .text_color(down ? tokens.accent_foreground : tokens.muted_foreground)
     .child(held ? `${keystroke} (held)` : keystroke);
+}
+
+// The dock's chrome.
+//
+// Base draws none of it — an area with no chrome still docks, drags, resizes
+// and persists, painting only its panels — so a tab bar, a dock frame, a
+// collapse control and a resize handle are ordinary elements written here with
+// the ordinary style surface.
+//
+// None of them registers an event handler, and that is the one rule worth
+// knowing. A chrome callback runs once per container per frame for as long as
+// the dock is on screen, so a handler created inside one would pile up for as
+// long as the window stood. `select_tab`, `close_panel`, `toggle_dock` and
+// `resize_dock` are commands instead: they name a container and what to ask
+// it, carry no script value at all, and base does the work.
+
+/** The height of a dock's title strip, and of the tab bar beside it. */
+export const DOCK_BAR_HEIGHT = 30;
+
+/** The readable half of `shell:<application>/<panel>`. */
+export function panelTitle(name) {
+  const slash = name.lastIndexOf("/");
+  const bare = slash === -1 ? name : name.slice(slash + 1);
+  return bare === "watchlist" ? "Watchlist" : bare === "detail" ? "Stock Details" : bare;
+}
+
+/**
+ * @param {import("gpui-base").Theme} tokens
+ * @param {import("gpui-base").DockGroup} group
+ */
+export function dockTabBar(tokens, group) {
+  return h_flex()
+    .h(DOCK_BAR_HEIGHT)
+    .w_full()
+    .items_center()
+    .bg(tokens.surface)
+    .border_b(1)
+    .border_color(tokens.border)
+    .drop_tab(group)
+    .children(
+      group.tabs
+        .filter((tab) => tab.visible)
+        .map((tab) =>
+          h_flex()
+            .id(`dock-tab-${tab.id}`)
+            .h(DOCK_BAR_HEIGHT)
+            .items_center()
+            .gap(tokens.spacing.xs)
+            .px(tokens.spacing.md)
+            .border_r(1)
+            .border_color(tokens.border)
+            .bg(tab.active ? tokens.background : tokens.surface)
+            .text_size(11)
+            .text_color(tab.active ? tokens.foreground : tokens.muted_foreground)
+            .hover((style) => style.bg(tokens.accent))
+            .select_tab(group, tab.index)
+            .drag_tab(group, tab.index)
+            .child(panelTitle(tab.name))
+            .when(tab.closable, (element) =>
+              element.child(
+                div()
+                  .id(`dock-tab-close-${tab.id}`)
+                  .px(tokens.spacing.xxs)
+                  .rounded(tokens.radius.sm)
+                  .text_color(tokens.muted_foreground)
+                  .hover((style) => style.bg(tokens.accent))
+                  .close_panel(group, tab.id)
+                  .accessibility_label(`Close ${panelTitle(tab.name)}`)
+                  .child("×"),
+              ),
+            ),
+        ),
+    );
+}
+
+/**
+ * One dock's frame: what it is called, the control that collapses it, the
+ * strip that resizes it — and the content, wherever this puts it.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {import("gpui-base").DockRegion} dock
+ * @param {import("gpui").Element} content
+ */
+export function dockFrame(tokens, dock, content) {
+  const vertical = dock.placement === "bottom";
+  return v_flex()
+    .size_full()
+    .relative()
+    .bg(tokens.background)
+    .child(
+      h_flex()
+        .h(DOCK_BAR_HEIGHT)
+        .items_center()
+        .justify_between()
+        .px(tokens.spacing.md)
+        .bg(tokens.surface)
+        .border_b(1)
+        .border_color(tokens.border)
+        .child(muted(tokens, dock.placement.toUpperCase()))
+        .child(
+          div()
+            .id(`dock-collapse-${dock.placement}`)
+            .px(tokens.spacing.xs)
+            .rounded(tokens.radius.sm)
+            .text_size(11)
+            .text_color(tokens.muted_foreground)
+            .hover((style) => style.bg(tokens.accent))
+            .toggle_dock(dock)
+            .accessibility_label(dock.open ? "Collapse pane" : "Expand pane")
+            .child(dock.open ? "–" : "+"),
+        ),
+    )
+    .child(content)
+    .child(
+      // Base clamps every position this reports against the area and the
+      // opposite dock, so the handle is a hit area and a colour and no more.
+      div()
+        .id(`dock-resize-${dock.placement}`)
+        .absolute()
+        .map((element) =>
+          vertical
+            ? element.top(0).left(0).w_full().h(4).cursor_row_resize()
+            : element.top(0).h_full().w(4).cursor_col_resize(),
+        )
+        .map((element) =>
+          dock.placement === "left"
+            ? element.right(0)
+            : dock.placement === "right"
+              ? element.left(0)
+              : element,
+        )
+        .hover((style) => style.bg(tokens.primary))
+        .resize_dock(dock),
+    );
+}
+
+/**
+ * Where a dragged pane would land. The bounds are already resolved — base
+ * snaps and clamps before a skin sees them — so this only paints.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {import("gpui-base").DockDrop} drop
+ */
+export function dockDropHint(tokens, drop) {
+  return div()
+    .absolute()
+    .left(drop.to.x)
+    .top(drop.to.y)
+    .w(drop.to.width)
+    .h(drop.to.height)
+    .bg(tokens.primary)
+    .opacity(0.15)
+    .border(1)
+    .border_color(tokens.primary);
 }

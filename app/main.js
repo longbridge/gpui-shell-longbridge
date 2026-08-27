@@ -4,6 +4,7 @@
 import { View, div, image } from "gpui";
 import {
   CalendarState,
+  DockArea,
   InputState,
   Popover,
   Scrollbar,
@@ -11,12 +12,11 @@ import {
   TableBody,
   Tab,
   Tabs,
+  dock_area,
+  dock_content,
   h_flex,
-  h_resizable,
-  resizable_panel,
   set_theme,
   v_flex,
-  v_resizable,
   v_virtual_list,
 } from "gpui-base";
 import { fps_monitor } from "gpui-fps";
@@ -41,6 +41,7 @@ import { createQuoteStream } from "./quote_stream.js";
 import { mergeLiveQuote, prepareFiveDaySeries } from "./chart.js";
 import { allocationInUsd, normalizeUsdRates, portfolioPresentation } from "./portfolio.js";
 import PriceChartView, { PRICE_CHART_LAYOUT } from "./price_chart_view.js";
+import { DetailPanel, WatchlistPanel } from "./workspace.js";
 import {
   accordionGroup,
   accordionSection,
@@ -50,6 +51,9 @@ import {
   detailGrid,
   emptyPanel,
   kbd,
+  dockDropHint,
+  dockFrame,
+  dockTabBar,
   errorMessage,
   filterInput,
   HOLDING_ROW_HEIGHT,
@@ -81,6 +85,12 @@ let themes = null;
 // How many Holdings rows the panel shows before the page scrolls instead of
 // the panel growing. Any ceiling would do; this one keeps the summary and the
 // allocation chart reachable above it without a scroll.
+/** Where the workspace layout is kept between runs, and under which shape. */
+const WORKSPACE_LAYOUT_KEY = "workspace.layout";
+const WORKSPACE_LAYOUT_VERSION = 1;
+/** The watchlist dock's starting width; after that the user's drag decides. */
+const WATCHLIST_DOCK_WIDTH = 620;
+
 const HOLDINGS_VIEWPORT_ROWS = 10;
 const EMPTY_CANDLES = Object.freeze([]);
 
@@ -201,7 +211,7 @@ export default class LongbridgeApp extends View {
       set_theme(themes.dark);
       this.chartThemeRevision += 1;
       this.syncPriceChartView();
-      cx.notify();
+      this.redraw(cx);
     });
     this.instruments = [];
     this.quotes = [];
@@ -231,10 +241,11 @@ export default class LongbridgeApp extends View {
     this.initKeyboard(cx);
     this.initChartCalendar(cx);
     this.initPriceChartView(cx);
+    this.initWorkspaceDock(cx);
     this.clock = cx.timer.every(1_000, (cx) => {
       this.lastTick = Date.now();
       this.quotes = sortLikeTerminal(this.quotes, this.lastTick);
-      cx.notify();
+      this.redraw(cx);
     });
     if (this.hasStoredTokens) this.resume(cx);
   }
@@ -264,7 +275,7 @@ export default class LongbridgeApp extends View {
     cx.spawn(async (cx) => {
       await cx.sleep(0);
       this.workspaceFocus.focus();
-      cx.notify();
+      this.redraw(cx);
     });
   }
 
@@ -289,7 +300,7 @@ export default class LongbridgeApp extends View {
       this.chartEndDate = day;
       this.candleCache.delete(this.selectedSymbol);
       this.loadSelectedChart(cx);
-      cx.notify();
+      this.redraw(cx);
     });
   }
 
@@ -337,6 +348,93 @@ export default class LongbridgeApp extends View {
     this.priceChart.set_props(next);
   }
 
+  /**
+   * Creates the workspace dock and its two panels.
+   *
+   * The layout is the user's, not the application's: which pane is where, how
+   * wide the watchlist is, whether it is collapsed. So it lives in a retained
+   * `DockArea` and is written back to storage whenever it changes, rather than
+   * being described afresh on every render — a dock rebuilt from a description
+   * would undo every drag the moment anything else redrew.
+   *
+   * @param {import("gpui").Context} cx
+   */
+  initWorkspaceDock(cx) {
+    // Registered before the layout is restored: this is what lets a saved
+    // layout find the class its panel is rebuilt from.
+    DockArea.register_panel("watchlist", WatchlistPanel);
+    DockArea.register_panel("detail", DetailPanel);
+
+    this.workspaceRevision = 0;
+    this.workspaceDock = DockArea.new("longbridge-workspace", { version: WORKSPACE_LAYOUT_VERSION });
+    this.watchlistPanel = cx.new(WatchlistPanel, { app: this });
+    this.detailPanel = cx.new(DetailPanel, { app: this });
+    this.workspaceDock.add_panel(this.watchlistPanel, {
+      name: "watchlist",
+      placement: "left",
+      size: WATCHLIST_DOCK_WIDTH,
+    });
+    this.workspaceDock.add_panel(this.detailPanel, { name: "detail", placement: "center" });
+
+    // Storage is a capability, and a layout is not worth failing to start over:
+    // a host that granted none gets the seeded layout above and keeps it for
+    // the session.
+    try {
+      const saved = localStorage.getItem(WORKSPACE_LAYOUT_KEY);
+      // A layout written by an older build is ignored rather than repaired —
+      // the panels above are already docked, so the window still opens.
+      if (saved) this.workspaceDock.load(JSON.parse(saved));
+    } catch {
+      this.layoutStorage = false;
+    }
+
+    // Fires on every edit, including each step of a drag, so the write is on a
+    // timer rather than on the event.
+    this.workspaceDock.on("layout_changed", (cx) => {
+      this.redraw(cx);
+      if (this.layoutWrite) return;
+      this.layoutWrite = cx.timer.after(400, () => {
+        this.layoutWrite = null;
+        if (this.layoutStorage === false) return;
+        try {
+          localStorage.setItem(WORKSPACE_LAYOUT_KEY, JSON.stringify(this.workspaceDock.dump()));
+        } catch {
+          this.layoutStorage = false;
+        }
+      });
+    });
+  }
+
+  /**
+   * Repaints the two panes.
+   *
+   * A dock panel is not a child of this view's description — the dock area
+   * holds it — so `cx.notify()` here repaints the header, the footer and the
+   * chrome, and reaches neither pane. This is the other half of that: it hands
+   * each panel a revision it never reads, because what the call is for is the
+   * refresh, not the value.
+   */
+  syncWorkspacePanels() {
+    if (!this.workspaceDock) return;
+    const props = { app: this, revision: (this.workspaceRevision += 1) };
+    this.watchlistPanel?.set_props(props);
+    this.detailPanel?.set_props(props);
+  }
+
+  /**
+   * What every mutation site calls: repaint this view, and repaint the panes.
+   *
+   * One funnel rather than a `cx.notify()` at each site, because after the
+   * workspace became a dock those are two different requests and forgetting the
+   * second one is invisible — the header updates and the table does not.
+   *
+   * @param {import("gpui").Context} cx
+   */
+  redraw(cx) {
+    cx.notify();
+    this.syncWorkspacePanels();
+  }
+
   releasePriceChartView() {
     if (!this.priceChart) return;
     this.priceChart.release();
@@ -371,14 +469,14 @@ export default class LongbridgeApp extends View {
     this.watchlistFilter = InputState.new({ placeholder: "Filter watchlist" });
     this.watchlistFilter.on("change", (_event, cx) => {
       this.watchlistQuery = this.watchlistFilter.value();
-      cx.notify();
+      this.redraw(cx);
     });
     this.holdingsFilter = InputState.new({ placeholder: "Filter holdings" });
     this.holdingsFilter.on("change", (_event, cx) => {
       this.holdingsQuery = this.holdingsFilter.value();
       // A narrower list can be shorter than the page someone is standing on.
       this.holdingsPage = 1;
-      cx.notify();
+      this.redraw(cx);
     });
   }
 
@@ -387,14 +485,14 @@ export default class LongbridgeApp extends View {
     this.status = { state: "restoring_token" };
     this.error = "";
     this.streamError = "";
-    cx.notify();
+    this.redraw(cx);
     cx.spawn(async (cx) => {
       try {
         await this.connect(await accessToken(), cx);
       } catch (error) {
         this.status = { state: "error" };
         this.error = error instanceof Error ? error.message : String(error);
-        cx.notify();
+        this.redraw(cx);
       }
     });
   }
@@ -404,7 +502,7 @@ export default class LongbridgeApp extends View {
     if (this.authorization) return;
     this.status = { state: "authorizing" };
     this.error = "";
-    cx.notify();
+    this.redraw(cx);
     cx.spawn(async (cx) => {
       try {
         const authorization = await beginDeviceAuthorization();
@@ -423,7 +521,7 @@ export default class LongbridgeApp extends View {
           // opened, with nothing anywhere to say why.
           console.warn(`could not open the authorization page: ${error}`);
         }
-        cx.notify();
+        this.redraw(cx);
         const tokens = await pollDeviceAuthorization(authorization, { cx });
         this.hasStoredTokens = true;
         this.authorization = null;
@@ -432,7 +530,7 @@ export default class LongbridgeApp extends View {
         this.authorization = null;
         this.status = { state: "error" };
         this.error = error instanceof Error ? error.message : String(error);
-        cx.notify();
+        this.redraw(cx);
       }
     });
   }
@@ -450,7 +548,7 @@ export default class LongbridgeApp extends View {
     if (previous) await previous.stop();
     if (generation !== this.streamGeneration) return;
     this.status = { state: "loading_watchlist" };
-    cx.notify();
+    this.redraw(cx);
 
     const instruments = watchlistInstruments(await get(cx, "/v1/watchlist/groups"));
     if (generation !== this.streamGeneration) return;
@@ -463,7 +561,7 @@ export default class LongbridgeApp extends View {
     // reads are a separate, slower boundary and must not leave navigation in a
     // misleading global Connecting state.
     this.status = { state: "connected" };
-    cx.notify();
+    this.redraw(cx);
     await this.refreshPortfolio(cx);
     if (generation !== this.streamGeneration) return;
     const symbols = [
@@ -474,7 +572,7 @@ export default class LongbridgeApp extends View {
     ];
     if (symbols.length === 0) {
       this.status = { state: "connected" };
-      cx.notify();
+      this.redraw(cx);
       this.loadPortfolio(cx);
       return;
     }
@@ -524,10 +622,10 @@ export default class LongbridgeApp extends View {
       this.quotePulse = 0.72;
       cx.timer.after(160, (cx) => {
         this.quotePulse = 1;
-        cx.notify();
+        this.redraw(cx);
       });
     }
-    cx.notify();
+    this.redraw(cx);
   }
 
   /** @param {import("gpui").Context} cx */
@@ -545,7 +643,7 @@ export default class LongbridgeApp extends View {
       state: this.candleCache.has(symbol) ? "ready" : "loading",
     };
     this.syncPriceChartView();
-    cx.notify();
+    this.redraw(cx);
     if (!stream) return;
     // The window ends on the day the picker chose, and on today when it has
     // chosen nothing. Fourteen calendar days back is enough to contain five
@@ -571,7 +669,7 @@ export default class LongbridgeApp extends View {
         };
       }
       this.syncPriceChartView();
-      cx.notify();
+      this.redraw(cx);
     });
   }
 
@@ -580,7 +678,7 @@ export default class LongbridgeApp extends View {
     this.status = status && typeof status === "object" ? status : { state: "error" };
     if (typeof this.status.error === "string") this.streamError = this.status.error;
     else if (this.status.state === "connected") this.streamError = "";
-    cx.notify();
+    this.redraw(cx);
   }
 
   /** @param {import("gpui").Context} cx */
@@ -589,10 +687,10 @@ export default class LongbridgeApp extends View {
       try {
         await this.refreshPortfolio(cx);
         this.error = "";
-        cx.notify();
+        this.redraw(cx);
       } catch (error) {
         this.error = error instanceof Error ? error.message : String(error);
-        cx.notify();
+        this.redraw(cx);
       }
     });
   }
@@ -635,7 +733,7 @@ export default class LongbridgeApp extends View {
       this.chartThemeRevision += 1;
       this.syncPriceChartView();
     }
-    cx.notify();
+    this.redraw(cx);
   }
 
   /** @param {string} value @param {string} what @param {import("gpui").Context} cx */
@@ -669,7 +767,7 @@ export default class LongbridgeApp extends View {
     cx.spawn(async () => {
       await clearTokens();
     });
-    cx.notify();
+    this.redraw(cx);
   }
 
   /**
@@ -708,13 +806,13 @@ export default class LongbridgeApp extends View {
   dismiss(cx) {
     if (this.calendarOpen) {
       this.calendarOpen = false;
-      cx.notify();
+      this.redraw(cx);
       return;
     }
     if (this.userMenuOpen || this.allocationHelpOpen) {
       this.userMenuOpen = false;
       this.allocationHelpOpen = false;
-      cx.notify();
+      this.redraw(cx);
       return;
     }
     const filter = this.page === "portfolio" ? this.holdingsFilter : this.watchlistFilter;
@@ -723,7 +821,7 @@ export default class LongbridgeApp extends View {
       filter.set_value("");
       if (this.page === "portfolio") this.holdingsQuery = "";
       else this.watchlistQuery = "";
-      cx.notify();
+      this.redraw(cx);
       return;
     }
     cx.propagate();
@@ -734,7 +832,7 @@ export default class LongbridgeApp extends View {
     if (this.page === page) return;
     this.page = page;
     if (page === "portfolio") this.loadPortfolio(cx);
-    cx.notify();
+    this.redraw(cx);
   }
 
   /**
@@ -775,7 +873,7 @@ export default class LongbridgeApp extends View {
     this.lastKeystroke = event.keystroke;
     this.keyDown = down;
     this.keyHeld = held;
-    cx.notify();
+    this.redraw(cx);
   }
 
   /**
@@ -788,7 +886,7 @@ export default class LongbridgeApp extends View {
   observePointer(down, cx) {
     if (this.pointerDown === down) return;
     this.pointerDown = down;
-    cx.notify();
+    this.redraw(cx);
   }
 
   /** @param {import("gpui").Context} cx */
@@ -858,7 +956,7 @@ export default class LongbridgeApp extends View {
                     .selected(this.page === "watchlist")
                     .on_click((_event, cx) => {
                       this.page = "watchlist";
-                      cx.notify();
+                      this.redraw(cx);
                     })
                     .flex()
                     .items_center()
@@ -882,7 +980,7 @@ export default class LongbridgeApp extends View {
                     .on_click((_event, cx) => {
                       this.page = "portfolio";
                       this.loadPortfolio(cx);
-                      cx.notify();
+                      this.redraw(cx);
                     })
                     .flex()
                     .items_center()
@@ -976,39 +1074,29 @@ export default class LongbridgeApp extends View {
       .child(v_flex().w(400).child(this.authPanel(tokens)));
   }
 
-  /** @param {import("gpui-base").Theme} tokens */
+  /**
+   * The workspace, as a dock the user rearranges and keeps.
+   *
+   * The two panes used to be halves of a resizable group, which meant the
+   * layout was a property of the description: the split had to be re-decided
+   * every render, the narrow case needed a second group with its own id, and
+   * nothing could be moved, collapsed or reordered. A dock area answers all
+   * three — the layout is a value the user edits and this view only draws it.
+   *
+   * Base draws no chrome, so everything visible here is `ui.js`.
+   *
+   * @param {import("gpui-base").Theme} tokens
+   */
   watchlistPage(tokens) {
-    // The divider is base's, and so is the position it settles at: the group
-    // files its panel sizes under its own id, which is why that id is a written
-    // name and not one built from anything that changes. Nothing on the view
-    // needs to hold the layout for a drag to survive a repaint.
-    //
-    // A resizable group still cannot wrap, so the switch is between two of
-    // them: side by side in a wide window, stacked in a narrow one. Measuring
-    // the window is what makes the question answerable — it used to have no
-    // answer, and both panes just shrank.
-    //
-    // Each group files its panel sizes under its own id, which is why those
-    // ids are written names and not built from anything that changes.
-    const watchlist = this.watchlist(tokens)
-      .id("watchlist-pane")
-      .size_full()
-      .on_mouse_down("right", (_event, cx) => this.copySelectedSymbol(cx));
-    const detail = this.stockDetail(tokens).id("stock-detail-pane").size_full();
-    if (this.isNarrow()) {
-      return v_resizable("watchlist-workspace-stacked")
-        .flex_1()
-        .min_h(0)
-        .gap_1()
-        .child(resizable_panel().size(300).size_range(180).child(watchlist))
-        .child(resizable_panel().size_range(200).child(detail));
-    }
-    return h_resizable("watchlist-workspace")
+    return dock_area(this.workspaceDock)
       .flex_1()
       .min_h(0)
-      .gap_1()
-      .child(resizable_panel().size(620).size_range(360).child(watchlist))
-      .child(resizable_panel().size_range(280).child(detail));
+      .tab_bar((group, cx) => dockTabBar(cx.theme(), group))
+      .empty_group((_group, cx) => emptyPanel(cx.theme(), "Nothing here", "Drop a pane in."))
+      .drop_indicator((drop, cx) => dockDropHint(cx.theme(), drop))
+      // Whatever this returns replaces the dock's content, so the panes go
+      // where `dock_content()` is.
+      .dock((dock, cx) => dockFrame(cx.theme(), dock, dock_content().flex_1().min_h(0)));
   }
 
   /** @param {import("gpui-base").Theme} tokens */
@@ -1016,6 +1104,10 @@ export default class LongbridgeApp extends View {
     const status = streamStatusSummary({ state: this.status.state, delay: this.status.delay });
     const rows = filterRows(this.quotes, this.watchlistQuery, ["code", "name", "symbol"]);
     return panel(tokens)
+      .id("watchlist-pane")
+      // On the pane rather than on whatever holds it: the pane is now a dock
+      // panel's whole body, and there is no wrapper left to carry this.
+      .on_mouse_down("right", (_event, cx) => this.copySelectedSymbol(cx))
       .child(
         h_flex()
           .items_center()
@@ -1129,13 +1221,13 @@ export default class LongbridgeApp extends View {
     const selected = this.quotes.find((quote) => quote.symbol === this.selectedSymbol);
     const close = (cx) => {
       this.userMenuOpen = false;
-      cx.notify();
+      this.redraw(cx);
     };
     return Popover.new("user-menu")
       .open(this.userMenuOpen)
       .on_open_change((open, cx) => {
         this.userMenuOpen = open;
-        cx.notify();
+        this.redraw(cx);
       })
       .trigger(sessionAvatar(tokens, "user-menu-trigger", "Session menu", this.userMenuOpen))
       .content(
@@ -1267,7 +1359,7 @@ export default class LongbridgeApp extends View {
     if (!symbol || symbol === this.selectedSymbol) return;
     this.selectedSymbol = symbol;
     this.loadSelectedChart(cx);
-    cx.notify();
+    this.redraw(cx);
   }
 
   /** @param {import("gpui-base").Theme} tokens */
@@ -1275,6 +1367,7 @@ export default class LongbridgeApp extends View {
     const quote =
       this.quotes.find((entry) => entry.symbol === this.selectedSymbol) ?? this.quotes[0];
     return panel(tokens)
+      .id("stock-detail-pane")
       .child(
         h_flex()
           .items_center()
@@ -1320,7 +1413,7 @@ export default class LongbridgeApp extends View {
   detailSectionsFor(tokens, quote) {
     const toggle = (name) => (open, cx) => {
       this.detailSections = { ...this.detailSections, [name]: open };
-      cx.notify();
+      this.redraw(cx);
     };
     return accordionGroup("stock-detail-sections")
       .child(
@@ -1401,7 +1494,7 @@ export default class LongbridgeApp extends View {
               .child(
                 action(tokens, "chart-date-picker", end, (_event, cx) => {
                   this.calendarOpen = !this.calendarOpen;
-                  cx.notify();
+                  this.redraw(cx);
                 }, { variant: "ghost", selected: this.calendarOpen }),
               )
               .when(Boolean(this.chartEndDate), (element) =>
@@ -1454,7 +1547,7 @@ export default class LongbridgeApp extends View {
       .rounded(tokens.radius.md)
       .on_mouse_down_out((_event, cx) => {
         this.calendarOpen = false;
-        cx.notify();
+        this.redraw(cx);
       })
       .child(
         calendarGrid(tokens, this.chartCalendar, {
@@ -1465,12 +1558,12 @@ export default class LongbridgeApp extends View {
             // reload is written once, in the handler `init` registered.
             this.chartCalendar.set_value(day);
             this.calendarOpen = false;
-            cx.notify();
+            this.redraw(cx);
           },
           onMonth: (delta, cx) => {
             if (delta < 0) this.chartCalendar.prev_month();
             else this.chartCalendar.next_month();
-            cx.notify();
+            this.redraw(cx);
           },
         }),
       );
@@ -1489,7 +1582,7 @@ export default class LongbridgeApp extends View {
     if (this.chartCalendar.value() !== day) this.chartCalendar.set_value(day);
     this.candleCache.delete(this.selectedSymbol);
     this.loadSelectedChart(cx);
-    cx.notify();
+    this.redraw(cx);
   }
 
   /** @param {import("gpui-base").Theme} tokens */
@@ -1650,7 +1743,7 @@ export default class LongbridgeApp extends View {
                 .child(
                   pager(tokens, "holdings-pages", holdingsPage, holdingsPages, (page, cx) => {
                     this.holdingsPage = page;
-                    cx.notify();
+                    this.redraw(cx);
                   }),
                 ),
             ),
@@ -1672,7 +1765,7 @@ export default class LongbridgeApp extends View {
       .open(this.allocationHelpOpen)
       .on_open_change((open, cx) => {
         this.allocationHelpOpen = open;
-        cx.notify();
+        this.redraw(cx);
       })
       .trigger(
         menuTrigger(
@@ -1868,7 +1961,7 @@ export default class LongbridgeApp extends View {
     ];
     if (window.is_fullscreen()) parts.push("fullscreen");
     else if (window.is_maximized()) parts.push("zoomed");
-    if (this.isNarrow()) parts.push("stacked");
+    if (this.isNarrow()) parts.push("narrow");
     return h_flex()
       .items_center()
       .gap(tokens.spacing.sm)
@@ -1904,7 +1997,7 @@ export default class LongbridgeApp extends View {
       .open(this.diagnosticsOpen)
       .on_open_change((open, cx) => {
         this.diagnosticsOpen = open;
-        cx.notify();
+        this.redraw(cx);
       })
       .trigger(menuTrigger(tokens, "shell-diagnostics-trigger", "Window diagnostics", this.diagnosticsOpen))
       .content(
