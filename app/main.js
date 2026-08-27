@@ -1,34 +1,9 @@
 // A standalone, read-only Longbridge desktop client. OAuth uses direct HTTP,
 // quotes use the documented WebSocket protocol, and no trading API is exposed.
 
-import {
-  InputState,
-  Popover,
-  Scrollbar,
-  Table,
-  TableBody,
-  Tab,
-  Tabs,
-  View,
-  ViewHandle,
-  child_view,
-  clipboard,
-  div,
-  fps_monitor,
-  h_flex,
-  h_resizable,
-  image,
-  log,
-  open_url,
-  resizable_panel,
-  set_theme,
-  spawn,
-  text,
-  timer,
-  v_flex,
-  v_virtual_list,
-  with_cx,
-} from "gpui";
+import { View, ViewHandle, div, image, log, text, with_cx } from "gpui";
+import { InputState, Popover, Scrollbar, Table, TableBody, Tab, Tabs, h_flex, h_resizable, resizable_panel, set_theme, v_flex, v_virtual_list } from "gpui-base";
+import { fps_monitor } from "gpui-fps";
 import { readFile } from "fs/promises";
 import {
   accessToken,
@@ -148,8 +123,9 @@ function storedTokens() {
 }
 
 export default class LongbridgeApp extends View {
-  init() {
-    spawn(async () => {
+  /** @param {unknown} _props @param {import("gpui").AsyncContext} cx */
+  init(_props, cx) {
+    cx.spawn(async () => {
       themes = JSON.parse(await readFile("theme.json", "utf8"));
       set_theme(themes.dark);
       this.chartThemeRevision += 1;
@@ -182,7 +158,7 @@ export default class LongbridgeApp extends View {
     this.chartThemeRevision = 0;
     this.initInteractionState();
     this.initPriceChartView();
-    this.clock = timer.every(1_000, (cx) => {
+    this.clock = cx.timer.every(1_000, (cx) => {
       this.lastTick = Date.now();
       this.quotes = sortLikeTerminal(this.quotes, this.lastTick);
       cx.notify();
@@ -275,7 +251,7 @@ export default class LongbridgeApp extends View {
     this.error = "";
     this.streamError = "";
     if (cx) cx.notify();
-    spawn(async () => {
+    cx.spawn(async () => {
       try {
         await this.connect(await accessToken());
       } catch (error) {
@@ -292,7 +268,7 @@ export default class LongbridgeApp extends View {
     this.status = { state: "authorizing" };
     this.error = "";
     cx.notify();
-    spawn(async () => {
+    cx.spawn(async () => {
       try {
         const authorization = await beginDeviceAuthorization();
         this.authorization = authorization;
@@ -301,7 +277,7 @@ export default class LongbridgeApp extends View {
         // would have been waiting for — and it is not an address anyone reads,
         // it is one they approve on.
         try {
-          open_url(authorization.verificationUri);
+          cx.open_url(authorization.verificationUri);
         } catch (error) {
           // The browser is a convenience: "Copy link" is still on the card, and
           // an authorization that cannot be opened here is not one that failed.
@@ -405,10 +381,12 @@ export default class LongbridgeApp extends View {
         }
       }
       this.quotePulse = 0.72;
-      timer.after(160, (cx) => {
-        this.quotePulse = 1;
-        cx.notify();
-      });
+      with_cx((cx) =>
+        cx.timer.after(160, (cx) => {
+          this.quotePulse = 1;
+          cx.notify();
+        }),
+      );
     }
     with_cx((cx) => cx.notify());
   }
@@ -432,26 +410,28 @@ export default class LongbridgeApp extends View {
     const end = new Date();
     const start = new Date(end.getTime() - 14 * 86_400_000);
     const compact = (date) => date.toISOString().slice(0, 10).replaceAll("-", "");
-    spawn(async () => {
-      try {
-        const response = await stream.queryCandlesticks({
-          symbol,
-          startDate: compact(start),
-          endDate: compact(end),
-        });
-        if (generation !== this.chartGeneration || symbol !== this.selectedSymbol) return;
-        this.candleCache.set(symbol, response.candlesticks);
-        this.chartState = { symbol, state: "ready" };
-      } catch (_) {
-        if (generation !== this.chartGeneration || symbol !== this.selectedSymbol) return;
-        this.chartState = {
-          symbol,
-          state: this.candleCache.has(symbol) ? "ready" : "error",
-        };
-      }
-      this.syncPriceChartView();
-      with_cx((cx) => cx.notify());
-    });
+    with_cx((cx) =>
+      cx.spawn(async (cx) => {
+        try {
+          const response = await stream.queryCandlesticks({
+            symbol,
+            startDate: compact(start),
+            endDate: compact(end),
+          });
+          if (generation !== this.chartGeneration || symbol !== this.selectedSymbol) return;
+          this.candleCache.set(symbol, response.candlesticks);
+          this.chartState = { symbol, state: "ready" };
+        } catch (_) {
+          if (generation !== this.chartGeneration || symbol !== this.selectedSymbol) return;
+          this.chartState = {
+            symbol,
+            state: this.candleCache.has(symbol) ? "ready" : "error",
+          };
+        }
+        this.syncPriceChartView();
+        cx.notify();
+      }),
+    );
   }
 
   /** @param {unknown} status */
@@ -463,16 +443,17 @@ export default class LongbridgeApp extends View {
   }
 
   loadPortfolio() {
-    spawn(async () => {
-      try {
-        await this.refreshPortfolio();
-        this.error = "";
-        with_cx((cx) => cx.notify());
-      } catch (error) {
-        this.error = error instanceof Error ? error.message : String(error);
-        with_cx((cx) => cx.notify());
-      }
-    });
+    with_cx((cx) =>
+      cx.spawn(async (cx) => {
+        try {
+          await this.refreshPortfolio();
+          this.error = "";
+        } catch (error) {
+          this.error = error instanceof Error ? error.message : String(error);
+        }
+        cx.notify();
+      }),
+    );
   }
 
   async refreshPortfolio() {
@@ -517,14 +498,14 @@ export default class LongbridgeApp extends View {
 
   /** @param {string} value @param {string} what */
   copyAuthorization(value, what) {
-    clipboard.write_text(value);
+    with_cx((cx) => cx.write_to_clipboard(value));
     window.push_toast({ title: `${what} copied`, level: "success", id: "authorization-copy" });
   }
 
   /** @param {import("gpui").Context} cx */
   signOut(cx) {
     const stream = this.stream;
-    if (stream) spawn(() => stream.stop());
+    if (stream) cx.spawn(() => stream.stop());
     this.stream = null;
     this.streamGeneration += 1;
     this.connectedToken = null;
@@ -543,7 +524,7 @@ export default class LongbridgeApp extends View {
     this.chartGeneration += 1;
     this.chartState = { symbol: null, state: "idle" };
     this.releasePriceChartView();
-    spawn(async () => {
+    cx.spawn(async () => {
       await clearTokens();
     });
     cx.notify();
@@ -569,7 +550,7 @@ export default class LongbridgeApp extends View {
       .child(fps_monitor().anchor("bottom_left"));
   }
 
-  /** @param {import("gpui").Theme} tokens */
+  /** @param {import("gpui-base").Theme} tokens */
   header(tokens) {
     return h_flex()
       .items_center()
@@ -668,7 +649,7 @@ export default class LongbridgeApp extends View {
       );
   }
 
-  /** @param {import("gpui").Theme} tokens */
+  /** @param {import("gpui-base").Theme} tokens */
   workspace(tokens) {
     // Each page owns its own scrolling. Watchlist is a master-detail layout
     // whose panes scroll independently, and Portfolio is one long column — a
@@ -696,7 +677,7 @@ export default class LongbridgeApp extends View {
       .child(page.flex_1().min_h(0).transition("opacity", { duration: 160, easing: "ease-out" }));
   }
 
-  /** @param {import("gpui").Theme} tokens */
+  /** @param {import("gpui-base").Theme} tokens */
   loginGate(tokens) {
     return h_flex()
       .flex_1()
@@ -706,7 +687,7 @@ export default class LongbridgeApp extends View {
       .child(v_flex().w(400).child(this.authPanel(tokens)));
   }
 
-  /** @param {import("gpui").Theme} tokens */
+  /** @param {import("gpui-base").Theme} tokens */
   watchlistPage(tokens) {
     // The divider is base's, and so is the position it settles at: the group
     // files its panel sizes under its own id, which is why that id is a written
@@ -733,7 +714,7 @@ export default class LongbridgeApp extends View {
       );
   }
 
-  /** @param {import("gpui").Theme} tokens */
+  /** @param {import("gpui-base").Theme} tokens */
   watchlist(tokens) {
     const status = streamStatusSummary({ state: this.status.state, delay: this.status.delay });
     const rows = filterRows(this.quotes, this.watchlistQuery, ["code", "name", "symbol"]);
@@ -789,7 +770,7 @@ export default class LongbridgeApp extends View {
    * which is exactly what it is for, so a screen reader can say "row 5 of 200"
    * for a window onto a long list. It counts the header, which is row one.
    *
-   * @param {import("gpui").Theme} tokens
+   * @param {import("gpui-base").Theme} tokens
    * @param {string} id
    * @param {string} name
    * @param {any[]} rows
@@ -845,7 +826,7 @@ export default class LongbridgeApp extends View {
    * ordinary buttons carrying the menu-item role, because the runtime binds no
    * menu component to build them from.
    *
-   * @param {import("gpui").Theme} tokens
+   * @param {import("gpui-base").Theme} tokens
    */
   userMenu(tokens) {
     const selected = this.quotes.find((quote) => quote.symbol === this.selectedSymbol);
@@ -935,7 +916,7 @@ export default class LongbridgeApp extends View {
     cx.notify();
   }
 
-  /** @param {import("gpui").Theme} tokens */
+  /** @param {import("gpui-base").Theme} tokens */
   stockDetail(tokens) {
     const quote =
       this.quotes.find((entry) => entry.symbol === this.selectedSymbol) ?? this.quotes[0];
@@ -961,7 +942,7 @@ export default class LongbridgeApp extends View {
                 v_flex()
                   .px(tokens.spacing.lg)
                   .pb(tokens.spacing.lg)
-                  .child(child_view(this.priceChart)),
+                  .child(this.priceChart),
               )
           : emptyPanel(
               tokens,
@@ -971,7 +952,7 @@ export default class LongbridgeApp extends View {
       );
   }
 
-  /** @param {import("gpui").Theme} tokens */
+  /** @param {import("gpui-base").Theme} tokens */
   portfolioPage(tokens) {
     const balance =
       this.account && typeof this.account === "object"
@@ -1119,7 +1100,7 @@ export default class LongbridgeApp extends View {
    * shape from the Watchlist menu: a card of explanatory text rather than a
    * list of commands, so it announces itself as a group and not a menu.
    *
-   * @param {import("gpui").Theme} tokens
+   * @param {import("gpui-base").Theme} tokens
    * @param {ReturnType<import("./portfolio.js").allocationInUsd>} allocation
    */
   allocationHelp(tokens, allocation) {
@@ -1169,7 +1150,7 @@ export default class LongbridgeApp extends View {
    * a device code is live that one thing is the code itself, which is why it
    * is the largest text in the application.
    *
-   * @param {import("gpui").Theme} tokens
+   * @param {import("gpui-base").Theme} tokens
    */
   authPanel(tokens) {
     const device = this.authorization;
@@ -1242,7 +1223,7 @@ export default class LongbridgeApp extends View {
    * The live device-code step. Three numbered places, and the code between
    * them as the largest thing on the screen.
    *
-   * @param {import("gpui").Theme} tokens
+   * @param {import("gpui-base").Theme} tokens
    * @param {{ userCode: string, verificationUri: string }} device
    */
   deviceCode(tokens, device) {
@@ -1276,7 +1257,7 @@ export default class LongbridgeApp extends View {
       );
   }
 
-  /** @param {import("gpui").Theme} tokens */
+  /** @param {import("gpui-base").Theme} tokens */
   footer(tokens) {
     const updated = this.quotes.reduce((latest, quote) => Math.max(latest, quote.receivedAt), 0);
     return h_flex()

@@ -1,5 +1,5 @@
-import { Button, child_view, h_flex, text, v_flex } from "gpui";
-
+import { text } from "gpui";
+import { Button, h_flex, v_flex } from "gpui-base";
 import LongbridgeApp from "./main.js";
 
 /** @param {string} iso @param {number} close */
@@ -65,6 +65,6 @@ export default class RetainedPriceChartProbe extends LongbridgeApp {
               .child(text("Ready")),
           ),
       )
-      .child(child_view(this.priceChart));
+      .child(this.priceChart);
   }
 }

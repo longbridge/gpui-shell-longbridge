@@ -2611,7 +2611,7 @@ dependencies = [
 [[package]]
 name = "gpui-base"
 version = "0.5.2"
-source = "git+https://github.com/longbridge/gpui-component.git#9890a77c2d427f05b2512f05ddc6cce84686f9a6"
+source = "git+https://github.com/longbridge/gpui-component.git?branch=improve-shell#9e81634947f3b9c5da1153dc55e3707d3faf39af"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -2643,7 +2643,7 @@ dependencies = [
 [[package]]
 name = "gpui-fps"
 version = "0.1.0"
-source = "git+https://github.com/longbridge/gpui-component.git#9890a77c2d427f05b2512f05ddc6cce84686f9a6"
+source = "git+https://github.com/longbridge/gpui-component.git?branch=improve-shell#9e81634947f3b9c5da1153dc55e3707d3faf39af"
 dependencies = [
  "gpui",
  "instant",
@@ -2656,7 +2656,7 @@ dependencies = [
 [[package]]
 name = "gpui-shell"
 version = "0.1.0"
-source = "git+https://github.com/longbridge/gpui-component.git#9890a77c2d427f05b2512f05ddc6cce84686f9a6"
+source = "git+https://github.com/longbridge/gpui-component.git?branch=improve-shell#9e81634947f3b9c5da1153dc55e3707d3faf39af"
 dependencies = [
  "anyhow",
  "async-channel",

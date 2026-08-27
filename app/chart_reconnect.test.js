@@ -1,5 +1,4 @@
 import { text } from "gpui";
-
 import LongbridgeApp from "./main.js";
 
 export default class ChartReconnectProbe extends LongbridgeApp {

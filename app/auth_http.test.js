@@ -1,6 +1,7 @@
 // A network-free shell contract for the real auth.js and http.js modules.
 
-import { View, sleep, spawn, text, v_flex, with_cx } from "gpui";
+import { View, text, with_cx } from "gpui";
+import { v_flex } from "gpui-base";
 import { beginDeviceAuthorization, formBody, pollDeviceAuthorization } from "./auth.js";
 import { get, socketOtp } from "./http.js";
 
@@ -208,11 +209,11 @@ async function runVectors() {
 }
 
 export default class AuthHttpContract extends View {
-  init() {
+  init(_props, cx) {
     this.result = "pending";
-    spawn(async () => {
+    cx.spawn(async () => {
       try {
-        await sleep(0);
+        await cx.sleep(0);
         await runVectors();
         this.result = "ok";
       } catch (error) {

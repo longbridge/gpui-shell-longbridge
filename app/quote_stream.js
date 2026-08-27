@@ -1,6 +1,7 @@
 // Quote-only Longbridge WebSocket session.  Transport and protobuf framing are
 // intentionally separated: this module never exposes a trading command.
-import { timer } from "gpui";
+
+import { with_cx } from "gpui";
 import { WebSocket } from "websocket";
 import { API_LANGUAGE, socketOtp } from "./http.js";
 
@@ -56,8 +57,8 @@ function requirePositiveInteger(value, name) {
 
 function defaultTimers() {
   return {
-    after: (delay, callback) => timer.after(delay, callback),
-    every: (delay, callback) => timer.every(delay, callback),
+    after: (delay, callback) => with_cx((cx) => cx.timer.after(delay, callback)),
+    every: (delay, callback) => with_cx((cx) => cx.timer.every(delay, callback)),
   };
 }
 

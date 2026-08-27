@@ -1,5 +1,5 @@
-import { Button, child_view, text, v_flex } from "gpui";
-
+import { text } from "gpui";
+import { Button, v_flex } from "gpui-base";
 import LongbridgeApp from "./main.js";
 
 /** @param {string} symbol @param {string} last @param {bigint} sequence */
@@ -63,6 +63,6 @@ export default class PriceChartUpdateProbe extends LongbridgeApp {
           .on_click(() => this.receiveQuote(quote("MSFT.US", "201", 2n)))
           .child(text(`Root renders: ${this.renders}`)),
       )
-      .child(child_view(this.priceChart));
+      .child(this.priceChart);
   }
 }

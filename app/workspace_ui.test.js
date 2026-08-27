@@ -1,4 +1,5 @@
-import { text, v_flex } from "gpui";
+import { text } from "gpui";
+import { v_flex } from "gpui-base";
 import LongbridgeApp from "./main.js";
 
 function quote(index) {

@@ -48,8 +48,11 @@ and rendering stay in JavaScript.
 
 The host depends on `gpui-shell` from
 `../gpui-component/crates/shell`. `gpui-shell` builds on GPUI and the lower-level
-primitives in `gpui-component`, then exposes a constrained ES-module API. The
-application never imports Rust implementation details.
+primitives in `gpui-base`, then exposes a constrained ES-module API — one module
+per crate that provides the capability, so `"gpui"` holds GPUI's own elements and
+what the runtime adds, `"gpui-base"` holds base's layout helpers, components and
+theme, and `"gpui-fps"` holds its performance overlay. The application never
+imports Rust implementation details.
 
 ### Render boundary
 

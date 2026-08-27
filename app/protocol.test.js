@@ -1,6 +1,7 @@
 // This is an application-module test vector, not a Node test.  The Rust test
 // loads it through gpui-shell's QuickJS runtime, so the `zlib` import exercises
 // the same standard-runtime surface as the real application.
+
 import { View } from "gpui";
 import { gzipSync } from "zlib";
 import {
