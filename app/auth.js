@@ -2,6 +2,8 @@
 // dynamic client registration: register this application once out-of-band and
 // replace CLIENT_ID with that public identifier before distributing it.
 
+import { context } from "./context.js";
+
 /**
  * The one, fixed public-client identifier for this application.
  *
