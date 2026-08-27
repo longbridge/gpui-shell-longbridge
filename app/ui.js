@@ -1,44 +1,49 @@
 // Compact presentation primitives for the read-only terminal. Every visual
 // decision resolves from the call-scoped semantic theme.
 
+import { Background, PathBuilder, div, svg } from "gpui";
 import {
-  Background,
+  Accordion,
+  AccordionHeader,
+  AccordionItem,
+  AccordionPanel,
+  AccordionTrigger,
+  Avatar,
+  AvatarFallback,
+  AvatarImage,
   Button,
   Input,
   Link,
-  PathBuilder,
+  Pagination,
   Table,
   TableBody,
   TableCell,
   TableHead,
   TableHeader,
   TableRow,
-  div,
   h_flex,
-  paint_path,
-  svg,
-  text,
+  pagination_items,
   v_flex,
-} from "gpui";
+} from "gpui-base";
 import { formatCompactNumber, quoteFreshness, tradeStatusLabel } from "./market.js";
 import { foldAllocationSlices } from "./portfolio.js";
 
-/** @param {import("gpui").Theme} tokens @param {string | number} value @param {number} [size] */
+/** @param {import("gpui-base").Theme} tokens @param {string | number} value @param {number} [size] */
 export const label = (tokens, value, size = 12) =>
-  text(value).text_size(size).line_height(1.25).text_color(tokens.foreground);
+  div().child(String(value)).text_size(size).line_height(1.25).text_color(tokens.foreground);
 
-/** @param {import("gpui").Theme} tokens @param {string | number} value @param {number} [size] */
+/** @param {import("gpui-base").Theme} tokens @param {string | number} value @param {number} [size] */
 export const numeric = (tokens, value, size = 12) =>
   label(tokens, value, size).font_family("monospace");
 
-/** @param {import("gpui").Theme} tokens @param {string | number} value */
+/** @param {import("gpui-base").Theme} tokens @param {string | number} value */
 export const muted = (tokens, value) =>
-  text(value).text_size(11).line_height(1.25).text_color(tokens.muted_foreground);
+  div().child(String(value)).text_size(11).line_height(1.25).text_color(tokens.muted_foreground);
 
-/** @param {import("gpui").Theme} tokens */
+/** @param {import("gpui-base").Theme} tokens */
 export const rule = (tokens) => div().w_full().h(1).bg(tokens.border);
 
-/** @param {import("gpui").Theme} tokens */
+/** @param {import("gpui-base").Theme} tokens */
 export const panel = (tokens) =>
   v_flex()
     .bg(tokens.surface)
@@ -48,7 +53,7 @@ export const panel = (tokens) =>
     .overflow_hidden();
 
 /**
- * @param {import("gpui").Theme} tokens
+ * @param {import("gpui-base").Theme} tokens
  * @param {string} id
  * @param {string} caption
  * @param {(event: import("gpui").ClickEvent, cx: import("gpui").Context) => void} onClick
@@ -113,11 +118,11 @@ export function action(tokens, id, caption, onClick, options = {}) {
       }),
     )
     .when(disabled, (element) => element.opacity(0.42))
-    .child(text(caption));
+    .child(caption);
 }
 
 /**
- * @param {import("gpui").Theme} tokens
+ * @param {import("gpui-base").Theme} tokens
  * @param {(event: import("gpui").ClickEvent, cx: import("gpui").Context) => void} onClick
  */
 export function themeButton(tokens, onClick) {
@@ -146,7 +151,7 @@ export function themeButton(tokens, onClick) {
     );
 }
 
-/** @param {import("gpui").Theme} tokens @param {string} id @param {string} caption @param {string} url */
+/** @param {import("gpui-base").Theme} tokens @param {string} id @param {string} caption @param {string} url */
 export function externalLink(tokens, id, caption, url) {
   return Link.new(id)
     .href(url)
@@ -158,10 +163,10 @@ export function externalLink(tokens, id, caption, url) {
     .focus((style) =>
       style.bg(tokens.accent).text_color(tokens.accent_foreground).border_color(tokens.ring),
     )
-    .child(text(caption));
+    .child(caption);
 }
 
-/** @param {import("gpui").Theme} tokens @param {string} value */
+/** @param {import("gpui-base").Theme} tokens @param {string} value */
 export function connectionPill(tokens, value) {
   const active = value === "connected";
   const waiting =
@@ -226,7 +231,7 @@ export const TABLE_HEADER_HEIGHT = 24;
  * A table's header row group. `TableHead` carries a one-based column index
  * because a cell that does not know its column announces itself out of place.
  *
- * @param {import("gpui").Theme} tokens
+ * @param {import("gpui-base").Theme} tokens
  * @param {string} id
  * @param {{ title: string, size: (el: import("gpui").Element) => import("gpui").Element }[]} columns
  */
@@ -273,7 +278,7 @@ const WATCHLIST_COLUMNS = [
   { title: "Session", size: (el) => el.flex_1().justify_end() },
 ];
 
-/** @param {import("gpui").Theme} tokens */
+/** @param {import("gpui-base").Theme} tokens */
 export function watchlistHeader(tokens) {
   return tableHeaderRow(tokens, "watchlist", WATCHLIST_COLUMNS);
 }
@@ -286,7 +291,7 @@ export function watchlistHeader(tokens) {
  * `Button` per row carrying the menu-item role — which is what makes it a menu
  * to a screen reader and not only to a reader of this file.
  *
- * @param {import("gpui").Theme} tokens
+ * @param {import("gpui-base").Theme} tokens
  * @param {string} id
  * @param {string} caption
  * @param {(event: import("gpui").ClickEvent, cx: import("gpui").Context) => void} onClick
@@ -321,7 +326,7 @@ export function menuItem(tokens, id, caption, onClick, options = {}) {
  * The surface a `Popover` opens. `role` separates the two uses: a list of
  * commands announces itself as a menu, an explanatory card as a plain group.
  *
- * @param {import("gpui").Theme} tokens
+ * @param {import("gpui-base").Theme} tokens
  * @param {{ width?: number, menu?: boolean }} [options]
  */
 export function popoverSurface(tokens, options = {}) {
@@ -345,8 +350,8 @@ export function popoverSurface(tokens, options = {}) {
  * lives on the view — `InputState.new()` needs a live host call and belongs in
  * `init`, never in a render.
  *
- * @param {import("gpui").Theme} tokens
- * @param {import("gpui").InputStateHandle} state
+ * @param {import("gpui-base").Theme} tokens
+ * @param {import("gpui-base").InputState} state
  * @param {number} [width]
  */
 export function filterInput(tokens, state, width = 180) {
@@ -379,7 +384,7 @@ export function filterInput(tokens, state, width = 180) {
  * still reads as open. The border is always there and only changes color, so
  * the ring never moves the icon.
  *
- * @param {import("gpui").Theme} tokens
+ * @param {import("gpui-base").Theme} tokens
  * @param {string} id
  * @param {string} hint
  * @param {boolean} [open]
@@ -425,7 +430,7 @@ export const QUOTE_ROW_HEIGHT = 44;
  * is reported separately as the virtual list's stable instrument key, not this
  * transient layout index.
  *
- * @param {import("gpui").Theme} tokens
+ * @param {import("gpui-base").Theme} tokens
  * @param {LongbridgeQuoteRow} quote
  * @param {boolean} selected
  * @param {number} rowIndex
@@ -457,11 +462,20 @@ export function quoteRow(tokens, quote, selected, rowIndex = 0, now = Date.now()
       cell(1, (element) =>
         element
           .flex()
-          .flex_col()
+          .items_center()
           .w("31%")
-          .gap(tokens.spacing.xxs)
-          .child(label(tokens, quote.code))
-          .child(muted(tokens, quote.name)),
+          .gap(tokens.spacing.sm)
+          // The badge is an `Avatar` with only its fallback filled: there is no
+          // per-market artwork in the application directory, and an image that
+          // never resolves is the case the fallback exists for.
+          .child(marketAvatar(tokens, quote.market))
+          .child(
+            v_flex()
+              .min_w(0)
+              .gap(tokens.spacing.xxs)
+              .child(label(tokens, quote.code))
+              .child(muted(tokens, quote.name)),
+          ),
       ),
     )
     .child(
@@ -535,7 +549,7 @@ function metricRows(tokens, entries) {
     );
 }
 
-/** @param {import("gpui").Theme} tokens @param {LongbridgeQuoteRow} quote @param {number} [now] */
+/** @param {import("gpui-base").Theme} tokens @param {LongbridgeQuoteRow} quote @param {number} [now] */
 export function quoteDetail(tokens, quote, now = Date.now(), pulseOpacity = 1) {
   const tone = quoteTone(tokens, quote.change);
   return v_flex()
@@ -638,7 +652,7 @@ function donutSlice(tokens, slice, index, total, count) {
     const angle = start + ((end - start) * step) / steps;
     points.push([`${50 + Math.cos(angle) * 29}%`, `${50 + Math.sin(angle) * 29}%`]);
   }
-  return paint_path(
+  return window.paint_path(
     PathBuilder.fill().add_polygon(points).build(),
     Background.solid(allocationColor(tokens, slice, index)),
   )
@@ -646,7 +660,7 @@ function donutSlice(tokens, slice, index, total, count) {
     .inset_0();
 }
 
-/** @param {import("gpui").Theme} tokens @param {ReturnType<import("./portfolio.js").allocationInUsd>} group */
+/** @param {import("gpui-base").Theme} tokens @param {ReturnType<import("./portfolio.js").allocationInUsd>} group */
 export function allocationChart(tokens, group) {
   let offset = 0;
   const slices = foldAllocationSlices(group).map((slice) => {
@@ -731,7 +745,7 @@ export function allocationChart(tokens, group) {
     );
 }
 
-/** @param {import("gpui").Theme} tokens @param {{ title: string, value: string }[]} entries */
+/** @param {import("gpui-base").Theme} tokens @param {{ title: string, value: string }[]} entries */
 export function detailGrid(tokens, entries) {
   return v_flex()
     .gap(tokens.spacing.sm)
@@ -752,7 +766,7 @@ function pnlTone(tokens, value) {
 }
 
 /**
- * @param {import("gpui").Theme} tokens
+ * @param {import("gpui-base").Theme} tokens
  * @param {{ netAssets: string, totalCash: string, buyingPower: string, currency: string }} account
  * @param {{ currency: string, todayPnl: string, todayPnlValue: number, totalPnl: string, totalPnlValue: number }[]} summaries
  */
@@ -804,7 +818,7 @@ export function portfolioSummary(tokens, account, summaries) {
     .child(metric("Buying power", `${account.buyingPower} ${account.currency}`));
 }
 
-/** @param {import("gpui").Theme} tokens */
+/** @param {import("gpui-base").Theme} tokens */
 const HOLDINGS_COLUMNS = [
   { title: "Instrument", size: (el) => el.w("26%") },
   { title: "Quantity", size: (el) => el.w("12%").justify_end() },
@@ -827,7 +841,7 @@ export function holdingsHeader(tokens) {
 export const HOLDING_ROW_HEIGHT = 42;
 
 /**
- * @param {import("gpui").Theme} tokens
+ * @param {import("gpui-base").Theme} tokens
  * @param {LongbridgeHoldingRow} holding
  * @param {number} rowIndex
  */
@@ -905,7 +919,7 @@ export function holdingRow(tokens, holding, rowIndex = 0) {
  * to be copied off a screen and typed into a phone is worth the character gaps
  * more than most text is.
  *
- * @param {import("gpui").Theme} tokens
+ * @param {import("gpui-base").Theme} tokens
  * @param {string} code
  */
 export function deviceCodeBox(tokens, code) {
@@ -929,7 +943,7 @@ export function deviceCodeBox(tokens, code) {
  * approve — and the screen says so rather than leaving it to be inferred from
  * the order of the controls.
  *
- * @param {import("gpui").Theme} tokens
+ * @param {import("gpui-base").Theme} tokens
  * @param {number} index
  * @param {string} title
  */
@@ -951,7 +965,7 @@ export function step(tokens, index, title) {
     .child(muted(tokens, title));
 }
 
-/** @param {import("gpui").Theme} tokens @param {string} title @param {string} detail */
+/** @param {import("gpui-base").Theme} tokens @param {string} title @param {string} detail */
 export function emptyPanel(tokens, title, detail) {
   return v_flex()
     .items_center()
@@ -963,7 +977,7 @@ export function emptyPanel(tokens, title, detail) {
     .child(muted(tokens, detail));
 }
 
-/** @param {import("gpui").Theme} tokens @param {string} value */
+/** @param {import("gpui-base").Theme} tokens @param {string} value */
 export function errorMessage(tokens, value) {
   return h_flex()
     .w_full()
@@ -975,7 +989,8 @@ export function errorMessage(tokens, value) {
     .bg(tokens.surface)
     .child(div().w(3).self_stretch().rounded(tokens.radius.full).bg(tokens.destructive))
     .child(
-      text(value)
+      div()
+        .child(value)
         .flex_1()
         .min_w(0)
         .whitespace_normal()
@@ -983,4 +998,389 @@ export function errorMessage(tokens, value) {
         .line_height(1.35)
         .text_color(tokens.foreground),
     );
+}
+
+// ---------------------------------------------------------------------------
+// Base components the shell bound in
+// https://github.com/longbridge/gpui-component/pull/2847. Each is used where
+// the terminal already had the problem it solves, so what is on screen is also
+// what verifies the binding.
+// ---------------------------------------------------------------------------
+
+/**
+ * The two-letter badge that opens a watchlist row.
+ *
+ * `Avatar` picks between its two slots and draws nothing else, so the circle,
+ * the size and the type are all written here. This one has no image on
+ * purpose: there is no per-market artwork in the application directory, and an
+ * avatar whose image never resolves is exactly the case the fallback exists
+ * for.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {string} market
+ * @param {number} [size]
+ */
+export function marketAvatar(tokens, market, size = 26) {
+  const initials = (market || "--").slice(0, 2).toUpperCase();
+  return Avatar.new()
+    .flex_none()
+    .w(size)
+    .h(size)
+    .rounded_full()
+    .overflow_hidden()
+    .bg(tokens.muted)
+    .fallback(
+      AvatarFallback.new()
+        .size_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_size(9)
+        .line_height(1)
+        .font_weight(600)
+        .text_color(tokens.muted_foreground)
+        .child(initials),
+    );
+}
+
+/**
+ * The session menu's trigger: the product mark in a circle, with initials
+ * behind it.
+ *
+ * The counterpart of `marketAvatar` — this one does have an image, so between
+ * the two both halves of the slot choice are on screen at once. The theme
+ * decides which mark, the same way the header's does.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {string} id
+ * @param {string} hint
+ * @param {boolean} [open]
+ */
+export function sessionAvatar(tokens, id, hint, open = false) {
+  const mark = tokens.appearance === "dark" ? "assets/logo-dark.svg" : "assets/logo-light.svg";
+  return Button.new(id)
+    .accessibility_label(hint)
+    .tooltip(hint)
+    .selected(open)
+    .flex()
+    .items_center()
+    .justify_center()
+    .w(26)
+    .h(26)
+    .rounded_full()
+    .border(1)
+    .border_color(open ? tokens.ring : tokens.border)
+    .bg(tokens.surface)
+    .hover((style) => style.border_color(tokens.ring))
+    .focus((style) => style.border_color(tokens.ring))
+    .child(
+      Avatar.new()
+        .w(20)
+        .h(20)
+        .rounded_full()
+        .overflow_hidden()
+        .image(AvatarImage.new(mark).size_full())
+        .fallback(
+          AvatarFallback.new()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_size(9)
+            .font_weight(600)
+            .text_color(tokens.muted_foreground)
+            .child("LB"),
+        ),
+    );
+}
+
+/**
+ * One collapsible section of the stock-detail pane.
+ *
+ * None of the five accordion parts draws anything — they carry the group, the
+ * heading and its level, the button and its expanded state, and the region
+ * that button controls — so the chevron, the rule and the padding are all
+ * written here.
+ *
+ * `keepMounted` is not decoration either: the price chart is a retained child
+ * view, and a panel that left the tree on every collapse would tear it down
+ * and rebuild it.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {{
+ *   id: string,
+ *   title: string,
+ *   detail?: string,
+ *   open: boolean,
+ *   level?: number,
+ *   keepMounted?: boolean,
+ *   onToggle: (open: boolean, cx: import("gpui").Context) => void,
+ *   body: import("gpui").Element,
+ * }} options
+ */
+export function accordionSection(tokens, options) {
+  const { id, title, detail = "", open, level = 3, keepMounted = false, onToggle, body } = options;
+  return AccordionItem.new()
+    .open(open)
+    .w_full()
+    .header(
+      AccordionHeader.new(
+        AccordionTrigger.new(`${id}-trigger`)
+          .on_change(onToggle)
+          .flex()
+          .w_full()
+          .items_center()
+          .justify_between()
+          .gap(tokens.spacing.sm)
+          .px(tokens.spacing.md)
+          .py(tokens.spacing.sm)
+          .hover((style) => style.bg(tokens.accent))
+          .focus((style) => style.bg(tokens.accent))
+          .child(
+            h_flex()
+              .items_center()
+              .gap(tokens.spacing.sm)
+              .child(
+                div()
+                  .w(10)
+                  .text_size(9)
+                  .line_height(1)
+                  .text_color(tokens.muted_foreground)
+                  .child(open ? "▾" : "▸"),
+              )
+              .child(label(tokens, title)),
+          )
+          .when(Boolean(detail), (element) => element.child(muted(tokens, detail))),
+      ).aria_level(level),
+    )
+    .panel(
+      AccordionPanel.new()
+        .keep_mounted(keepMounted)
+        .w_full()
+        .when(open, (element) => element.child(rule(tokens)))
+        .child(body),
+    );
+}
+
+/**
+ * The accordion group the sections above sit in.
+ *
+ * @param {string} id
+ */
+export function accordionGroup(id) {
+  return Accordion.new(id).flex().flex_col().w_full();
+}
+
+/**
+ * A page control for a list that is longer than its panel.
+ *
+ * The buttons are the script's; what base contributes is the layout —
+ * `pagination_items` decides which numbers are shown and where the runs
+ * collapse. An ellipsis names the range it stands for, so it is drawn as a
+ * jump to the middle of that range rather than as inert type.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {string} id
+ * @param {number} page One-based.
+ * @param {number} pages
+ * @param {(page: number, cx: import("gpui").Context) => void} onSelect
+ */
+export function pager(tokens, id, page, pages, onSelect) {
+  const entries = pagination_items(page, pages);
+  const cell = (key) =>
+    Button.new(`${id}-${key}`)
+      .flex()
+      .items_center()
+      .justify_center()
+      .min_w(24)
+      .h(24)
+      .px(tokens.spacing.xs)
+      .rounded(tokens.radius.sm)
+      .border(1)
+      .text_size(11)
+      .line_height(1);
+  return Pagination.new(id)
+    .accessibility_label(`Page ${page} of ${pages}`)
+    .flex()
+    .items_center()
+    .justify_center()
+    .gap(tokens.spacing.xs)
+    .children(
+      entries.map((entry) => {
+        if (entry.ellipsis) {
+          const [first, last] = entry.ellipsis;
+          const middle = first + Math.floor((last - first) / 2);
+          return cell(`gap-${first}-${last}`)
+            .accessibility_label(`Pages ${first} to ${last}`)
+            .tooltip(`Jump to page ${middle}`)
+            .border_color(tokens.surface)
+            .bg(tokens.surface)
+            .text_color(tokens.muted_foreground)
+            .hover((style) => style.bg(tokens.accent).text_color(tokens.accent_foreground))
+            .on_click((_event, cx) => onSelect(middle, cx))
+            .child("…");
+        }
+        const current = entry.page === page;
+        return cell(`page-${entry.page}`)
+          .selected(current)
+          .accessibility_label(`Page ${entry.page}`)
+          .border_color(current ? tokens.ring : tokens.border)
+          .bg(current ? tokens.secondary : tokens.surface)
+          .text_color(current ? tokens.foreground : tokens.muted_foreground)
+          .font_weight(current ? 600 : 400)
+          .hover((style) => style.bg(tokens.accent).text_color(tokens.accent_foreground))
+          .focus((style) => style.border_color(tokens.ring))
+          .on_click((_event, cx) => onSelect(entry.page, cx))
+          .child(String(entry.page));
+      }),
+    );
+}
+
+/** The weekday headings the grid's columns line up under. */
+const WEEKDAYS = Object.freeze(["S", "M", "T", "W", "T", "F", "S"]);
+
+/**
+ * A month grid drawn from a retained `CalendarState`.
+ *
+ * Base's `Calendar` element is not bound — it would cross into JavaScript once
+ * per cell from inside the layout pass — so the state answers the grid and the
+ * cells are ordinary buttons. `month_days()` is the part a script cannot work
+ * out for itself: which days fall in which week, and which of them belong to
+ * the neighbouring months.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {import("gpui-base").CalendarStateHandle} calendar
+ * @param {{
+ *   selected: string | null,
+ *   latest: string,
+ *   onPick: (day: string, cx: import("gpui").Context) => void,
+ *   onMonth: (delta: number, cx: import("gpui").Context) => void,
+ * }} options
+ */
+export function calendarGrid(tokens, calendar, options) {
+  const { selected, latest, onPick, onMonth } = options;
+  const weeks = calendar.month_days()[0] ?? [];
+  const year = calendar.year();
+  const month = calendar.month();
+  const monthLabel = `${year}-${String(month).padStart(2, "0")}`;
+  const inMonth = (day) => day.slice(0, 7) === monthLabel;
+  const step = (id, caption, delta) =>
+    Button.new(id)
+      .accessibility_label(caption)
+      .tooltip(caption)
+      .flex()
+      .items_center()
+      .justify_center()
+      .w(22)
+      .h(22)
+      .rounded(tokens.radius.sm)
+      .border(1)
+      .border_color(tokens.border)
+      .bg(tokens.surface)
+      .text_size(11)
+      .text_color(tokens.muted_foreground)
+      .hover((style) => style.bg(tokens.accent).text_color(tokens.accent_foreground))
+      .focus((style) => style.border_color(tokens.ring))
+      .on_click((_event, cx) => onMonth(delta, cx))
+      .child(delta < 0 ? "‹" : "›");
+
+  return v_flex()
+    .gap(tokens.spacing.xs)
+    .child(
+      h_flex()
+        .items_center()
+        .justify_between()
+        .child(step("calendar-prev", "Previous month", -1))
+        .child(label(tokens, monthLabel))
+        .child(step("calendar-next", "Next month", 1)),
+    )
+    .child(
+      h_flex()
+        .w_full()
+        .children(
+          WEEKDAYS.map((day, index) =>
+            div()
+              .flex()
+              .flex_1()
+              .justify_center()
+              .text_size(9)
+              .line_height(1.6)
+              .text_color(tokens.muted_foreground)
+              .id(`calendar-weekday-${index}`)
+              .child(day),
+          ),
+        ),
+    )
+    .children(
+      weeks.map((week, weekIndex) =>
+        h_flex()
+          .w_full()
+          .gap(1)
+          .id(`calendar-week-${weekIndex}`)
+          .children(
+            week.map((day) => {
+              const current = day === selected;
+              const future = day > latest;
+              return Button.new(`calendar-day-${day}`)
+                .selected(current)
+                .disabled(future)
+                .accessibility_label(day)
+                .flex()
+                .flex_1()
+                .items_center()
+                .justify_center()
+                .h(22)
+                .rounded(tokens.radius.sm)
+                .text_size(10)
+                .line_height(1)
+                .bg(current ? tokens.primary : tokens.surface)
+                .text_color(
+                  current
+                    ? tokens.primary_foreground
+                    : inMonth(day)
+                      ? tokens.foreground
+                      : tokens.muted_foreground,
+                )
+                .opacity(future ? 0.35 : inMonth(day) ? 1 : 0.6)
+                .when(!future && !current, (element) =>
+                  element.hover((style) =>
+                    style.bg(tokens.accent).text_color(tokens.accent_foreground),
+                  ),
+                )
+                .when(!future, (element) =>
+                  element.on_click((_event, cx) => onPick(day, cx)),
+                )
+                .child(String(Number(day.slice(8))));
+            }),
+          ),
+      ),
+    );
+}
+
+/**
+ * One chord, drawn as a key.
+ *
+ * `KeyEvent.keystroke` arrives already unparsed — the whole chord, spelled the
+ * same on every platform — so this is a label rather than a reconstruction.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {string} keystroke
+ * @param {{ down?: boolean, held?: boolean }} [state] Whether the key is still
+ *   down, and whether the platform is repeating it.
+ */
+export function kbd(tokens, keystroke, state = {}) {
+  const { down = false, held = false } = state;
+  return div()
+    .flex_none()
+    .px(tokens.spacing.xs)
+    .py(1)
+    .rounded(tokens.radius.sm)
+    .border(1)
+    .border_color(down ? tokens.ring : tokens.border)
+    .bg(down ? tokens.accent : tokens.muted)
+    .text_size(9)
+    .line_height(1.4)
+    .font_family("monospace")
+    .text_color(down ? tokens.accent_foreground : tokens.muted_foreground)
+    .child(held ? `${keystroke} (held)` : keystroke);
 }

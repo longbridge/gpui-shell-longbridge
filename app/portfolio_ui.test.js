@@ -1,7 +1,7 @@
 import LongbridgeApp from "./main.js";
 
 export default class PortfolioUiProbe extends LongbridgeApp {
-  init() {
+  init(_props, cx) {
     // A probe replaces init wholesale, so it owes the view the state a render
     // reaches for unconditionally.
     this.initInteractionState();
@@ -43,7 +43,7 @@ export default class PortfolioUiProbe extends LongbridgeApp {
     this.chartState = { symbol: null, state: "idle" };
     this.chartGeneration = 0;
     this.chartThemeRevision = 0;
-    this.initPriceChartView();
+    this.initPriceChartView(cx);
     this.clock = null;
   }
 

@@ -5,7 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-gpui-shell = { git = "https://github.com/longbridge/gpui-component.git" }
+gpui-shell = { git = "https://github.com/longbridge/gpui-component.git", branch = "shell-keyboard-pointer-actions-window" }
 gpui = { git = "https://github.com/zed-industries/zed", features = ["profiler"] }
 gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

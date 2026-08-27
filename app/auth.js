@@ -2,8 +2,6 @@
 // dynamic client registration: register this application once out-of-band and
 // replace CLIENT_ID with that public identifier before distributing it.
 
-import { sleep, store } from "gpui";
-
 /**
  * The one, fixed public-client identifier for this application.
  *
@@ -92,20 +90,27 @@ function tokensFromStore(value) {
 
 /** @returns {Tokens | null} */
 export function loadTokens() {
-  return tokensFromStore(store.get(TOKEN_STORE_KEY));
+  const saved = localStorage.getItem(TOKEN_STORE_KEY);
+  if (saved === null) return null;
+  try {
+    return tokensFromStore(JSON.parse(saved));
+  } catch (_) {
+    // A half-written or hand-edited entry is no session, not a crash.
+    return null;
+  }
 }
 
 /** @param {Tokens} tokens */
 export async function saveTokens(tokens) {
-  store.set(TOKEN_STORE_KEY, tokens);
+  localStorage.setItem(TOKEN_STORE_KEY, JSON.stringify(tokens));
   // Token rotation must be durable before a caller starts using the new access
   // token: otherwise a crash would strand the previous refresh token.
-  await store.flush();
+  await localStorage.flush();
 }
 
 export async function clearTokens() {
-  store.remove(TOKEN_STORE_KEY);
-  await store.flush();
+  localStorage.removeItem(TOKEN_STORE_KEY);
+  await localStorage.flush();
 }
 
 /**
@@ -210,12 +215,16 @@ async function pollDeviceRegion(authorization, clientId, region, fetchImpl, now)
  * `slow_down` increases the interval for subsequent polls as RFC 8628 requires.
  *
  * @param {DeviceAuthorization} authorization
+ * @param {{ cx?: import("gpui").AsyncContext, fetch?: typeof fetch, sleep?: (ms: number) => Promise<void>, now?: () => number, saveTokens?: (tokens: Tokens) => Promise<void> }} [dependencies]
  * @returns {Promise<Tokens>}
  */
 export async function pollDeviceAuthorization(authorization, dependencies = {}) {
   const clientId = configuredClientId();
   const fetchImpl = dependencies.fetch || fetch;
-  const sleepImpl = dependencies.sleep || sleep;
+  // Waiting between polls outlives the call that started it, so the delay comes
+  // from the `AsyncContext` the caller is running under rather than from a
+  // module-level timer this module could not own.
+  const sleepImpl = dependencies.sleep || ((ms) => dependencies.cx.sleep(ms));
   const now = dependencies.now || Date.now;
   const save = dependencies.saveTokens || saveTokens;
   let intervalMs = authorization.intervalMs || DEFAULT_POLL_INTERVAL_MS;

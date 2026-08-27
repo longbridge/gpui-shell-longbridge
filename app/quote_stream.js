@@ -1,6 +1,5 @@
 // Quote-only Longbridge WebSocket session.  Transport and protobuf framing are
 // intentionally separated: this module never exposes a trading command.
-import { timer } from "gpui";
 import { WebSocket } from "websocket";
 import { API_LANGUAGE, socketOtp } from "./http.js";
 
@@ -48,16 +47,32 @@ function requireCallback(value, name) {
   return value ?? (() => {});
 }
 
+/**
+ * @param {import("gpui").AsyncContext | null} cx
+ * @returns {import("gpui").AsyncContext}
+ */
+function requireContext(cx) {
+  if (!cx) throw new TypeError("cx must be supplied unless both timers and getOtp are");
+  return cx;
+}
+
 function requirePositiveInteger(value, name) {
   if (!Number.isInteger(value) || value <= 0)
     throw new TypeError(`${name} must be a positive integer`);
   return value;
 }
 
-function defaultTimers() {
+/**
+ * The reconnect, handshake-timeout and heartbeat schedules, taken from the
+ * context that owns the stream. Timers live on `cx` now, so a stream started
+ * from a task keeps that task's `AsyncContext` for as long as it runs.
+ *
+ * @param {import("gpui").AsyncContext} cx
+ */
+function defaultTimers(cx) {
   return {
-    after: (delay, callback) => timer.after(delay, callback),
-    every: (delay, callback) => timer.every(delay, callback),
+    after: (delay, callback) => cx.timer.after(delay, callback),
+    every: (delay, callback) => cx.timer.every(delay, callback),
   };
 }
 
@@ -84,12 +99,16 @@ function responseError(packet) {
  * Opens a read-only Longbridge quote stream.
  *
  * `WebSocket` and `timers` are optional test seams; ordinary callers only need
- * accessToken, symbols, onQuote, and onStatus.
+ * cx, accessToken, symbols, onQuote, and onStatus. `cx` is the `AsyncContext`
+ * whose timers schedule the reconnect and heartbeat, and whose one-time
+ * password request races its own timeout; a test that supplies both `timers`
+ * and `getOtp` needs no context at all.
  */
 export function createQuoteStream(options) {
   if (!options || typeof options !== "object") throw new TypeError("options must be an object");
   const accessToken = requireString(options.accessToken, "accessToken");
-  const getOtp = options.getOtp ?? socketOtp;
+  const cx = options.cx ?? null;
+  const getOtp = options.getOtp ?? ((token) => socketOtp(requireContext(cx), token));
   if (typeof getOtp !== "function") throw new TypeError("getOtp must be a function");
   const handshakeHeaders = {
     "accept-language": API_LANGUAGE,
@@ -101,7 +120,7 @@ export function createQuoteStream(options) {
   const transport = options.WebSocket ?? WebSocket;
   if (!transport || typeof transport.connect !== "function")
     throw new TypeError("WebSocket.connect must be available");
-  const timers = options.timers ?? defaultTimers();
+  const timers = options.timers ?? defaultTimers(requireContext(cx));
   if (typeof timers.after !== "function" || typeof timers.every !== "function") {
     throw new TypeError("timers must provide after(delay, callback) and every(delay, callback)");
   }

@@ -237,6 +237,14 @@ fn watchlist_row_renders_scannable_market_columns(cx: &mut TestAppContext) {
         );
     }
     assert!(!rendered.contains("text \"US · AAPL\""), "{rendered}");
+    // The row opens with an `Avatar` that has only its fallback filled: there
+    // is no per-market artwork in the application directory, and an image that
+    // never resolves is the case the fallback exists for.
+    assert!(
+        rendered.contains("Avatar") && rendered.contains("AvatarFallback"),
+        "the row must carry a market badge:\n{rendered}"
+    );
+    assert!(!rendered.contains("AvatarImage"), "{rendered}");
     assert!(
         rendered.contains(".font_family[Str(\"monospace\")]"),
         "{rendered}"
@@ -781,4 +789,514 @@ impl gpui::Render for WorkspaceRoot {
     ) -> impl gpui::IntoElement {
         self.0.clone().into_any_element()
     }
+}
+
+#[gpui::test]
+fn stock_details_are_an_accordion_over_a_calendar_backed_chart(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    grant_app_capabilities();
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("detail_ui.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let (_root, view) = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+    context.run_until_parked();
+    let draw_view = view.clone();
+    context.draw(
+        gpui::Point::default(),
+        gpui::size(gpui::px(520.), gpui::px(760.)),
+        move |_, _| draw_view.into_any_element(),
+    );
+    let rendered = context.update(|_, cx| {
+        view.read(cx)
+            .snapshot()
+            .map(gpui_shell::RenderSnapshot::debug_tree)
+            .unwrap_or_default()
+    });
+
+    // All five accordion parts, with the item owning `open` and passing it
+    // down rather than each half being told separately.
+    assert!(
+        rendered.contains("Accordion \"stock-detail-sections\""),
+        "{rendered}"
+    );
+    assert!(rendered.contains("AccordionHeader :aria_level[Number(3.0)]"), "{rendered}");
+    assert!(
+        rendered.contains("AccordionTrigger \"detail-quote-trigger\" :on_change(fn)"),
+        "{rendered}"
+    );
+
+    // The chart's panel stays mounted while the quote's does not: the chart
+    // holds a retained child view, and a panel that left the tree on every
+    // collapse would tear that child down.
+    assert!(
+        rendered.contains("AccordionPanel :keep_mounted[Bool(true)]"),
+        "the chart panel must survive a collapse:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("AccordionPanel :keep_mounted[Bool(false)]"),
+        "{rendered}"
+    );
+
+    // The third section is shut, and says so on the item rather than on each
+    // half of it: the item owns `open` and passes it down.
+    assert!(rendered.contains("text \"About this instrument\""), "{rendered}");
+    assert!(
+        rendered.contains("AccordionItem :open[Bool(false)]"),
+        "the shut section must carry its state on the item:\n{rendered}"
+    );
+
+    // The month grid, read off the retained CalendarState. August 2026 opens
+    // on a Saturday, so its first week is six days of July and the 1st.
+    assert!(
+        rendered.contains("Button \"calendar-day-2026-07-26\"")
+            && rendered.contains("Button \"calendar-day-2026-08-01\""),
+        "the grid must carry the neighbouring month's days:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("Button \"calendar-day-2026-08-14\" :selected[Bool(true)]"),
+        "the chosen day must be the selected cell:\n{rendered}"
+    );
+
+    // The surface is the script's own, so it closes on a press outside; and
+    // the wheel over the chart drives a value rather than a scroll container.
+    assert!(rendered.contains(":on_mouse_down_out(fn)"), "{rendered}");
+    assert!(
+        rendered.contains("div :id[Str(\"price-chart-wheel\")] :on_scroll_wheel(fn)"),
+        "{rendered}"
+    );
+
+    // The retained chart child is still a child, and still not rebuilt here.
+    assert!(rendered.contains("child_view #"), "{rendered}");
+}
+
+#[gpui::test]
+fn holdings_pages_collapse_into_the_layout_base_calculates(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    grant_app_capabilities();
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("holdings_pager.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let (_root, view) = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+    context.run_until_parked();
+    let draw_view = view.clone();
+    context.draw(
+        gpui::Point::default(),
+        gpui::size(gpui::px(900.), gpui::px(900.)),
+        move |_, _| draw_view.into_any_element(),
+    );
+    let rendered = context.update(|_, cx| {
+        view.read(cx)
+            .snapshot()
+            .map(gpui_shell::RenderSnapshot::debug_tree)
+            .unwrap_or_default()
+    });
+
+    // Eighty positions at eight to a page is ten pages, and the probe is on
+    // page five. `pagination_items` keeps the first, the last and a window
+    // around the current one, and collapses the two broken runs.
+    assert!(
+        rendered.contains("Pagination \"holdings-pages\""),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains(":accessibility_label[Str(\"Page 5 of 10\")]"),
+        "{rendered}"
+    );
+    for page in ["1", "3", "4", "5", "6", "7", "10"] {
+        assert!(
+            rendered.contains(&format!("Button \"holdings-pages-page-{page}\"")),
+            "page {page} must be drawn:\n{rendered}"
+        );
+    }
+    let current = rendered
+        .lines()
+        .find(|line| line.contains("Button \"holdings-pages-page-5\""))
+        .expect("the current page button");
+    assert!(
+        current.contains(":selected[Bool(true)]"),
+        "the current page must be the selected button: {current}"
+    );
+    for page in ["2", "8", "9"] {
+        assert!(
+            !rendered.contains(&format!("Button \"holdings-pages-page-{page}\"")),
+            "page {page} must fall inside a gap:\n{rendered}"
+        );
+    }
+    // An ellipsis names the pages it stands for, so it is a jump rather than
+    // inert type.
+    assert!(
+        rendered.contains(":accessibility_label[Str(\"Pages 2 to 2\")]")
+            && rendered.contains(":tooltip[Str(\"Jump to page 8\")]"),
+        "an ellipsis must name the pages it stands for:\n{rendered}"
+    );
+
+    // The table is handed one page, not the whole list. The rows themselves are
+    // not in this tree — a virtual list builds them during layout for the range
+    // on screen — so what says the page took effect is the count it declares.
+    assert!(
+        rendered.contains("v_virtual_list \"holdings-rows\" \u{00d7}8"),
+        "the table must be given exactly one page of rows:\n{rendered}"
+    );
+}
+
+#[gpui::test]
+fn a_bound_chord_reaches_the_action_that_switches_page(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    grant_app_capabilities();
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("keymap_ui.test.js");
+    let fixture_root = fixture.root.clone();
+    let runtime_for_view = runtime.clone();
+    let window = cx.add_window(move |window, cx| {
+        WorkspaceRoot(
+            runtime_for_view
+                .try_load(&fixture_root, window, cx)
+                .expect("load keymap probe"),
+        )
+    });
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+
+    let view = window
+        .root(&mut context)
+        .expect("workspace root")
+        .read_with(&context, |root, cx| {
+            root.0
+                .read(cx)
+                .content()
+                .clone()
+                .downcast::<gpui_shell::ScriptView>()
+                .expect("workspace content is a script view")
+        });
+    let tree = |context: &mut VisualTestContext| {
+        context.update(|_, cx| {
+            view.read(cx)
+                .snapshot()
+                .map(gpui_shell::RenderSnapshot::debug_tree)
+                .unwrap_or_default()
+        })
+    };
+
+    let before = tree(&mut context);
+    assert!(
+        before.contains("div :id[Str(\"workspace-root\")] :key_context[Str(\"Workspace\")]"),
+        "the root must declare the context the keymap is written against:\n{before}"
+    );
+
+    context.simulate_keystrokes("cmd-2");
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    let after = tree(&mut context);
+    assert!(
+        after.contains("workspace-page"),
+        "cmd-2 must reach `workspace::portfolio`:\n{after}"
+    );
+    // A chord the keymap claims becomes an action and is not also delivered as
+    // a key press, so the footer's readout stays empty for it. An unbound one
+    // reaches `on_key_down`, and arrives already unparsed as the whole chord —
+    // spelled `cmd` on every platform, this one included.
+    assert!(!after.contains("text \"cmd-2\""), "{after}");
+    context.simulate_keystrokes("ctrl-alt-y");
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    let typed = tree(&mut context);
+    assert!(
+        typed.contains("text \"ctrl-alt-y\""),
+        "an unbound chord must reach on_key_down:\n{typed}"
+    );
+
+    context.simulate_keystrokes("cmd-1");
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    let back = tree(&mut context);
+    assert!(
+        back.contains("watchlist-workspace"),
+        "cmd-1 must reach `workspace::watchlist`:\n{back}"
+    );
+}
+
+#[gpui::test]
+fn a_short_window_stacks_the_panes_the_wide_one_puts_side_by_side(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    grant_app_capabilities();
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("keymap_ui.test.js");
+    let fixture_root = fixture.root.clone();
+    let runtime_for_view = runtime.clone();
+    let window = cx.add_window(move |window, cx| {
+        WorkspaceRoot(
+            runtime_for_view
+                .try_load(&fixture_root, window, cx)
+                .expect("load keymap probe"),
+        )
+    });
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    context.run_until_parked();
+
+    let view = window
+        .root(&mut context)
+        .expect("workspace root")
+        .read_with(&context, |root, cx| {
+            root.0
+                .read(cx)
+                .content()
+                .clone()
+                .downcast::<gpui_shell::ScriptView>()
+                .expect("workspace content is a script view")
+        });
+    // A resize is not an invalidation — a script view renders when it is
+    // notified, and the runtime reports no resize event — so each measurement
+    // is taken on the first render after one. An unbound chord is the cheapest
+    // notification there is: it reaches `on_key_down` and nothing else.
+    let redraw = |context: &mut VisualTestContext, width: f32, chord: &str| {
+        context.simulate_resize(gpui::size(gpui::px(width), gpui::px(800.)));
+        context.run_until_parked();
+        context.simulate_keystrokes(chord);
+        context.run_until_parked();
+        context.update(|window, cx| window.draw(cx).clear(cx));
+        context.update(|_, cx| {
+            view.read(cx)
+                .snapshot()
+                .map(gpui_shell::RenderSnapshot::debug_tree)
+                .unwrap_or_default()
+        })
+    };
+
+    let wide = redraw(&mut context, 1400., "ctrl-alt-y");
+    assert!(
+        wide.contains("h_resizable \"watchlist-workspace\"")
+            && !wide.contains("watchlist-workspace-stacked"),
+        "a wide window puts the panes side by side:\n{wide}"
+    );
+    assert!(wide.contains("1400\u{d7}800"), "{wide}");
+    assert!(!wide.contains("stacked"), "{wide}");
+
+    let narrow = redraw(&mut context, 700., "ctrl-alt-u");
+    assert!(
+        narrow.contains("v_resizable \"watchlist-workspace-stacked\""),
+        "a short window stacks them:\n{narrow}"
+    );
+    assert!(
+        narrow.contains("700\u{d7}800 \u{b7} 16px/rem \u{b7} light \u{b7} background \u{b7} stacked"),
+        "the readout must follow the window:\n{narrow}"
+    );
+}
+
+#[gpui::test]
+fn escape_puts_away_what_the_workspace_opened_and_then_carries_on(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    grant_app_capabilities();
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("keymap_ui.test.js");
+    let fixture_root = fixture.root.clone();
+    let runtime_for_view = runtime.clone();
+    let window = cx.add_window(move |window, cx| {
+        WorkspaceRoot(
+            runtime_for_view
+                .try_load(&fixture_root, window, cx)
+                .expect("load keymap probe"),
+        )
+    });
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+
+    let view = window
+        .root(&mut context)
+        .expect("workspace root")
+        .read_with(&context, |root, cx| {
+            root.0
+                .read(cx)
+                .content()
+                .clone()
+                .downcast::<gpui_shell::ScriptView>()
+                .expect("workspace content is a script view")
+        });
+    let tree = |context: &mut VisualTestContext| {
+        context.update(|_, cx| {
+            view.read(cx)
+                .snapshot()
+                .map(gpui_shell::RenderSnapshot::debug_tree)
+                .unwrap_or_default()
+        })
+    };
+
+    let opened = tree(&mut context);
+    assert!(opened.contains("chart-calendar-surface"), "{opened}");
+    // The session menu's trigger is the other half of the avatar's slot
+    // choice: this one has an image, the watchlist rows' badges do not.
+    assert!(
+        opened.contains("Avatar") && opened.contains("AvatarImage"),
+        "{opened}"
+    );
+
+    context.simulate_keystrokes("escape");
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    let dismissed = tree(&mut context);
+    assert!(
+        !dismissed.contains("chart-calendar-surface"),
+        "escape must put the picker away:\n{dismissed}"
+    );
+
+    // With nothing left to dismiss the workspace hands the action back with
+    // `cx.propagate()`, so a second press is a no-op rather than an error.
+    context.simulate_keystrokes("escape");
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    let again = tree(&mut context);
+    assert!(again.contains("workspace-root"), "{again}");
+    assert!(!again.contains("chart-calendar-surface"), "{again}");
+}
+
+#[gpui::test]
+fn a_right_press_in_the_watchlist_copies_the_selected_instrument(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    grant_app_capabilities();
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("keymap_ui.test.js");
+    let fixture_root = fixture.root.clone();
+    let runtime_for_view = runtime.clone();
+    let window = cx.add_window(move |window, cx| {
+        WorkspaceRoot(
+            runtime_for_view
+                .try_load(&fixture_root, window, cx)
+                .expect("load keymap probe"),
+        )
+    });
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+
+    // A press, not a click: `on_click` reports neither which button nor how
+    // many presses ago, and a watchlist row cannot carry a handler of its own
+    // because the virtual list rebuilds its rows every frame it scrolls.
+    context.simulate_event(gpui::MouseDownEvent {
+        button: gpui::MouseButton::Right,
+        position: gpui::point(gpui::px(200.), gpui::px(200.)),
+        modifiers: gpui::Modifiers::default(),
+        click_count: 1,
+        first_mouse: false,
+    });
+    context.run_until_parked();
+
+    let copied = context.update(|_, cx| cx.read_from_clipboard());
+    assert_eq!(
+        copied.and_then(|item| item.text()),
+        Some("AAPL.US".to_owned()),
+        "a right press over the Watchlist must copy the selected instrument"
+    );
+}
+
+#[gpui::test]
+fn the_diagnostics_popover_answers_every_window_measurement(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    grant_app_capabilities();
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("keymap_ui.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let (_root, view) = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+    context.run_until_parked();
+    let draw_view = view.clone();
+    context.draw(
+        gpui::Point::default(),
+        gpui::size(gpui::px(1120.), gpui::px(760.)),
+        move |_, _| draw_view.into_any_element(),
+    );
+    let rendered = context.update(|_, cx| {
+        view.read(cx)
+            .snapshot()
+            .map(gpui_shell::RenderSnapshot::debug_tree)
+            .unwrap_or_default()
+    });
+
+    // Every read the window answers, taken as the popover draws -- all of them
+    // legal from `render`, which is the half of the window API a script can
+    // reach from there.
+    for reading in [
+        "Viewport", "Bounds", "Rem size", "Line height", "Pointer", "Appearance", "Active", "State",
+    ] {
+        assert!(
+            rendered.contains(&format!("text \"{reading}\"")),
+            "missing window reading {reading}:\n{rendered}"
+        );
+    }
+    assert!(rendered.contains("text \"1920\u{d7}1080\""), "{rendered}");
+    assert!(rendered.contains("text \"16px\""), "{rendered}");
+    assert!(rendered.contains("text \"normal\""), "{rendered}");
+
+    // And every change, on a button rather than in the pass that draws --
+    // which is the other half, and refused from `render`.
+    for command in [
+        "shell-rem-14",
+        "shell-rem-16",
+        "shell-rem-18",
+        "shell-focus-next",
+        "shell-focus-prev",
+        "shell-activate",
+        "shell-refresh",
+    ] {
+        assert!(
+            rendered.contains(&format!("Button \"{command}\"")),
+            "missing window command {command}:\n{rendered}"
+        );
+    }
+}
+
+#[gpui::test]
+fn a_dispatched_action_reaches_the_handler_a_chord_would(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    grant_app_capabilities();
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("keymap_ui.test.js");
+    let fixture_root = fixture.root.clone();
+    let runtime_for_view = runtime.clone();
+    let window = cx.add_window(move |window, cx| {
+        WorkspaceRoot(
+            runtime_for_view
+                .try_load(&fixture_root, window, cx)
+                .expect("load keymap probe"),
+        )
+    });
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+
+    let view = window
+        .root(&mut context)
+        .expect("workspace root")
+        .read_with(&context, |root, cx| {
+            root.0
+                .read(cx)
+                .content()
+                .clone()
+                .downcast::<gpui_shell::ScriptView>()
+                .expect("workspace content is a script view")
+        });
+    let tree = |context: &mut VisualTestContext| {
+        context.update(|_, cx| {
+            view.read(cx)
+                .snapshot()
+                .map(gpui_shell::RenderSnapshot::debug_tree)
+                .unwrap_or_default()
+        })
+    };
+
+    let before = tree(&mut context);
+    assert!(!before.contains("Restoring session"), "{before}");
+
+    // The chord is bound to nothing. What carries it is the probe calling
+    // `window.dispatch_action`, the way the session menu's Reconnect item does.
+    context.simulate_keystrokes("ctrl-alt-d");
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    let after = tree(&mut context);
+    assert!(
+        after.contains("Restoring session"),
+        "a dispatched action must reach the same handler a chord would:\n{after}"
+    );
 }

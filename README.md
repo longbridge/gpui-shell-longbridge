@@ -99,6 +99,41 @@ process execution or trading mutation API is exposed to the JavaScript layer.
 Watchlist and Portfolio are intentionally read-only example surfaces. There are
 no symbol mutations, chart/order-book features, or order placement APIs.
 
+### Script surface under exercise
+
+The repository is a demonstration, so the second job of every screen is to put
+a piece of the `gpui-shell` script API on it. Where a binding had no home in a
+read-only terminal it is not used; where the terminal already had the problem
+the binding solves, it is what solves it.
+
+| Script API | Where it is on screen |
+| --- | --- |
+| `cx.bind_keys`, `key_context`, `on_action` | `KEY_BINDINGS` in `app/main.js`, answered on the workspace root |
+| `window.dispatch_action` | The session menu, so an item and a chord reach one handler |
+| `on_key_down` / `on_key_up`, `KeyEvent` | The footer's key readout, filled while the chord is down |
+| `on_mouse_down` / `on_mouse_up` | A right press over the Watchlist copies the selected instrument |
+| `on_mouse_down_out` | Dismisses the chart's date picker, which is the script's own surface |
+| `on_scroll_wheel` | A wheel over the price chart walks its window a day at a time |
+| `cx.stop_propagation` / `cx.propagate` | The copy stops at the pane; `escape` carries on when nothing is open |
+| `Avatar` + `AvatarImage` / `AvatarFallback` | The session menu's mark, and the Watchlist rows' market badges |
+| `Accordion` and its four parts, `aria_level`, `keep_mounted` | The three sections of the stock-detail pane |
+| `Pagination`, `pagination_items` | The Holdings panel, eight positions to a page |
+| `CalendarState` | The month behind the price chart's date picker |
+| `window.viewport_size` | Stacks the two panes in a short window, which a resizable group cannot do by wrapping |
+| Every other `Window` read and command | The diagnostics popover in the footer's right corner |
+
+The keymap is eight chords, and `cmd` is the platform modifier on every
+platform:
+
+| Chord | Action |
+| --- | --- |
+| `cmd-1` / `cmd-2` | `workspace::watchlist` / `workspace::portfolio` |
+| `cmd-r` | `workspace::reconnect` |
+| `cmd-t` | `workspace::toggle-theme` |
+| `cmd-shift-f` | `workspace::toggle-fullscreen` |
+| `alt-up` / `alt-down` | `watchlist::previous` / `watchlist::next` |
+| `escape` | `workspace::dismiss`, handed back when there is nothing to dismiss |
+
 ## Run
 
 Register an OAuth public client once and set its fixed `CLIENT_ID` in
@@ -122,3 +157,8 @@ The tests execute application modules through the same QuickJS runtime used by
 the desktop host. They cover protocol codecs, stream lifecycle, market-state
 reduction, ordering invariants, capability policy, and native GPUI
 materialization.
+
+The surfaces in the table above are covered behaviorally rather than by
+inspection: a chord is delivered to a real window and the page changes, a right
+press lands and the clipboard holds the symbol, the window is resized and the
+panes stack, an action is dispatched and reaches the handler a chord would.

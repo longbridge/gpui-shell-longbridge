@@ -1,6 +1,7 @@
 // A network-free shell contract for the real auth.js and http.js modules.
 
-import { View, sleep, spawn, text, v_flex, with_cx } from "gpui";
+import { View } from "gpui";
+import { v_flex } from "gpui-base";
 import { beginDeviceAuthorization, formBody, pollDeviceAuthorization } from "./auth.js";
 import { get, socketOtp } from "./http.js";
 
@@ -165,7 +166,8 @@ async function permanentOauthErrorTerminates() {
 
 // Longbridge returns security names in the language the request asks for, so an
 // authenticated read must pin English rather than inherit the account default.
-async function authenticatedReadsRequestEnglish() {
+/** @param {import("gpui").AsyncContext} cx */
+async function authenticatedReadsRequestEnglish(cx) {
   const original = globalThis.fetch;
   const calls = [];
   globalThis.fetch = async (url, options) => {
@@ -182,7 +184,7 @@ async function authenticatedReadsRequestEnglish() {
     };
   };
   try {
-    await socketOtp("test-token");
+    await socketOtp(cx, "test-token");
   } finally {
     globalThis.fetch = original;
   }
@@ -193,7 +195,8 @@ async function authenticatedReadsRequestEnglish() {
   );
 }
 
-async function runVectors() {
+/** @param {import("gpui").AsyncContext} cx */
+async function runVectors(cx) {
   check(
     formBody({ client_id: "public client", grant_type: "refresh_token" }) ===
       "client_id=public+client&grant_type=refresh_token",
@@ -204,25 +207,25 @@ async function runVectors() {
   await slowDownIsSharedOncePerRound();
   await transientRegionDoesNotAbortItsSibling();
   await permanentOauthErrorTerminates();
-  await authenticatedReadsRequestEnglish();
+  await authenticatedReadsRequestEnglish(cx);
 }
 
 export default class AuthHttpContract extends View {
-  init() {
+  init(_props, cx) {
     this.result = "pending";
-    spawn(async () => {
+    cx.spawn(async (cx) => {
       try {
-        await sleep(0);
-        await runVectors();
+        await cx.sleep(0);
+        await runVectors(cx);
         this.result = "ok";
       } catch (error) {
         this.result = `failed:${error.message}`;
       }
-      with_cx((cx) => cx.notify());
+      cx.notify();
     });
   }
 
   render() {
-    return v_flex().child(text(this.result));
+    return v_flex().child(this.result);
   }
 }

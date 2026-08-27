@@ -1,15 +1,5 @@
-import {
-  Background,
-  PathBuilder,
-  Progress,
-  ProgressIndicator,
-  ProgressTrack,
-  View,
-  div,
-  h_flex,
-  paint_path,
-  v_flex,
-} from "gpui";
+import { Background, PathBuilder, View, div } from "gpui";
+import { Progress, ProgressIndicator, ProgressTrack, h_flex, v_flex } from "gpui-base";
 
 import { findNearestPricePoint, formatMarketTime, layoutPriceSeries } from "./chart.js";
 import { label, muted, numeric } from "./ui.js";
@@ -138,7 +128,7 @@ export default class PriceChartView extends View {
       );
     }
 
-    /** @type {Array<[import("gpui").PathCoordinate, import("gpui").PathCoordinate]>} */
+    /** @type {Array<[import("gpui-shell").PathCoordinate, import("gpui-shell").PathCoordinate]>} */
     const points = geometry.points.map((point) => [
       percentage(point.x, geometry.width),
       percentage(point.y, geometry.height),
@@ -178,12 +168,12 @@ export default class PriceChartView extends View {
           .w_full()
           .on_mouse_move((event, cx) => this.onMouseMove(event, cx))
           .on_hover((hovered, cx) => this.onHover(hovered, cx))
-          .child(paint_path(fill, area).absolute().inset_0())
-          .child(paint_path(stroke, tokens.primary).absolute().inset_0())
+          .child(window.paint_path(fill, area).absolute().inset_0())
+          .child(window.paint_path(stroke, tokens.primary).absolute().inset_0())
           .when(indicator, (element) =>
             element
-              .child(paint_path(indicator, tokens.muted_foreground).absolute().inset_0())
-              .child(paint_path(marker, tokens.primary).absolute().inset_0())
+              .child(window.paint_path(indicator, tokens.muted_foreground).absolute().inset_0())
+              .child(window.paint_path(marker, tokens.primary).absolute().inset_0())
               .child(
                 v_flex()
                   .absolute()
