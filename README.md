@@ -9,6 +9,8 @@ terminal.
 - [Longbridge OpenAPI](https://open.longbridge.com/)
 - [gpui-component](https://github.com/longbridge/gpui-component)
 
+<img width="800" alt="Image" src="https://github.com/user-attachments/assets/e86ab18e-eecc-430f-8636-ab8de6cefce3" />
+
 ## Architecture
 
 ```text
