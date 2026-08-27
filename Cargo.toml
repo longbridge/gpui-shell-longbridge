@@ -5,13 +5,13 @@ edition = "2024"
 publish = false
 
 [dependencies]
-gpui-shell = { git = "https://github.com/longbridge/gpui-component.git", branch = "gpui-shell" }
-gpui = { version = "0.2.2", git = "https://github.com/zed-industries/zed", features = ["profiler"] }
+gpui-shell = { git = "https://github.com/longbridge/gpui-component.git" }
+gpui = { git = "https://github.com/zed-industries/zed", features = ["profiler"] }
 gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
-gpui = { version = "0.2.2", git = "https://github.com/zed-industries/zed", features = ["test-support"] }
+gpui = { git = "https://github.com/zed-industries/zed", features = ["test-support"] }
 
 [profile.dev]
 codegen-units = 16
