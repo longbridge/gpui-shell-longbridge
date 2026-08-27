@@ -14,7 +14,7 @@
         "openapi-quote.longbridge.com"
       ]
     },
-    "store": true,
+    "storage": true,
     "clipboard": {
       "write": true
     }

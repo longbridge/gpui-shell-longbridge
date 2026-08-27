@@ -21,7 +21,7 @@ fn logged_out_application_loads_through_the_public_shell_runtime(cx: &mut TestAp
         .duration_since(UNIX_EPOCH)
         .expect("system clock")
         .as_nanos();
-    gpui_shell::set_store_path(std::env::temp_dir().join(format!(
+    gpui_shell::set_storage_path(std::env::temp_dir().join(format!(
         "gpui-shell-longbridge-runtime-test-{}-{nonce}.json",
         std::process::id()
     )));
