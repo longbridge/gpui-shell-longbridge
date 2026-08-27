@@ -1,14 +1,14 @@
 // Compact presentation primitives for the read-only terminal. Every visual
 // decision resolves from the call-scoped semantic theme.
 
-import { Background, PathBuilder, div, svg, text } from "gpui";
+import { Background, PathBuilder, div, svg } from "gpui";
 import { Button, Input, Link, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, h_flex, v_flex } from "gpui-base";
 import { formatCompactNumber, quoteFreshness, tradeStatusLabel } from "./market.js";
 import { foldAllocationSlices } from "./portfolio.js";
 
 /** @param {import("gpui-base").Theme} tokens @param {string | number} value @param {number} [size] */
 export const label = (tokens, value, size = 12) =>
-  text(value).text_size(size).line_height(1.25).text_color(tokens.foreground);
+  div().text_size(size).line_height(1.25).text_color(tokens.foreground).child(value);
 
 /** @param {import("gpui-base").Theme} tokens @param {string | number} value @param {number} [size] */
 export const numeric = (tokens, value, size = 12) =>
@@ -16,7 +16,7 @@ export const numeric = (tokens, value, size = 12) =>
 
 /** @param {import("gpui-base").Theme} tokens @param {string | number} value */
 export const muted = (tokens, value) =>
-  text(value).text_size(11).line_height(1.25).text_color(tokens.muted_foreground);
+  div().text_size(11).line_height(1.25).text_color(tokens.muted_foreground).child(value);
 
 /** @param {import("gpui-base").Theme} tokens */
 export const rule = (tokens) => div().w_full().h(1).bg(tokens.border);
@@ -96,7 +96,7 @@ export function action(tokens, id, caption, onClick, options = {}) {
       }),
     )
     .when(disabled, (element) => element.opacity(0.42))
-    .child(text(caption));
+    .child(caption);
 }
 
 /**
@@ -141,7 +141,7 @@ export function externalLink(tokens, id, caption, url) {
     .focus((style) =>
       style.bg(tokens.accent).text_color(tokens.accent_foreground).border_color(tokens.ring),
     )
-    .child(text(caption));
+    .child(caption);
 }
 
 /** @param {import("gpui-base").Theme} tokens @param {string} value */
@@ -958,12 +958,13 @@ export function errorMessage(tokens, value) {
     .bg(tokens.surface)
     .child(div().w(3).self_stretch().rounded(tokens.radius.full).bg(tokens.destructive))
     .child(
-      text(value)
+      div()
         .flex_1()
         .min_w(0)
         .whitespace_normal()
         .text_size(12)
         .line_height(1.35)
-        .text_color(tokens.foreground),
+        .text_color(tokens.foreground)
+        .child(value),
     );
 }

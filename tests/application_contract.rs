@@ -129,7 +129,7 @@ fn price_chart_is_a_retained_child_view() {
         fs::read_to_string(app_dir().join("price_chart_view.js")).expect("price_chart_view.js");
 
     assert!(
-        main.contains("ViewHandle.new(PriceChartView")
+        main.contains("cx.new(PriceChartView")
             && main.contains(".child(this.priceChart)")
             && main.contains("this.priceChart.set_props(")
             && main.contains("this.priceChart.release()"),

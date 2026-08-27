@@ -1,5 +1,6 @@
-import { text } from "gpui";
+
 import { Button, v_flex } from "gpui-base";
+import { holdContext } from "./context.js";
 import LongbridgeApp from "./main.js";
 
 /** @param {string} symbol @param {string} last @param {bigint} sequence */
@@ -29,7 +30,8 @@ function quote(symbol, last, sequence) {
 }
 
 export default class PriceChartUpdateProbe extends LongbridgeApp {
-  init() {
+  init(_props, cx) {
+    holdContext(cx);
     this.selectedSymbol = "AAPL.US";
     this.quotes = [quote("AAPL.US", "100", 1n), quote("MSFT.US", "200", 1n)];
     this.portfolioQuotes = [];
@@ -47,7 +49,7 @@ export default class PriceChartUpdateProbe extends LongbridgeApp {
     this.chartState = { symbol: this.selectedSymbol, state: "ready" };
     this.chartGeneration = 0;
     this.chartThemeRevision = 0;
-    this.initPriceChartView();
+    this.initPriceChartView(cx);
     this.renders = 0;
   }
 
@@ -60,8 +62,8 @@ export default class PriceChartUpdateProbe extends LongbridgeApp {
         Button.new("unrelated-quote")
           .w(500)
           .h(40)
-          .on_click(() => this.receiveQuote(quote("MSFT.US", "201", 2n)))
-          .child(text(`Root renders: ${this.renders}`)),
+          .on_click((_event, cx) => this.receiveQuote(quote("MSFT.US", "201", 2n), cx))
+          .child(`Root renders: ${this.renders}`),
       )
       .child(this.priceChart);
   }

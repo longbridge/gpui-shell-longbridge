@@ -1,7 +1,8 @@
 // A standalone, read-only Longbridge desktop client. OAuth uses direct HTTP,
 // quotes use the documented WebSocket protocol, and no trading API is exposed.
 
-import { View, ViewHandle, div, image, log, text, with_cx } from "gpui";
+import { View, div, image } from "gpui";
+import { holdContext } from "./context.js";
 import { InputState, Popover, Scrollbar, Table, TableBody, Tab, Tabs, h_flex, h_resizable, resizable_panel, set_theme, v_flex, v_virtual_list } from "gpui-base";
 import { fps_monitor } from "gpui-fps";
 import { readFile } from "fs/promises";
@@ -125,12 +126,13 @@ function storedTokens() {
 export default class LongbridgeApp extends View {
   /** @param {unknown} _props @param {import("gpui").AsyncContext} cx */
   init(_props, cx) {
-    cx.spawn(async () => {
+    holdContext(cx);
+    cx.spawn(async (cx) => {
       themes = JSON.parse(await readFile("theme.json", "utf8"));
       set_theme(themes.dark);
       this.chartThemeRevision += 1;
       this.syncPriceChartView();
-      with_cx((cx) => cx.notify());
+      cx.notify();
     });
     this.instruments = [];
     this.quotes = [];
@@ -157,20 +159,21 @@ export default class LongbridgeApp extends View {
     this.chartGeneration = 0;
     this.chartThemeRevision = 0;
     this.initInteractionState();
-    this.initPriceChartView();
+    this.initPriceChartView(cx);
     this.clock = cx.timer.every(1_000, (cx) => {
       this.lastTick = Date.now();
       this.quotes = sortLikeTerminal(this.quotes, this.lastTick);
       cx.notify();
     });
-    if (this.hasStoredTokens) this.resume();
+    if (this.hasStoredTokens) this.resume(cx);
   }
 
   /** Creates the retained chart entity from lifecycle code, never from render. */
-  initPriceChartView() {
+  /** @param {import("gpui").AsyncContext} cx */
+  initPriceChartView(cx) {
     const props = this.nextPriceChartProps();
     this.publishedPriceChartProps = props;
-    this.priceChart = ViewHandle.new(PriceChartView, props);
+    this.priceChart = cx.new(PriceChartView, props);
   }
 
   /** The complete immutable input snapshot the child needs to render the chart. */
@@ -251,13 +254,13 @@ export default class LongbridgeApp extends View {
     this.error = "";
     this.streamError = "";
     if (cx) cx.notify();
-    cx.spawn(async () => {
+    cx.spawn(async (cx) => {
       try {
-        await this.connect(await accessToken());
+        await this.connect(await accessToken(), cx);
       } catch (error) {
         this.status = { state: "error" };
         this.error = error instanceof Error ? error.message : String(error);
-        with_cx((next) => next.notify());
+        cx.notify();
       }
     });
   }
@@ -268,7 +271,7 @@ export default class LongbridgeApp extends View {
     this.status = { state: "authorizing" };
     this.error = "";
     cx.notify();
-    cx.spawn(async () => {
+    cx.spawn(async (cx) => {
       try {
         const authorization = await beginDeviceAuthorization();
         this.authorization = authorization;
@@ -284,24 +287,25 @@ export default class LongbridgeApp extends View {
           // It is said out loud, though. A bare catch here swallowed a missing
           // import once, and the symptom was a browser that simply never
           // opened, with nothing anywhere to say why.
-          log.warn(`could not open the authorization page: ${error}`);
+          console.warn(`could not open the authorization page: ${error}`);
         }
-        with_cx((next) => next.notify());
+        cx.notify();
         const tokens = await pollDeviceAuthorization(authorization);
         this.hasStoredTokens = true;
         this.authorization = null;
-        await this.connect(tokens.accessToken);
+        await this.connect(tokens.accessToken, cx);
       } catch (error) {
         this.authorization = null;
         this.status = { state: "error" };
         this.error = error instanceof Error ? error.message : String(error);
-        with_cx((next) => next.notify());
+        cx.notify();
       }
     });
   }
 
   /** @param {string} token */
-  async connect(token) {
+  /** @param {string} token @param {import("gpui").AsyncContext} cx */
+  async connect(token, cx) {
     this.connectedToken = token;
     const generation = ++this.streamGeneration;
     // Stopping the old stream rejects its pending candlestick query. Make that
@@ -313,20 +317,20 @@ export default class LongbridgeApp extends View {
     if (previous) await previous.stop();
     if (generation !== this.streamGeneration) return;
     this.status = { state: "loading_watchlist" };
-    with_cx((cx) => cx.notify());
+    cx.notify();
 
     const instruments = watchlistInstruments(await get("/v1/watchlist/groups"));
     if (generation !== this.streamGeneration) return;
     this.instruments = instruments;
     this.quotes = sortLikeTerminal(initialQuotes(instruments), Date.now());
     this.selectedSymbol = instruments[0]?.symbol ?? null;
-    if (!this.priceChart) this.initPriceChartView();
+    if (!this.priceChart) this.initPriceChartView(cx);
     this.syncPriceChartView();
     // The primary workspace is usable as soon as Watchlist has loaded. Asset
     // reads are a separate, slower boundary and must not leave navigation in a
     // misleading global Connecting state.
     this.status = { state: "connected" };
-    with_cx((cx) => cx.notify());
+    cx.notify();
     await this.refreshPortfolio();
     if (generation !== this.streamGeneration) return;
     const symbols = [
@@ -337,8 +341,8 @@ export default class LongbridgeApp extends View {
     ];
     if (symbols.length === 0) {
       this.status = { state: "connected" };
-      with_cx((cx) => cx.notify());
-      this.loadPortfolio();
+      cx.notify();
+      this.loadPortfolio(cx);
       return;
     }
 
@@ -348,11 +352,11 @@ export default class LongbridgeApp extends View {
       symbols,
       onQuote: (quote) => {
         if (generation === this.streamGeneration && this.stream === stream)
-          this.receiveQuote(quote);
+          this.receiveQuote(quote, cx);
       },
       onStatus: (status) => {
         if (generation === this.streamGeneration && this.stream === stream)
-          this.receiveStatus(status);
+          this.receiveStatus(status, cx);
       },
     });
     this.stream = stream;
@@ -361,11 +365,12 @@ export default class LongbridgeApp extends View {
       await stream.stop();
       return;
     }
-    this.loadSelectedChart();
+    this.loadSelectedChart(cx);
   }
 
   /** @param {unknown} quote */
-  receiveQuote(quote) {
+  /** @param {any} quote @param {import("gpui").AsyncContext} cx */
+  receiveQuote(quote, cx) {
     this.quotes = sortLikeTerminal(
       this.quotes.map((current) => mergeQuote(current, quote)),
       this.lastTick,
@@ -381,17 +386,16 @@ export default class LongbridgeApp extends View {
         }
       }
       this.quotePulse = 0.72;
-      with_cx((cx) =>
-        cx.timer.after(160, (cx) => {
-          this.quotePulse = 1;
-          cx.notify();
-        }),
-      );
+      cx.timer.after(160, (cx) => {
+        this.quotePulse = 1;
+        cx.notify();
+      });
     }
-    with_cx((cx) => cx.notify());
+    cx.notify();
   }
 
-  loadSelectedChart() {
+  /** @param {import("gpui").AsyncContext} cx */
+  loadSelectedChart(cx) {
     const symbol = this.selectedSymbol;
     const stream = this.stream;
     if (!symbol) {
@@ -405,13 +409,12 @@ export default class LongbridgeApp extends View {
       state: this.candleCache.has(symbol) ? "ready" : "loading",
     };
     this.syncPriceChartView();
-    with_cx((cx) => cx.notify());
+    cx.notify();
     if (!stream) return;
     const end = new Date();
     const start = new Date(end.getTime() - 14 * 86_400_000);
     const compact = (date) => date.toISOString().slice(0, 10).replaceAll("-", "");
-    with_cx((cx) =>
-      cx.spawn(async (cx) => {
+    cx.spawn(async (cx) => {
         try {
           const response = await stream.queryCandlesticks({
             symbol,
@@ -430,21 +433,20 @@ export default class LongbridgeApp extends View {
         }
         this.syncPriceChartView();
         cx.notify();
-      }),
-    );
+      });
   }
 
-  /** @param {unknown} status */
-  receiveStatus(status) {
+  /** @param {unknown} status @param {import("gpui").AsyncContext} cx */
+  receiveStatus(status, cx) {
     this.status = status && typeof status === "object" ? status : { state: "error" };
     if (typeof this.status.error === "string") this.streamError = this.status.error;
     else if (this.status.state === "connected") this.streamError = "";
-    with_cx((cx) => cx.notify());
+    cx.notify();
   }
 
-  loadPortfolio() {
-    with_cx((cx) =>
-      cx.spawn(async (cx) => {
+  /** @param {import("gpui").AsyncContext} cx */
+  loadPortfolio(cx) {
+    cx.spawn(async (cx) => {
         try {
           await this.refreshPortfolio();
           this.error = "";
@@ -452,8 +454,7 @@ export default class LongbridgeApp extends View {
           this.error = error instanceof Error ? error.message : String(error);
         }
         cx.notify();
-      }),
-    );
+      });
   }
 
   async refreshPortfolio() {
@@ -497,15 +498,16 @@ export default class LongbridgeApp extends View {
   }
 
   /** @param {string} value @param {string} what */
-  copyAuthorization(value, what) {
-    with_cx((cx) => cx.write_to_clipboard(value));
+  /** @param {string} value @param {string} what @param {import("gpui").Context} cx */
+  copyAuthorization(value, what, cx) {
+    cx.write_to_clipboard(value);
     window.push_toast({ title: `${what} copied`, level: "success", id: "authorization-copy" });
   }
 
   /** @param {import("gpui").Context} cx */
   signOut(cx) {
     const stream = this.stream;
-    if (stream) cx.spawn(() => stream.stop());
+    if (stream) cx.spawn((cx) => stream.stop());
     this.stream = null;
     this.streamGeneration += 1;
     this.connectedToken = null;
@@ -524,7 +526,7 @@ export default class LongbridgeApp extends View {
     this.chartGeneration += 1;
     this.chartState = { symbol: null, state: "idle" };
     this.releasePriceChartView();
-    cx.spawn(async () => {
+    cx.spawn(async (cx) => {
       await clearTokens();
     });
     cx.notify();
@@ -603,14 +605,14 @@ export default class LongbridgeApp extends View {
                     )
                     .hover((style) => style.bg(tokens.accent))
                     .focus((style) => style.bg(tokens.accent).text_color(tokens.accent_foreground))
-                    .child(text("Watchlist")),
+                    .child("Watchlist"),
                 )
                 .child(
                   Tab.new("page-portfolio")
                     .selected(this.page === "portfolio")
                     .on_click((_event, cx) => {
                       this.page = "portfolio";
-                      this.loadPortfolio();
+                      this.loadPortfolio(cx);
                       cx.notify();
                     })
                     .flex()
@@ -627,7 +629,7 @@ export default class LongbridgeApp extends View {
                     )
                     .hover((style) => style.bg(tokens.accent))
                     .focus((style) => style.bg(tokens.accent).text_color(tokens.accent_foreground))
-                    .child(text("Portfolio")),
+                    .child("Portfolio"),
                 ),
             ),
           ),
@@ -856,7 +858,7 @@ export default class LongbridgeApp extends View {
               "Copy selected symbol",
               (_event, cx) => {
                 close(cx);
-                if (selected) this.copyAuthorization(selected.symbol, "Symbol");
+                if (selected) this.copyAuthorization(selected.symbol, "Symbol", cx);
               },
               { detail: selected ? selected.code : "", disabled: !selected },
             ),
@@ -869,7 +871,7 @@ export default class LongbridgeApp extends View {
               (_event, cx) => {
                 close(cx);
                 this.candleCache.delete(this.selectedSymbol);
-                this.loadSelectedChart();
+                this.loadSelectedChart(cx);
               },
               { disabled: !selected },
             ),
@@ -912,7 +914,7 @@ export default class LongbridgeApp extends View {
   selectQuote(symbol, cx) {
     if (!symbol || symbol === this.selectedSymbol) return;
     this.selectedSymbol = symbol;
-    this.loadSelectedChart();
+    this.loadSelectedChart(cx);
     cx.notify();
   }
 

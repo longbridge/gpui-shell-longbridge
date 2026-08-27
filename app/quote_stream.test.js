@@ -1,4 +1,5 @@
-import { View, text, with_cx } from "gpui";
+import { View } from "gpui";
+import { holdContext } from "./context.js";
 import { v_flex } from "gpui-base";
 import { COMMAND, FRAME_TYPE, decodeFrame, encodeAuthRequest, encodeFrame } from "./protocol.js";
 import { createQuoteStream } from "./quote_stream.js";
@@ -394,8 +395,9 @@ async function runVectors() {
 
 export default class QuoteStreamVectorProbe extends View {
   init(_props, cx) {
+    holdContext(cx);
     this.result = "pending";
-    cx.spawn(async () => {
+    cx.spawn(async (cx) => {
       try {
         // Yield through the shell scheduler so the test runs from the same
         // task continuation as a real view's asynchronous connection setup.
@@ -405,11 +407,11 @@ export default class QuoteStreamVectorProbe extends View {
       } catch (error) {
         this.result = `failed:${error.message}`;
       }
-      with_cx((cx) => cx.notify());
+      cx.notify();
     });
   }
 
   render() {
-    return v_flex().child(text(this.result));
+    return v_flex().child(this.result);
   }
 }

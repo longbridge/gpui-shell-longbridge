@@ -2,7 +2,7 @@
 // dynamic client registration: register this application once out-of-band and
 // replace CLIENT_ID with that public identifier before distributing it.
 
-import { store, with_cx } from "gpui";
+import { store } from "gpui";
 
 /**
  * The one, fixed public-client identifier for this application.
@@ -216,7 +216,7 @@ export async function pollDeviceAuthorization(authorization, dependencies = {}) 
   const clientId = configuredClientId();
   const fetchImpl = dependencies.fetch || fetch;
   const sleepImpl =
-    dependencies.sleep || (/** @param {number} ms */ (ms) => with_cx((cx) => cx.sleep(ms)));
+    dependencies.sleep || (/** @param {number} ms */ (ms) => context().sleep(ms));
   const now = dependencies.now || Date.now;
   const save = dependencies.saveTokens || saveTokens;
   let intervalMs = authorization.intervalMs || DEFAULT_POLL_INTERVAL_MS;

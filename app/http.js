@@ -2,8 +2,7 @@
 // owns the two necessary form POSTs in auth.js, and no order-writing method is
 // available from this module.
 
-import { with_cx } from "gpui";
-
+import { context } from "./context.js";
 import { OPENAPI_BASE_URL, accessToken, refreshAccessToken } from "./auth.js";
 
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -58,7 +57,7 @@ async function request(url, token) {
         Authorization: `Bearer ${token}`,
       },
     }),
-    with_cx((cx) => cx.sleep(REQUEST_TIMEOUT_MS)).then(() => {
+    context().sleep(REQUEST_TIMEOUT_MS).then(() => {
       throw new Error("Longbridge API request timed out");
     }),
   ]);
