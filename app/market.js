@@ -235,6 +235,34 @@ export function mergeQuote(current, incoming, receivedAt = Date.now()) {
   return { ...next, ...deriveChange(next) };
 }
 
+/**
+ * Merges an incoming quote into the row that owns its symbol, returning the
+ * same list when nothing changed.
+ *
+ * Order is deliberately left alone. `sortLikeTerminal` ranks a row from trade
+ * session counts taken across the whole list, so it cannot be applied to one
+ * row, and running it per quote made the connect burst -- the entire
+ * watchlist twice over, snapshot plus isFirstPush, in a single synchronous
+ * run -- cost seconds against a real watchlist. That overran the budget the
+ * sandbox gives one task, and the interrupt unwound the stream past its own
+ * error handling, so it never reached `connected` and never reconnected.
+ * Ordering stays fresh on the one-second clock that already re-sorts.
+ */
+export function applyQuote(quotes, incoming, receivedAt = Date.now()) {
+  if (!incoming || typeof incoming !== "object") return quotes;
+  // Watchlist symbols are unique, so the first match owns the quote.
+  for (let position = 0; position < quotes.length; position += 1) {
+    const current = quotes[position];
+    if (current.symbol !== incoming.symbol) continue;
+    const merged = mergeQuote(current, incoming, receivedAt);
+    if (merged === current) return quotes;
+    const next = quotes.slice();
+    next[position] = merged;
+    return next;
+  }
+  return quotes;
+}
+
 export function quoteFreshness(quote, now = Date.now()) {
   if (!quote || !quote.receivedAt) return "waiting";
   return now - quote.receivedAt < 15_000 ? "live" : "stale";

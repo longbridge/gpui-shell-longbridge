@@ -1,6 +1,7 @@
 import { View } from "gpui";
 
 import {
+  applyQuote,
   formatCompactNumber,
   initialQuotes,
   mergeQuote,
@@ -202,6 +203,66 @@ function runVectors() {
     lateSnapshot.prevClose === "180.00" && lateSnapshot.changePercent === "+6.11%",
     "late snapshot still fills fields absent from push",
   );
+
+  const watchlist = initialQuotes(
+    Array.from({ length: 200 }, (_, position) => ({
+      symbol: `S${position}.US`,
+      code: `S${position}`,
+      name: `Security ${position}`,
+      market: "US",
+      currency: "USD",
+    })),
+  );
+  check(
+    applyQuote(watchlist, { symbol: "NOPE.US", lastDone: "1.00" }, 1) === watchlist,
+    "a quote for a symbol outside the watchlist costs nothing",
+  );
+  const applied = applyQuote(
+    watchlist,
+    { symbol: "S7.US", lastDone: "12.50", prevClose: "10.00" },
+    1_700_000_000_000,
+  );
+  check(applied !== watchlist, "applying a quote publishes a new list");
+  check(
+    applied[7].last === "12.50" && applied[7].changePercent === "+25.00%",
+    "the addressed row merges like any other quote",
+  );
+  check(
+    applied[6] === watchlist[6] && applied[8] === watchlist[8] && applied.length === 200,
+    "every other row and the list order are left alone",
+  );
+  const sequenced = applyQuote(
+    applied,
+    { symbol: "S7.US", sequence: 9n, lastDone: "13.00" },
+    1_700_000_000_001,
+  );
+  check(sequenced[7].last === "13.00", "a sequenced push lands on its row");
+  check(
+    applyQuote(sequenced, { symbol: "S7.US", sequence: 8n, lastDone: "1.00" }, 2) === sequenced,
+    "an out-of-order push does not republish the list",
+  );
+
+  // The connect burst hands the whole watchlist to onQuote twice in one
+  // synchronous run -- once from the REALTIME_QUOTE snapshot, once from the
+  // isFirstPush subscription -- and all of it has to fit in the 500ms the
+  // sandbox gives a single task. Re-sorting per quote cost ~3ms against a
+  // 192-row list, so a real watchlist spent over a second here, the interrupt
+  // unwound connectAndSubscribe past its own catch, and the stream was left
+  // stranded at "snapshotting" with no heartbeat and no reconnect.
+  let burst = watchlist;
+  const started = Date.now();
+  for (let pass = 0; pass < 2; pass += 1) {
+    for (let position = 0; position < watchlist.length; position += 1) {
+      burst = applyQuote(
+        burst,
+        { symbol: `S${position}.US`, lastDone: `${100 + pass}`, prevClose: "100" },
+        1_700_000_000_000 + pass,
+      );
+    }
+  }
+  const elapsed = Date.now() - started;
+  check(burst[7].last === "101", "the burst leaves the latest price in place");
+  check(elapsed < 100, `a full connect burst must stay inside the task budget (took ${elapsed}ms)`);
 
   check(quoteFreshness(empty, 1_700_000_100_000) === "waiting", "empty row is waiting");
   check(quoteFreshness(pushed, pushed.receivedAt + 14_999) === "live", "recent row is live");
