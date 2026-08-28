@@ -527,13 +527,13 @@ fn watchlist_row_renders_scannable_market_columns(cx: &mut TestAppContext) {
         .split_once(r#"Table "probe-watchlist-compact""#)
         .map(|(_, compact)| compact)
         .expect("compact watchlist table");
-    for expected in ["INSTRUMENT", "LAST", "AAPL", "188.00"] {
+    for expected in ["INSTRUMENT", "LAST", "AAPL.US", "Apple", "188.00", "+4.44%"] {
         assert!(
             compact.contains(expected),
             "missing compact {expected}:\n{compact}"
         );
     }
-    for hidden in ["CHANGE", "VOLUME", "SESSION", "+4.44%", "8.59B", "Trading"] {
+    for hidden in ["CHANGE", "VOLUME", "SESSION", "8.59B", "Trading", "Avatar"] {
         assert!(
             !compact.contains(hidden),
             "compact row must hide {hidden}:\n{compact}"
@@ -542,6 +542,12 @@ fn watchlist_row_renders_scannable_market_columns(cx: &mut TestAppContext) {
     assert!(
         compact.contains(".truncate") && compact.contains(".min_w[Number(0.0)]"),
         "compact lanes must shrink and truncate rather than overlap:\n{compact}"
+    );
+    assert!(
+        compact.contains(".w[Str(\"60%\")]")
+            && compact.contains(".w[Str(\"40%\")]")
+            && compact.contains(".h[Number(44.0)]"),
+        "the minimum Watchlist layout keeps symbol/name and last/change in two aligned stacked lanes:\n{compact}"
     );
 
     // And focus must not paint like open. A Popover hands the keyboard back to
@@ -1104,17 +1110,20 @@ fn stock_details_keep_the_chart_visible_beside_collapsible_metadata(cx: &mut Tes
             .unwrap_or_default()
     });
 
-    // Quote and About remain semantic accordion sections.
+    // Each reading is its own dock-ready panel. Quote is always expanded; its
+    // tile replaces the old disclosure and the redundant subtitle is gone.
     assert!(
-        rendered.contains("Accordion \"stock-detail-sections\""),
+        rendered.contains("quote-details-panel")
+            && rendered.contains("chart-panel")
+            && rendered.contains("market-detail-panel"),
         "{rendered}"
     );
     assert!(
-        rendered.contains("AccordionHeader :aria_level[Number(3.0)]"),
-        "{rendered}"
+        !rendered.contains("detail-quote-trigger") && !rendered.contains("Real-time quote"),
+        "Quote Details must be permanently expanded without duplicated copy:\n{rendered}"
     );
     assert!(
-        rendered.contains("AccordionTrigger \"detail-quote-trigger\" :on_change(fn)"),
+        rendered.contains("AccordionTrigger \"detail-about-trigger\" :on_change(fn)"),
         "{rendered}"
     );
 
@@ -1127,8 +1136,7 @@ fn stock_details_keep_the_chart_visible_beside_collapsible_metadata(cx: &mut Tes
         "{rendered}"
     );
 
-    // The third section is shut, and says so on the item rather than on each
-    // half of it: the item owns `open` and passes it down.
+    // About remains optional inside Quote Details.
     assert!(
         rendered.contains("text \"About this instrument\""),
         "{rendered}"
@@ -1161,7 +1169,7 @@ fn stock_details_keep_the_chart_visible_beside_collapsible_metadata(cx: &mut Tes
     // The retained chart child is still a child, and still not rebuilt here.
     assert!(rendered.contains("child_view #"), "{rendered}");
 
-    // Live market detail follows the chart in the one Stock Details scroll.
+    // Market Detail owns the one tape/order-book scroll and follows Chart.
     // These assertions are intentionally written before the panel exists: the
     // fixture contains two levels and 21 trades, so a correct UI must reverse
     // asks, retain the best prices beside the ratio, and cap the rendered
@@ -1212,13 +1220,15 @@ fn stock_details_keep_the_chart_visible_beside_collapsible_metadata(cx: &mut Tes
         up_trade.contains("↑ Up"),
         "Longbridge direction 2 must be up:\n{up_trade}"
     );
+    for trade in [first_trade, down_trade, up_trade] {
+        assert!(
+            trade.contains(".bg[") && trade.contains(".opacity[Number("),
+            "each textual direction must also have a semantic, intensity-scaled volume marker:\n{trade}"
+        );
+    }
     assert!(
         rendered.contains("17:13:20"),
         "Time & Sales must show selected market-local time, not UTC/browser local time:\n{rendered}"
-    );
-    assert!(
-        rendered.contains("8 orders") && rendered.contains("12 orders"),
-        "{rendered}"
     );
     assert_eq!(
         rendered.matches("time-sales-row-").count(),
@@ -1227,7 +1237,7 @@ fn stock_details_keep_the_chart_visible_beside_collapsible_metadata(cx: &mut Tes
     );
     assert_eq!(
         rendered.matches(":overflow_y_scrollbar").count(),
-        1,
+        3,
         "{rendered}"
     );
     assert!(
@@ -1282,6 +1292,10 @@ fn market_detail_panels_name_loading_empty_and_error_states(cx: &mut TestAppCont
         "Depth entitlement unavailable",
         "No recent trades",
         "Trade feed unavailable",
+        "Loading",
+        "Empty",
+        "Error",
+        "2 trades",
     ] {
         assert!(
             rendered.contains(expected),
@@ -1315,6 +1329,34 @@ fn sparse_order_book_keeps_best_levels_next_to_the_spread(cx: &mut TestAppContex
     assert!(rendered.contains("order-book-ask-level-1"), "{rendered}");
     assert!(rendered.contains("order-book-bid-level-1"), "{rendered}");
     assert!(!rendered.contains("order-book-ask-slot"), "{rendered}");
+    for row in ["order-book-ask-level-1", "order-book-bid-level-1"] {
+        let row = rendered
+            .split_once(row)
+            .map(|(_, row)| row.split("h_flex :id").next().unwrap_or(row))
+            .expect("depth row");
+        for lane in [r#".w[Str("28%")]"#, r#".w[Str("36%")]"#] {
+            assert!(
+                row.contains(lane),
+                "Ask and Bid must share the same level/price/volume lanes:\n{row}"
+            );
+        }
+        assert!(row.contains(r#".h[Number(22.0)]"#), "{row}");
+    }
+    let divider = rendered
+        .split_once(r#"order-book-ratio-divider"#)
+        .and_then(|(_, divider)| {
+            divider
+                .split_once("order-book-bid-level-1")
+                .map(|(divider, _)| divider)
+        })
+        .expect("single ratio divider");
+    assert!(
+        divider.contains(r#".h[Number(22.0)]"#)
+            && divider.matches(r#".w[Str("28%")]"#).count() == 2
+            && divider.contains("Bid 46%")
+            && divider.contains("Ask 54%"),
+        "ratio labels and bar must share one symmetric compact row:\n{divider}"
+    );
     assert!(
         rendered.find("140.30") < rendered.find("Bid 46%")
             && rendered.find("Bid 46%") < rendered.find("140.20"),

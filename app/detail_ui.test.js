@@ -87,7 +87,7 @@ export default class DetailUiProbe extends LongbridgeApp {
 
     // The two states the sections have to be able to be in at once, and the
     // month the picker is parked on so the grid is the same one every run.
-    this.detailSections = { quote: true, about: false };
+    this.detailSections = { about: false };
     this.chartEndDate = "2026-08-14";
     this.chartCalendar.set_value(this.chartEndDate);
     while (this.chartCalendar.year() > 2026 || this.chartCalendar.month() > 8) {
@@ -100,6 +100,11 @@ export default class DetailUiProbe extends LongbridgeApp {
   }
 
   render(cx) {
-    return v_flex().size_full().child(this.stockDetail(cx.theme()));
+    const tokens = cx.theme();
+    return v_flex()
+      .size_full()
+      .child(this.quoteDetailsPanel(tokens))
+      .child(this.chartDetailsPanel(tokens))
+      .child(this.marketDetailPanel(tokens));
   }
 }

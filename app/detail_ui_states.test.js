@@ -29,6 +29,23 @@ export default class DetailUiStatesProbe extends View {
           { bid: 0, ask: 0 },
         ),
       )
+      .child(
+        timeSalesPanel(tokens, {
+          status: "loading",
+          trades: [],
+          error: "",
+        }),
+      )
+      .child(
+        timeSalesPanel(tokens, {
+          status: "ready",
+          trades: [
+            { timestamp: 1_700_000_000n, price: "188.00", volume: 100n, direction: 0 },
+            { timestamp: 1_699_999_999n, price: "187.99", volume: 200n, direction: 1 },
+          ],
+          error: "",
+        }),
+      )
       .child(timeSalesPanel(tokens, { status: "ready", trades: [], error: "" }))
       .child(
         timeSalesPanel(tokens, { status: "error", trades: [], error: "Trade feed unavailable" }),

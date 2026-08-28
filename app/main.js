@@ -1,7 +1,7 @@
 // A standalone, read-only Longbridge desktop client. OAuth uses direct HTTP,
 // quotes use the documented WebSocket protocol, and no trading API is exposed.
 
-import { View, div, image } from "gpui";
+import { View, div } from "gpui";
 import { holdContext } from "./context.js";
 import {
   CalendarState,
@@ -55,8 +55,14 @@ import { allocationInUsd, normalizeUsdRates, portfolioPresentation } from "./por
 import PriceChartView, { PRICE_CHART_LAYOUT } from "./price_chart_view.js";
 import { loadFpsVisible, saveFpsVisible } from "./fps_preference.js";
 import { omarchyBaseColors, omarchyMarketColors, omarchyTheme } from "./system_theme.js";
-import { setOmarchyAvatarColors, setOmarchyMarketColors } from "./palette.js";
-import { DetailPanel, WatchlistPanel, holdWorkspaceApp } from "./workspace.js";
+import { setOmarchyAvatarColors, setOmarchyMarketColors, statusColors } from "./palette.js";
+import {
+  ChartPanel,
+  MarketDetailPanel,
+  QuoteDetailsPanel,
+  WatchlistPanel,
+  holdWorkspaceApp,
+} from "./workspace.js";
 import {
   accordionGroup,
   accordionSection,
@@ -116,10 +122,10 @@ async function currentOmarchyColors() {
 // allocation chart reachable above it without a scroll.
 /** Where the workspace layout is kept between runs, and under which shape. */
 const WORKSPACE_LAYOUT_KEY = "workspace.layout";
-// 2, because 1 was the layout that docked Watchlist on the left and left the
-// details in the center. A saved layout from that build would put the
-// placements straight back and take the details' collapse control with them.
-const WORKSPACE_LAYOUT_VERSION = 2;
+// 3 introduces three independently dockable detail panels. Layouts from the
+// single-detail-pane shape are intentionally reset rather than partly restored
+// into a different panel topology.
+const WORKSPACE_LAYOUT_VERSION = 3;
 /** The detail dock's starting width; after that the user's drag decides. */
 const DETAIL_DOCK_WIDTH = 460;
 
@@ -144,7 +150,10 @@ const CHART_PUBLISH_INTERVAL_MS = 500;
 
 /** Which pane a change is worth repainting. See `syncWorkspacePanels`. */
 const PANE_WATCHLIST = 1;
-const PANE_DETAIL = 2;
+const PANE_QUOTE = 2;
+const PANE_CHART = 4;
+const PANE_MARKET = 8;
+const PANE_DETAIL = PANE_QUOTE | PANE_CHART | PANE_MARKET;
 const PANE_BOTH = PANE_WATCHLIST | PANE_DETAIL;
 
 const EMPTY_CANDLES = Object.freeze([]);
@@ -715,7 +724,7 @@ export default class LongbridgeApp extends View {
   }
 
   /**
-   * Creates the workspace dock and its two panels.
+   * Creates the workspace dock and its Watchlist plus three detail panels.
    *
    * The layout is the user's, not the application's: which pane is where, how
    * wide the watchlist is, whether it is collapsed. So it lives in a retained
@@ -733,7 +742,9 @@ export default class LongbridgeApp extends View {
     // Registered before the layout is restored: this is what lets a saved
     // layout find the class its panel is rebuilt from.
     DockArea.register_panel("watchlist", WatchlistPanel);
-    DockArea.register_panel("detail", DetailPanel);
+    DockArea.register_panel("quote-details", QuoteDetailsPanel);
+    DockArea.register_panel("chart", ChartPanel);
+    DockArea.register_panel("market-detail", MarketDetailPanel);
 
     // Reset runs this a second time, so nothing here may assume it is the
     // first: the dock, its panels and the restored flag are all replaced
@@ -742,7 +753,9 @@ export default class LongbridgeApp extends View {
       version: WORKSPACE_LAYOUT_VERSION,
     });
     this.watchlistPanel = cx.new(WatchlistPanel, { app: this });
-    this.detailPanel = cx.new(DetailPanel, { app: this });
+    this.quoteDetailsDockPanel = cx.new(QuoteDetailsPanel, { app: this });
+    this.chartDockPanel = cx.new(ChartPanel, { app: this });
+    this.marketDetailDockPanel = cx.new(MarketDetailPanel, { app: this });
     // Watchlist is the center and the details are the right dock, which is the
     // opposite of how they started. Only a left, right or bottom dock is a
     // *dock*: the center is the area itself, it has no frame, and so it has no
@@ -761,11 +774,27 @@ export default class LongbridgeApp extends View {
       placement: "center",
       closable: false,
     });
-    this.workspaceDock.add_panel(this.detailPanel, {
-      name: "detail",
+    // Bounds make the right dock a tiles canvas from its first panel. The
+    // default is deliberately one vertical strip, but the panels remain real
+    // dock tiles users can resize and rearrange.
+    this.workspaceDock.add_panel(this.quoteDetailsDockPanel, {
+      name: "quote-details",
       placement: "right",
       closable: false,
       size: DETAIL_DOCK_WIDTH,
+      bounds: { x: 0, y: 0, width: DETAIL_DOCK_WIDTH, height: 220 },
+    });
+    this.workspaceDock.add_panel(this.chartDockPanel, {
+      name: "chart",
+      placement: "right",
+      closable: false,
+      bounds: { x: 0, y: 220, width: DETAIL_DOCK_WIDTH, height: 300 },
+    });
+    this.workspaceDock.add_panel(this.marketDetailDockPanel, {
+      name: "market-detail",
+      placement: "right",
+      closable: false,
+      bounds: { x: 0, y: 520, width: DETAIL_DOCK_WIDTH, height: 280 },
     });
 
     // What is restored is the geometry, not the panels.
@@ -854,7 +883,9 @@ export default class LongbridgeApp extends View {
     // it does not run a child update transaction or checkpoint every object
     // reachable through that application reference.
     if (panes & PANE_WATCHLIST && this.watchlistPanel) cx.notify(this.watchlistPanel);
-    if (panes & PANE_DETAIL && this.detailPanel) cx.notify(this.detailPanel);
+    if (panes & PANE_QUOTE && this.quoteDetailsDockPanel) cx.notify(this.quoteDetailsDockPanel);
+    if (panes & PANE_CHART && this.chartDockPanel) cx.notify(this.chartDockPanel);
+    if (panes & PANE_MARKET && this.marketDetailDockPanel) cx.notify(this.marketDetailDockPanel);
   }
 
   /**
@@ -1065,7 +1096,7 @@ export default class LongbridgeApp extends View {
     this.userMenuOpen = false;
     this.allocationHelpOpen = false;
     /** Which stock-detail sections are expanded. */
-    this.detailSections = { quote: true, about: false };
+    this.detailSections = { about: false };
     this.watchlistQuery = "";
     this.holdingsQuery = "";
     this.watchlistFilter = InputState.new({ placeholder: "Filter watchlist" });
@@ -1752,11 +1783,15 @@ export default class LongbridgeApp extends View {
             // step. The scale's neighbours (4 and 8) are both wrong by eye here.
             .gap(6)
             .child(
-              image(tokens.appearance === "dark" ? "assets/logo-dark.svg" : "assets/logo-light.svg")
+              div()
+                .relative()
                 .w(20)
                 .h(20)
                 .flex_none()
-                .accessibility_label("Longbridge"),
+                .accessibility_label("Longbridge")
+                .child(div().absolute().left(1).bottom(1).w(3).h(18).bg(statusColors(tokens).info))
+                .child(div().absolute().left(7).bottom(1).w(5).h(12).bg(statusColors(tokens).info))
+                .child(div().absolute().left(15).bottom(1).w(3).h(7).bg(statusColors(tokens).info)),
             )
             .child(label(tokens, "Longbridge", 13).font_weight(700)),
         )
@@ -2038,11 +2073,6 @@ export default class LongbridgeApp extends View {
   watchlist(tokens) {
     const status = streamStatusSummary({ state: this.status.state, delay: this.status.delay });
     const rows = filterRows(this.quotes, this.watchlistQuery, ["code", "name", "symbol"]);
-    // `v_virtual_list` calls its row renderer during layout. Keep the one
-    // QuickJS-to-host viewport read in this parent render and let every row
-    // capture its value; asking the window per visible quote turns scrolling
-    // and live quote repaints into a host-call hot path.
-    const compact = this.isNarrow();
     return this.pane(tokens, "right").child(
       panel(tokens)
         .id("watchlist-pane")
@@ -2075,7 +2105,7 @@ export default class LongbridgeApp extends View {
             "Watchlist",
             rows,
             QUOTE_ROW_HEIGHT,
-            watchlistHeader(tokens, compact),
+            watchlistHeader(tokens, true),
             (quote, index) =>
               quoteRow(
                 tokens,
@@ -2083,7 +2113,7 @@ export default class LongbridgeApp extends View {
                 quote.symbol === this.selectedSymbol,
                 index,
                 this.lastTick,
-                compact,
+                true,
               ),
             (symbol, cx) => this.selectQuote(symbol, cx),
             this.watchlistQuery
@@ -2093,6 +2123,7 @@ export default class LongbridgeApp extends View {
                   "Watchlist is empty",
                   "Add securities in Longbridge, then reconnect to refresh this read-only view.",
                 ),
+            2,
           )
             .flex_1()
             .min_h(0),
@@ -2118,7 +2149,18 @@ export default class LongbridgeApp extends View {
    * @param {((key: string, cx: import("gpui").Context) => void) | null} onSelect
    * @param {import("gpui").Element} empty
    */
-  instrumentTable(tokens, id, name, rows, rowHeight, header, renderRow, onSelect, empty) {
+  instrumentTable(
+    tokens,
+    id,
+    name,
+    rows,
+    rowHeight,
+    header,
+    renderRow,
+    onSelect,
+    empty,
+    columnCount = 5,
+  ) {
     const body = TableBody.new(`${id}-body`)
       .relative()
       .flex_1()
@@ -2150,7 +2192,7 @@ export default class LongbridgeApp extends View {
     return Table.new(`${id}-table`)
       .accessibility_label(name)
       .row_count(rows.length + 1)
-      .column_count(5)
+      .column_count(columnCount)
       .flex()
       .flex_col()
       .child(header)
@@ -2371,117 +2413,141 @@ export default class LongbridgeApp extends View {
     this.loadSelectedChart(cx);
   }
 
-  /** @param {import("gpui-base").Theme} tokens */
+  // Test probes that draw the old inline shell still call this method. The
+  // application dock never does: production gives each child its own tile.
   stockDetail(tokens) {
-    const quote =
-      this.quotes.find((entry) => entry.symbol === this.selectedSymbol) ?? this.quotes[0];
-    return this.pane(tokens, "left").child(
-      panel(tokens)
-        .id("stock-detail-pane")
-        // No top edge: the tab bar above this pane already draws the line, and
-        // two of them at the same seam is a doubled border rather than a
-        // stronger one.
-        .border_t(0)
-        .flex_1()
-        .min_h(0)
-        .child(
-          h_flex()
-            .items_center()
-            .justify_between()
-            .px(tokens.spacing.md)
-            .py(tokens.spacing.sm)
-            // Same as the watchlist: the tab names the pane, so this row only
-            // says what the tab cannot.
-            .child(muted(tokens, "Real-time quote")),
-        )
-        .child(rule(tokens))
-        .child(
-          quote
-            ? v_flex()
-                .flex_1()
-                .min_h(0)
-                .overflow_y_scrollbar()
-                .child(this.detailSectionsFor(tokens, quote))
-            : emptyPanel(
-                tokens,
-                "Watchlist is empty",
-                "Add securities in Longbridge, then reconnect to refresh this read-only view.",
-              ),
-        ),
-    );
+    return v_flex()
+      .size_full()
+      .min_w(0)
+      .min_h(0)
+      .children([
+        this.quoteDetailsPanel(tokens).flex_1().min_h(0),
+        this.chartDetailsPanel(tokens).flex_1().min_h(0),
+        this.marketDetailPanel(tokens).flex_1().min_h(0),
+      ]);
   }
 
-  /**
-   * The three things there are to say about an instrument, each behind its own
-   * disclosure.
-   *
-   * A detail pane is a stack of unrelated readings, and in a narrow window all
-   * three of them at once is a scroll rather than a view. The accordion parts
-   * draw nothing — what they carry is what a screen reader reads: the group,
-   * the heading and its level, the button and its expanded state, and the
-   * region that button controls.
-   *
-   * The chart panel is `keep_mounted`: it holds a retained child view, and a
-   * panel that left the tree on every collapse would tear that child down and
-   * build a new one on the way back.
-   *
-   * @param {import("gpui-base").Theme} tokens
-   * @param {LongbridgeQuoteRow} quote
-   */
-  detailSectionsFor(tokens, quote) {
-    const compact = this.isNarrow();
+  selectedQuote() {
+    return this.quotes.find((entry) => entry.symbol === this.selectedSymbol) ?? this.quotes[0];
+  }
+
+  /** Quote facts are always expanded: this dock tile is the disclosure. */
+  quoteDetailsPanel(tokens) {
+    const quote = this.selectedQuote();
     const toggle = (name) => (open, cx) => {
       this.detailSections = { ...this.detailSections, [name]: open };
-      this.redraw(cx);
+      this.redraw(cx, PANE_QUOTE);
     };
-    return accordionGroup("stock-detail-sections")
+    return v_flex()
+      .id("quote-details-panel")
+      .size_full()
+      .min_w(0)
+      .min_h(0)
+      .bg(tokens.background)
       .child(
-        accordionSection(tokens, {
-          id: "detail-quote",
-          title: "Quote",
-          detail: quote.code,
-          level: 3,
-          open: this.detailSections.quote,
-          onToggle: toggle("quote"),
-          body: quoteDetail(tokens, quote, this.lastTick, this.quotePulse ?? 1),
-        }),
+        h_flex()
+          .px(tokens.spacing.sm)
+          .py(tokens.spacing.xs)
+          .child(label(tokens, "Quote Details", 13).font_weight(700)),
       )
       .child(rule(tokens))
-      .child(this.chartSection(tokens))
       .child(
-        v_flex()
-          .gap(tokens.spacing.xs)
-          .px(tokens.spacing.md)
-          .py(tokens.spacing.xs)
-          .child(orderBookPanel(tokens, this.depthState, depthRatio(this.depthState), compact))
-          .child(rule(tokens))
-          .child(
-            timeSalesPanel(tokens, this.tradesState, {
-              compact,
-              symbol: quote.symbol,
-              market: quote.market,
-            }),
-          ),
-      )
-      .child(
-        accordionSection(tokens, {
-          id: "detail-about",
-          title: "About this instrument",
-          detail: quote.market,
-          level: 3,
-          open: this.detailSections.about,
-          onToggle: toggle("about"),
-          body: v_flex()
-            .p(tokens.spacing.md)
-            .child(
-              detailGrid(tokens, [
-                { title: "Symbol", value: quote.symbol },
-                { title: "Market", value: quote.market || "--" },
-                { title: "Currency", value: quote.currency || "--" },
-                { title: "Stream sequence", value: String(quote.sequence ?? "--") },
-              ]),
+        quote
+          ? v_flex()
+              .flex_1()
+              .min_h(0)
+              .overflow_y_scrollbar()
+              .child(quoteDetail(tokens, quote, this.lastTick, this.quotePulse ?? 1))
+              .child(rule(tokens))
+              .child(
+                accordionGroup("quote-details-sections").child(
+                  accordionSection(tokens, {
+                    id: "detail-about",
+                    title: "About this instrument",
+                    detail: quote.market,
+                    level: 3,
+                    open: this.detailSections.about,
+                    onToggle: toggle("about"),
+                    body: v_flex()
+                      .p(tokens.spacing.md)
+                      .child(
+                        detailGrid(tokens, [
+                          { title: "Symbol", value: quote.symbol },
+                          { title: "Market", value: quote.market || "--" },
+                          { title: "Currency", value: quote.currency || "--" },
+                          { title: "Stream sequence", value: String(quote.sequence ?? "--") },
+                        ]),
+                      ),
+                  }),
+                ),
+              )
+          : emptyPanel(
+              tokens,
+              "Watchlist is empty",
+              "Add securities in Longbridge, then reconnect to refresh this read-only view.",
             ),
-        }),
+      );
+  }
+
+  /** The retained chart has its own tile and is never mounted by market-detail pushes. */
+  chartDetailsPanel(tokens) {
+    return v_flex()
+      .id("chart-panel")
+      .size_full()
+      .min_w(0)
+      .min_h(0)
+      .bg(tokens.background)
+      .child(
+        h_flex()
+          .px(tokens.spacing.sm)
+          .py(tokens.spacing.xs)
+          .child(label(tokens, "Chart", 13).font_weight(700)),
+      )
+      .child(rule(tokens))
+      .child(v_flex().flex_1().min_h(0).overflow_y_scrollbar().child(this.chartSection(tokens)));
+  }
+
+  /** One market-reading scroll: Order Book then Time & Sales. */
+  marketDetailPanel(tokens) {
+    const quote = this.selectedQuote();
+    return v_flex()
+      .id("market-detail-panel")
+      .size_full()
+      .min_w(0)
+      .min_h(0)
+      .bg(tokens.background)
+      .child(
+        h_flex()
+          .px(tokens.spacing.sm)
+          .py(tokens.spacing.xs)
+          .child(label(tokens, "Market Detail", 13).font_weight(700)),
+      )
+      .child(rule(tokens))
+      .child(
+        quote
+          ? v_flex()
+              .flex_1()
+              .min_h(0)
+              .overflow_y_scrollbar()
+              .child(
+                v_flex()
+                  .gap(tokens.spacing.xs)
+                  .px(tokens.spacing.md)
+                  .py(tokens.spacing.xs)
+                  .child(orderBookPanel(tokens, this.depthState, depthRatio(this.depthState)))
+                  .child(rule(tokens))
+                  .child(
+                    timeSalesPanel(tokens, this.tradesState, {
+                      symbol: quote.symbol,
+                      market: quote.market,
+                    }),
+                  ),
+              )
+          : emptyPanel(
+              tokens,
+              "Watchlist is empty",
+              "Select a security to read its market detail.",
+            ),
       );
   }
 

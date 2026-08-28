@@ -73,10 +73,26 @@ export class WatchlistPanel extends WorkspacePanel {
   }
 }
 
-/** The selected instrument: quote, statistics and the retained price chart. */
-export class DetailPanel extends WorkspacePanel {
+/** The selected instrument's quote and static metadata. */
+export class QuoteDetailsPanel extends WorkspacePanel {
   /** @param {Context} cx */
   render(cx) {
-    return this.app.stockDetail(cx.theme()).size_full();
+    return this.app.quoteDetailsPanel(cx.theme()).size_full();
+  }
+}
+
+/** The retained price chart, isolated from unrelated market-detail pushes. */
+export class ChartPanel extends WorkspacePanel {
+  /** @param {Context} cx */
+  render(cx) {
+    return this.app.chartDetailsPanel(cx.theme()).size_full();
+  }
+}
+
+/** One scrollable market-reading panel: order book followed by the tape. */
+export class MarketDetailPanel extends WorkspacePanel {
+  /** @param {Context} cx */
+  render(cx) {
+    return this.app.marketDetailPanel(cx.theme()).size_full();
   }
 }

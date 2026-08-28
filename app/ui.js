@@ -590,13 +590,19 @@ export function quoteRow(tokens, quote, selected, rowIndex = 0, now = Date.now()
           // The badge is an `Avatar` with only its fallback filled: there is no
           // per-market artwork in the application directory, and an image that
           // never resolves is the case the fallback exists for.
-          .child(marketAvatar(tokens, quote.code || quote.symbol))
+          .when(!compact, (cell) => cell.child(marketAvatar(tokens, quote.code || quote.symbol)))
           .child(
-            v_flex()
-              .min_w(0)
-              .gap(tokens.spacing.xxs)
-              .child(label(tokens, quote.code).truncate())
-              .child(muted(tokens, quote.name).truncate()),
+            compact
+              ? v_flex()
+                  .min_w(0)
+                  .gap(tokens.spacing.xxs)
+                  .child(label(tokens, quote.symbol).truncate())
+                  .child(muted(tokens, quote.name).truncate())
+              : v_flex()
+                  .min_w(0)
+                  .gap(tokens.spacing.xxs)
+                  .child(label(tokens, quote.code).truncate())
+                  .child(muted(tokens, quote.name).truncate()),
           ),
       ),
     )
@@ -607,7 +613,16 @@ export function quoteRow(tokens, quote, selected, rowIndex = 0, now = Date.now()
           .w(compact ? "40%" : "19%")
           .min_w(0)
           .justify_end()
-          .child(numeric(tokens, quote.last).truncate()),
+          .child(
+            compact
+              ? v_flex()
+                  .min_w(0)
+                  .items_end()
+                  .gap(tokens.spacing.xxs)
+                  .child(numeric(tokens, quote.last).truncate())
+                  .child(numeric(tokens, quote.changePercent).truncate().text_color(tone))
+              : numeric(tokens, quote.last).truncate(),
+          ),
       ),
     )
     .when(!compact, (element) =>
@@ -665,39 +680,35 @@ function tradeDirection(tokens, direction) {
   return { text: "• Neutral", tone: tokens.muted_foreground };
 }
 
-function depthRow(tokens, side, level, compact) {
+function depthRow(tokens, side, level) {
   const levelId = level.position ?? level.price;
-  const order = level.orderNum !== undefined ? `${detailNumber(level.orderNum)} orders` : "";
   return h_flex()
     .id(`order-book-${side}-level-${levelId}`)
     .items_center()
     .min_w(0)
     .h(22)
-    .gap(tokens.spacing.sm)
     .px(tokens.spacing.sm)
     .child(
       muted(tokens, `${side === "ask" ? "Ask" : "Bid"} ${level.position ?? ""}`)
-        .w(compact ? "25%" : "20%")
+        .w("28%")
         .min_w(0)
         .truncate(),
     )
     .child(
       numeric(tokens, level.price ?? "—")
-        .flex_1()
+        .w("36%")
         .min_w(0)
         .truncate()
         .text_right(),
     )
-    .child(
-      numeric(tokens, detailNumber(level.volume))
-        .w(compact ? "30%" : "25%")
-        .min_w(0)
-        .truncate()
-        .text_right(),
-    )
-    .when(!compact, (element) =>
-      element.child(muted(tokens, order).w("22%").min_w(0).truncate().text_right()),
-    );
+    .child(numeric(tokens, detailNumber(level.volume)).w("36%").min_w(0).truncate().text_right());
+}
+
+function orderBookStatus(state, hasDepth) {
+  if (state?.status === "loading") return "Loading";
+  if (state?.status === "error") return "Error";
+  if (state?.status !== "ready" || !hasDepth) return "Empty";
+  return "Live";
 }
 
 /**
@@ -708,14 +719,14 @@ function depthRow(tokens, side, level, compact) {
  * @param {import("gpui-base").Theme} tokens
  * @param {LongbridgeDepthState} state
  * @param {{ bid: number, ask: number }} ratio
- * @param {boolean} [compact]
  */
-export function orderBookPanel(tokens, state, ratio, compact = false) {
+export function orderBookPanel(tokens, state, ratio) {
   const asks = Array.isArray(state?.asks) ? state.asks.slice(0, 5).reverse() : [];
   const bids = Array.isArray(state?.bids) ? state.bids.slice(0, 5) : [];
   const hasDepth = asks.length > 0 || bids.length > 0;
   const bidPercent = Math.round((ratio?.bid ?? 0) * 100);
   const askPercent = Math.max(0, 100 - bidPercent);
+  const status = orderBookStatus(state, hasDepth);
   return v_flex()
     .id("order-book-panel")
     .w_full()
@@ -723,9 +734,11 @@ export function orderBookPanel(tokens, state, ratio, compact = false) {
     .child(
       h_flex()
         .items_center()
+        .justify_between()
         .px(tokens.spacing.sm)
         .py(tokens.spacing.xs)
-        .child(label(tokens, "Order Book", 13).font_weight(700)),
+        .child(label(tokens, "Order Book", 13).font_weight(700))
+        .child(muted(tokens, status)),
     )
     .child(rule(tokens))
     .child(
@@ -735,14 +748,17 @@ export function orderBookPanel(tokens, state, ratio, compact = false) {
             .child(detailStatus(tokens, state, "No order book data"))
         : v_flex()
             .py(tokens.spacing.xs)
-            .children(asks.map((level) => depthRow(tokens, "ask", level, compact)))
+            .children(asks.map((level) => depthRow(tokens, "ask", level)))
             .child(
-              v_flex()
-                .gap(tokens.spacing.xs)
+              h_flex()
+                .id("order-book-ratio-divider")
+                .items_center()
+                .h(22)
                 .px(tokens.spacing.sm)
-                .py(tokens.spacing.xs)
+                .child(muted(tokens, `Bid ${bidPercent}%`).w("28%").min_w(0).truncate())
                 .child(
                   h_flex()
+                    .flex_1()
                     .h(5)
                     .overflow_hidden()
                     .bg(tokens.muted)
@@ -750,13 +766,10 @@ export function orderBookPanel(tokens, state, ratio, compact = false) {
                     .child(div().h_full().w(`${askPercent}%`).bg(statusColors(tokens).down)),
                 )
                 .child(
-                  h_flex()
-                    .justify_between()
-                    .child(muted(tokens, `Bid ${bidPercent}%`))
-                    .child(muted(tokens, `Ask ${askPercent}%`)),
+                  muted(tokens, `Ask ${askPercent}%`).w("28%").min_w(0).truncate().text_right(),
                 ),
             )
-            .children(bids.map((level) => depthRow(tokens, "bid", level, compact))),
+            .children(bids.map((level) => depthRow(tokens, "bid", level))),
     );
 }
 
@@ -766,7 +779,6 @@ function tradeTime({ symbol, market }, timestamp) {
 }
 
 function tradeRow(tokens, trade, maximum, context) {
-  const { compact = false } = context;
   const direction = tradeDirection(tokens, trade.direction);
   const ratio = Math.round(tradeVolumeRatio(trade.volume, maximum) * 100);
   const identity = tradeIdentity(trade);
@@ -778,19 +790,8 @@ function tradeRow(tokens, trade, maximum, context) {
     .h(24)
     .gap(tokens.spacing.sm)
     .px(tokens.spacing.sm)
-    .child(
-      muted(tokens, tradeTime(context, trade.timestamp))
-        .w(compact ? "24%" : "22%")
-        .min_w(0)
-        .truncate(),
-    )
-    .child(
-      muted(tokens, direction.text)
-        .w(compact ? "25%" : "24%")
-        .min_w(0)
-        .truncate()
-        .text_color(direction.tone),
-    )
+    .child(muted(tokens, tradeTime(context, trade.timestamp)).w("24%").min_w(0).truncate())
+    .child(muted(tokens, direction.text).w("25%").min_w(0).truncate().text_color(direction.tone))
     .child(
       numeric(tokens, trade.price ?? "—")
         .flex_1()
@@ -801,11 +802,20 @@ function tradeRow(tokens, trade, maximum, context) {
     .child(
       div()
         .relative()
-        .w(compact ? "28%" : "30%")
+        .w("28%")
         .min_w(0)
         .h_full()
         .overflow_hidden()
-        .child(div().absolute().right(0).top(3).bottom(3).w(`${ratio}%`).bg(tokens.muted))
+        .child(
+          div()
+            .absolute()
+            .right(0)
+            .top(3)
+            .bottom(3)
+            .w(`${ratio}%`)
+            .bg(direction.tone)
+            .opacity(volumeIntensity(ratio)),
+        )
         .child(
           numeric(tokens, detailNumber(trade.volume))
             .relative()
@@ -818,9 +828,12 @@ function tradeRow(tokens, trade, maximum, context) {
     );
 }
 
-/** @param {import("gpui-base").Theme} tokens @param {LongbridgeTradesState} state @param {{ compact?: boolean, symbol?: string, market?: string }} [context] */
+function volumeIntensity(ratio) {
+  return Math.max(0.35, Math.min(1, 0.35 + (Math.max(0, ratio) / 100) * 0.65));
+}
+
+/** @param {import("gpui-base").Theme} tokens @param {LongbridgeTradesState} state @param {{ symbol?: string, market?: string }} [context] */
 export function timeSalesPanel(tokens, state, context = {}) {
-  const { compact = false } = context;
   const trades = Array.isArray(state?.trades) ? state.trades.slice(0, 20) : [];
   const maximum = trades.reduce((largest, trade) => {
     const volume =
@@ -835,6 +848,14 @@ export function timeSalesPanel(tokens, state, context = {}) {
         : volume
       : Math.max(largest, volume);
   }, 0);
+  const status =
+    state?.status === "loading"
+      ? "Loading"
+      : state?.status === "error"
+        ? "Error"
+        : state?.status !== "ready" || !trades.length
+          ? "Empty"
+          : `${trades.length} ${trades.length === 1 ? "trade" : "trades"}`;
   return v_flex()
     .id("time-sales-panel")
     .w_full()
@@ -842,9 +863,11 @@ export function timeSalesPanel(tokens, state, context = {}) {
     .child(
       h_flex()
         .items_center()
+        .justify_between()
         .px(tokens.spacing.sm)
         .py(tokens.spacing.xs)
-        .child(label(tokens, "Time & Sales", 13).font_weight(700)),
+        .child(label(tokens, "Time & Sales", 13).font_weight(700))
+        .child(muted(tokens, status)),
     )
     .child(rule(tokens))
     .child(
@@ -1717,7 +1740,14 @@ export const DOCK_BAR_HEIGHT = 30;
 export function panelTitle(name) {
   const slash = name.lastIndexOf("/");
   const bare = slash === -1 ? name : name.slice(slash + 1);
-  return bare === "watchlist" ? "Watchlist" : bare === "detail" ? "Stock details" : bare;
+  return (
+    {
+      watchlist: "Watchlist",
+      "quote-details": "Quote Details",
+      chart: "Chart",
+      "market-detail": "Market Detail",
+    }[bare] ?? bare
+  );
 }
 
 /**
@@ -1725,7 +1755,9 @@ export function panelTitle(name) {
  * @param {import("gpui-base").DockGroup} group
  */
 export function dockTabBar(tokens, group) {
-  const facesLeft = group.tabs.some((tab) => panelTitle(tab.name) === "Stock details");
+  const visibleTabs = group.tabs.filter((tab) => tab.visible);
+  if (visibleTabs.length <= 1) return div().id(`dock-tabbar-hidden-${group.node}`).h(0);
+  const facesLeft = visibleTabs.some((tab) => panelTitle(tab.name) !== "Watchlist");
   return (
     h_flex()
       .h(DOCK_BAR_HEIGHT)
@@ -1746,41 +1778,39 @@ export function dockTabBar(tokens, group) {
           .border_color(tokens.border)
           .drop_tab(group)
           .children(
-            group.tabs
-              .filter((tab) => tab.visible)
-              .map(
-                (tab) =>
-                  h_flex()
-                    .id(`dock-tab-${tab.id}`)
-                    .h(DOCK_BAR_HEIGHT)
-                    .items_center()
-                    .gap(tokens.spacing.xs)
-                    .px(tokens.spacing.md)
-                    // A tab is a shape, not a word with a line after it. The active
-                    // one is drawn on three sides so it joins the pane below rather
-                    // than sitting on top of it -- that open bottom edge is what
-                    // makes a tab read as a tab. There is no per-side border colour
-                    // to paint it out with, so the side is simply not drawn.
-                    .border_t(1)
-                    .border_l(1)
-                    .border_r(1)
-                    .border_b(1)
-                    .border_color(tokens.border)
-                    .bg(tokens.background)
-                    .text_size(11)
-                    .text_color(tab.active ? tokens.foreground : tokens.muted_foreground)
-                    .hover((style) => style.bg(tokens.accent))
-                    .select_tab(group, tab.index)
-                    .drag_tab(group, tab.index)
-                    .child(panelTitle(tab.name)),
-                // No close control, and not conditionally: this application has
-                // two panes and no way to reopen one, so closing a pane is a
-                // one-way door it should never hold open. `tab.closable` cannot
-                // be trusted to say so either -- `add_panel`'s options do not
-                // survive a restart, because `register_panel` has nowhere to
-                // carry them and `PanelScript::closable` is asked again on every
-                // load. So the control is simply not drawn.
-              ),
+            visibleTabs.map(
+              (tab) =>
+                h_flex()
+                  .id(`dock-tab-${tab.id}`)
+                  .h(DOCK_BAR_HEIGHT)
+                  .items_center()
+                  .gap(tokens.spacing.xs)
+                  .px(tokens.spacing.md)
+                  // A tab is a shape, not a word with a line after it. The active
+                  // one is drawn on three sides so it joins the pane below rather
+                  // than sitting on top of it -- that open bottom edge is what
+                  // makes a tab read as a tab. There is no per-side border colour
+                  // to paint it out with, so the side is simply not drawn.
+                  .border_t(1)
+                  .border_l(1)
+                  .border_r(1)
+                  .border_b(1)
+                  .border_color(tokens.border)
+                  .bg(tokens.background)
+                  .text_size(11)
+                  .text_color(tab.active ? tokens.foreground : tokens.muted_foreground)
+                  .hover((style) => style.bg(tokens.accent))
+                  .select_tab(group, tab.index)
+                  .drag_tab(group, tab.index)
+                  .child(panelTitle(tab.name)),
+              // No close control, and not conditionally: this application has
+              // two panes and no way to reopen one, so closing a pane is a
+              // one-way door it should never hold open. `tab.closable` cannot
+              // be trusted to say so either -- `add_panel`'s options do not
+              // survive a restart, because `register_panel` has nowhere to
+              // carry them and `PanelScript::closable` is asked again on every
+              // load. So the control is simply not drawn.
+            ),
           ),
       )
   );

@@ -59,7 +59,10 @@ fn host_reads_only_the_materialized_omarchy_palette() {
     .expect("host main.rs");
     assert!(host.contains(".local/state/omarchy/current/theme/colors.toml"));
     assert!(host.contains("HostModule::new(\"omarchy-theme\")"));
-    assert!(host.contains("gpui-shell/plugins"), "existing login storage must remain stable");
+    assert!(
+        host.contains("gpui-shell/plugins"),
+        "existing login storage must remain stable"
+    );
 }
 
 #[test]
@@ -89,13 +92,16 @@ fn application_exposes_api_backed_read_only_views() {
         market.contains("sortLikeTerminal"),
         "watchlist must use terminal-compatible sorting"
     );
-    // Sentence case, per the interface's copy rules: a view's name is a noun,
-    // not a title. `Stock details` was `Stock Details` before the restyle.
-    //
-    // Either file counts. A pane's name is written once, on its tab, and the
-    // tab is drawn by `panelTitle` in `ui.js`; the pane's own header stopped
-    // repeating it, because a pane that names itself twice is two headers.
-    for expected in ["Watchlist", "Stock details", "Portfolio", "Holdings"] {
+    // Each Dock tile names its own reading because a one-tab group hides its
+    // tab strip. The names must remain stable across layout restoration.
+    for expected in [
+        "Watchlist",
+        "Quote Details",
+        "Chart",
+        "Market Detail",
+        "Portfolio",
+        "Holdings",
+    ] {
         assert!(
             main.contains(expected) || ui.contains(expected),
             "missing view copy {expected}"
@@ -123,7 +129,12 @@ fn application_exposes_api_backed_read_only_views() {
             "forbidden trading control label {forbidden}"
         );
     }
-    for forbidden in ["trade::buy", "trade::sell", "trade::place-order", "trade::cancel-order"] {
+    for forbidden in [
+        "trade::buy",
+        "trade::sell",
+        "trade::place-order",
+        "trade::cancel-order",
+    ] {
         assert!(
             !main.contains(forbidden) && !ui.contains(forbidden) && !market.contains(forbidden),
             "forbidden trading action {forbidden}"
@@ -172,15 +183,14 @@ fn application_exposes_api_backed_read_only_views() {
             && main.contains("Scrollbar.vertical(`${id}-rows`)"),
         "both lists must virtualize their rows and pair a scrollbar with them by name"
     );
-    // The panes are dock panels now, which is what makes the layout the user's:
-    // it is a value they edit and the application only draws it. Both halves
-    // have to stay — a panel that nothing registered a class for cannot come
-    // back after a restart.
+    // The Watchlist and the three right-hand readings are real dock panels.
     assert!(
         main.contains("dock_area(this.workspaceDock)")
             && main.contains("DockArea.register_panel(\"watchlist\", WatchlistPanel)")
-            && main.contains("DockArea.register_panel(\"detail\", DetailPanel)"),
-        "the watchlist and detail panes must be panels of the workspace dock"
+            && main.contains("DockArea.register_panel(\"quote-details\", QuoteDetailsPanel)")
+            && main.contains("DockArea.register_panel(\"chart\", ChartPanel)")
+            && main.contains("DockArea.register_panel(\"market-detail\", MarketDetailPanel)"),
+        "all workspace readings must be panels of the workspace dock"
     );
     // Base draws none of this once gpui-shell is in the picture.
     //
@@ -275,30 +285,116 @@ fn price_chart_is_a_retained_child_view() {
 }
 
 #[test]
-fn watchlist_snapshots_responsive_compaction_before_virtual_rows_render() {
+fn watchlist_and_detail_panes_do_not_depend_on_window_viewport_width() {
     let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
     let watchlist = main
         .split("  watchlist(tokens) {")
         .nth(1)
         .and_then(|source| source.split("  /**\n   * A virtualized table").next())
         .expect("watchlist render method");
+    let detail = main
+        .split("  marketDetailPanel(tokens) {")
+        .nth(1)
+        .and_then(|source| source.split("  /**\n   * The chart").next())
+        .expect("detail section render method");
 
     assert!(
-        watchlist.contains("const compact = this.isNarrow();"),
-        "responsive compaction must be read once in the parent render"
+        !watchlist.contains("this.isNarrow()") && !detail.contains("this.isNarrow()"),
+        "dock panes must not use the window viewport as a proxy for their independently-resized width"
     );
     assert!(
-        watchlist.contains("watchlistHeader(tokens, compact)"),
-        "the header must use the parent-render snapshot"
+        watchlist.contains("watchlistHeader(tokens, true)"),
+        "Watchlist must keep only pane-safe primary lanes"
     );
     assert!(
-        watchlist.contains("quoteRow(") && watchlist.contains("this.lastTick,") && watchlist.contains("compact,"),
-        "the virtual-row callback must capture the snapshot rather than call window.viewport_size()"
+        watchlist.contains("quoteRow(")
+            && watchlist.contains("this.lastTick,")
+            && watchlist.contains("true,"),
+        "virtual Watchlist rows must render pane-safe primary lanes without a host sizing call"
     );
     assert_eq!(
         watchlist.matches("this.isNarrow()").count(),
-        1,
+        0,
         "virtual rows must make zero QuickJS-to-host viewport calls"
+    );
+    assert!(
+        detail.contains("orderBookPanel(tokens, this.depthState, depthRatio(this.depthState))")
+            && detail.contains("timeSalesPanel(tokens, this.tradesState, {")
+            && !detail.contains("compact"),
+        "detail lanes must be pane-safe by construction rather than switch from viewport compactness"
+    );
+}
+
+#[test]
+fn time_sales_volume_markers_use_directional_semantic_tones_and_intensity() {
+    let ui = fs::read_to_string(app_dir().join("ui.js")).expect("ui.js");
+
+    assert!(
+        ui.contains("bg(direction.tone)") && ui.contains("opacity(volumeIntensity(ratio))"),
+        "trade volume fills must use semantic direction tone and bounded depth intensity"
+    );
+    assert!(
+        ui.contains("statusColors(tokens).up")
+            && ui.contains("statusColors(tokens).down")
+            && ui.contains("tokens.muted_foreground"),
+        "up, down, and neutral trade directions require separate semantic tones"
+    );
+}
+
+#[test]
+fn detail_dock_defaults_to_three_rearrangeable_vertical_tiles() {
+    let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
+    let workspace = fs::read_to_string(app_dir().join("workspace.js")).expect("workspace.js");
+
+    assert!(
+        main.contains("const WORKSPACE_LAYOUT_VERSION = 3")
+            && main.contains("name: \"quote-details\"")
+            && main.contains("name: \"chart\"")
+            && main.contains("name: \"market-detail\"")
+            && main.contains("bounds: { x: 0, y: 0")
+            && main.contains("bounds: { x: 0, y: 220")
+            && main.contains("bounds: { x: 0, y: 520"),
+        "the incompatible single-detail layout must migrate to three stacked Dock tiles"
+    );
+    assert!(
+        workspace.contains("export class QuoteDetailsPanel")
+            && workspace.contains("export class ChartPanel")
+            && workspace.contains("export class MarketDetailPanel")
+            && workspace.contains("marketDetailPanel(cx.theme())"),
+        "each right-side reading must be a stable independent panel class"
+    );
+    assert!(
+        main.contains("marketDetailPanel(tokens)")
+            && main.contains("overflow_y_scrollbar()")
+            && !workspace
+                .split("export class MarketDetailPanel")
+                .nth(1)
+                .unwrap_or_default()
+                .contains("chartDetailsPanel"),
+        "only Market Detail owns the tape/book scroll and it cannot remount the retained chart"
+    );
+}
+
+#[test]
+fn dock_tab_bar_hides_one_tab_but_keeps_multi_tab_navigation() {
+    let ui = fs::read_to_string(app_dir().join("ui.js")).expect("ui.js");
+
+    assert!(
+        ui.contains("if (visibleTabs.length <= 1) return div().id(`dock-tabbar-hidden-${group.node}`).h(0);")
+            && ui.contains("visibleTabs.map("),
+        "single-panel dock groups must hide chrome while multi-panel groups keep real tabs"
+    );
+}
+
+#[test]
+fn title_mark_uses_the_live_semantic_info_token() {
+    let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
+
+    assert!(
+        main.contains("bg(statusColors(tokens).info)")
+            && !main.contains("assets/logo-dark.svg")
+            && !main.contains("assets/logo-light.svg"),
+        "the title mark must follow the theme's semantic info token rather than a fixed SVG palette"
     );
 }
 
@@ -323,7 +419,9 @@ fn workspace_repaints_do_not_checkpoint_the_market_model() {
     );
     assert!(
         main.contains("cx.notify(this.watchlistPanel)")
-            && main.contains("cx.notify(this.detailPanel)"),
+            && main.contains("cx.notify(this.quoteDetailsDockPanel)")
+            && main.contains("cx.notify(this.chartDockPanel)")
+            && main.contains("cx.notify(this.marketDetailDockPanel)"),
         "shared-state panes must use GPUI-style targeted notification"
     );
     assert!(
