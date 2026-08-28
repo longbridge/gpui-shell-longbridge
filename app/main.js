@@ -412,6 +412,15 @@ export default class LongbridgeApp extends View {
     this.connectedToken = null;
     this.lastTick = Date.now();
     this.quotePulse = 1;
+    // Set when a quote changed the selected instrument's candles, cleared when
+    // the coalesced repaint publishes them. See `scheduleRedraw`.
+    this.chartDirty = false;
+    this.repaint = null;
+    // Off unless asked for. The rail names every binding and the row under it
+    // reports the window's own measurements -- both are for learning the
+    // application and for reading a bug report, and neither is worth four
+    // lines of a market terminal once you know them.
+    this.statusBarVisible = false;
     this.candleCache = new Map();
     this.chartState = { symbol: null, state: "idle" };
     this.chartGeneration = 0;
@@ -671,6 +680,10 @@ export default class LongbridgeApp extends View {
     if (this.repaint) return;
     this.repaint = cx.timer.after(100, (cx) => {
       this.repaint = null;
+      if (this.chartDirty) {
+        this.chartDirty = false;
+        this.syncPriceChartView();
+      }
       this.redraw(cx);
     });
   }
@@ -890,7 +903,13 @@ export default class LongbridgeApp extends View {
         const merged = mergeLiveQuote(this.selectedSymbol, candles, quote);
         if (merged !== candles) {
           this.candleCache.set(this.selectedSymbol, merged);
-          this.syncPriceChartView();
+          // Not published here. `mergeLiveQuote` answers with a new series for
+          // every push, so the identity guard in `syncPriceChartView` never
+          // holds on this path and each quote handed the whole five days of
+          // candles across the nested-view bridge -- which is the other thing
+          // that was being interrupted for overrunning the sandbox's budget.
+          // The coalesced repaint publishes it instead.
+          this.chartDirty = true;
         }
       }
       this.quotePulse = 0.72;
@@ -1210,7 +1229,7 @@ export default class LongbridgeApp extends View {
                   .child(this.hasStoredTokens ? this.workspace(tokens) : this.loginGate(tokens))
                   .child(fps_monitor().anchor("bottom_left")),
               )
-              .child(this.footer(tokens)),
+              .when(this.statusBarVisible, (element) => element.child(this.footer(tokens))),
           ),
       );
   }
@@ -1688,6 +1707,19 @@ export default class LongbridgeApp extends View {
               close(cx);
               this.resetWorkspace(cx);
             }),
+          )
+          .child(
+            menuItem(
+              tokens,
+              "user-menu-status-bar",
+              this.statusBarVisible ? "Hide status bar" : "Show status bar",
+              (_event, cx) => {
+                close(cx);
+                this.statusBarVisible = !this.statusBarVisible;
+                this.redraw(cx);
+              },
+              { detail: "Shortcuts and window state" },
+            ),
           )
           .child(
             menuItem(

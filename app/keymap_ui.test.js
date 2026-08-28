@@ -29,6 +29,11 @@ const QUOTE = Object.freeze({
 
 export default class KeymapUiProbe extends LongbridgeApp {
   init(_props, cx) {
+    // The status bar is off by default in the application -- the rail and the
+    // window readout are for learning it and for reading a bug report, not for
+    // watching a market. This probe is about exactly those two, so it turns
+    // them on rather than asserting against a surface nobody asked for.
+    this.statusBarVisible = true;
     this.initInteractionState();
     this.initKeyboard(cx);
     this.initChartCalendar(cx);
