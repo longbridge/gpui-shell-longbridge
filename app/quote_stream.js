@@ -183,9 +183,11 @@ export function createQuoteStream(options) {
   let startPromise = null;
   let selectedDetailSymbol = null;
   let selectedDetailGeneration = null;
-  // A selection is not live for pushes until its own snapshots complete. This
-  // closes the unsubscribe/subscribe overlap where A → B → A could otherwise
-  // label a delayed first-A push with the final A generation.
+  // PushDepth/PushTrade carry a symbol and sequence, not a subscription
+  // generation. On this ordered socket, unsubscribe/subscribe responses plus
+  // the selected snapshot responses are the only provenance barrier: pushes
+  // stay disabled until that barrier completes. Afterwards an A push is
+  // protocol-wise the final-A stream; the wire offers no basis to call it old.
   let activeDetailGeneration = null;
   let detailEpoch = 0;
   let detailTransition = Promise.resolve();

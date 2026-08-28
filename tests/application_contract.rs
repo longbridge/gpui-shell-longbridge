@@ -117,9 +117,9 @@ fn application_exposes_api_backed_read_only_views() {
     }
     for forbidden in ["Buy", "Sell"] {
         assert!(
-            !main.contains(&format!(r#"\"{}\""#, forbidden))
-                && !ui.contains(&format!(r#"\"{}\""#, forbidden))
-                && !market.contains(&format!(r#"\"{}\""#, forbidden)),
+            !main.contains(&format!("\"{forbidden}\""))
+                && !ui.contains(&format!("\"{forbidden}\""))
+                && !market.contains(&format!("\"{forbidden}\"")),
             "forbidden trading control label {forbidden}"
         );
     }

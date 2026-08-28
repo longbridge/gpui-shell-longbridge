@@ -357,6 +357,26 @@ class DetailEntitlementWebSocket extends MockWebSocket {
   }
 }
 
+class DeferredDetailWebSocket extends MockWebSocket {
+  constructor() {
+    super();
+    this.pendingDetailResponses = [];
+  }
+
+  respond(packet, socket) {
+    if (packet.command === COMMAND.DEPTH || packet.command === COMMAND.TRADES) {
+      this.pendingDetailResponses.push({ packet, socket });
+      return;
+    }
+    super.respond(packet, socket);
+  }
+
+  releaseDetailResponses() {
+    const pending = this.pendingDetailResponses.splice(0);
+    for (const { packet, socket } of pending) super.respond(packet, socket);
+  }
+}
+
 async function runVectors() {
   const transport = new MockWebSocket();
   const timers = new MockTimers();
@@ -762,6 +782,75 @@ async function runVectors() {
     "a reconnect detail entitlement failure remains local to the selected panels",
   );
   await entitlementStream.stop();
+
+  const barrierTransport = new DeferredDetailWebSocket();
+  const barrierTimers = new MockTimers();
+  const barrierDepths = [];
+  const barrierStream = createQuoteStream({
+    accessToken: "test-token",
+    getOtp: async () => "barrier-otp",
+    symbols: ["AAPL.US"],
+    onDepth: (depth, generation) => barrierDepths.push({ depth, generation }),
+    WebSocket: barrierTransport,
+    timers: barrierTimers,
+  });
+  await barrierStream.start();
+  const barrierSocket = barrierTransport.sockets[0];
+  void barrierStream.selectDetailSymbol("AAPL.US", 11);
+  await settle();
+  check(barrierTransport.pendingDetailResponses.length === 2, "first A snapshots are held");
+  barrierTransport.releaseDetailResponses();
+  await settle();
+  void barrierStream.selectDetailSymbol("MSFT.US", 12);
+  await settle();
+  check(barrierTransport.pendingDetailResponses.length === 2, "B snapshots are held");
+  barrierTransport.releaseDetailResponses();
+  await settle();
+  void barrierStream.selectDetailSymbol("AAPL.US", 13);
+  await settle();
+  check(
+    barrierTransport.pendingDetailResponses.length === 2,
+    "final A waits at its own snapshot barrier",
+  );
+  const beforeDelayedPush = barrierDepths.length;
+  barrierSocket.deliver(
+    encodeFrame({
+      type: FRAME_TYPE.PUSH,
+      command: COMMAND.PUSH_DEPTH,
+      body: bytes(
+        0x0a, 0x07, 0x41, 0x41, 0x50, 0x4c, 0x2e, 0x55, 0x53, 0x10, 0x02, 0x1a, 0x0e,
+        0x08, 0x01, 0x12, 0x06, 0x31, 0x39, 0x31, 0x2e, 0x30, 0x30, 0x18, 0x09, 0x20, 0x04,
+      ),
+    }),
+  );
+  await settle();
+  check(
+    barrierDepths.length === beforeDelayedPush,
+    "A pushes are dropped until final-A subscribe and snapshots form an ordered-socket barrier",
+  );
+  barrierTransport.releaseDetailResponses();
+  await settle();
+  check(
+    barrierDepths.at(-1)?.generation === 13,
+    "the final-A snapshot activates only its own generation",
+  );
+  const beforeFinalPush = barrierDepths.length;
+  barrierSocket.deliver(
+    encodeFrame({
+      type: FRAME_TYPE.PUSH,
+      command: COMMAND.PUSH_DEPTH,
+      body: bytes(
+        0x0a, 0x07, 0x41, 0x41, 0x50, 0x4c, 0x2e, 0x55, 0x53, 0x10, 0x03, 0x1a, 0x0e,
+        0x08, 0x01, 0x12, 0x06, 0x31, 0x39, 0x32, 0x2e, 0x30, 0x30, 0x18, 0x0a, 0x20, 0x05,
+      ),
+    }),
+  );
+  await settle();
+  check(
+    barrierDepths.length === beforeFinalPush + 1 && barrierDepths.at(-1)?.generation === 13,
+    "an A push after the final barrier is the final-A stream generation",
+  );
+  await barrierStream.stop();
 
   const retryTransport = new MockWebSocket();
   const retryTimers = new MockTimers();
