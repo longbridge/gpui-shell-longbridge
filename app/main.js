@@ -161,48 +161,6 @@ const TITLE_BAR_LEADING = MACOS ? 96 : 12;
  */
 const MONOSPACE = "JetBrains Mono";
 
-/** Every panel a saved layout mentions, by the name it was registered under. */
-function layoutPanels(node, found = []) {
-  if (!node || typeof node !== "object") return found;
-  const name = typeof node.panel_name === "string" ? node.panel_name : "";
-  const slash = name.lastIndexOf("/");
-  if (slash !== -1) found.push(name.slice(slash + 1));
-  for (const child of node.children ?? []) layoutPanels(child, found);
-  return found;
-}
-
-/**
- * Whether a saved layout still describes this workspace.
- *
- * A dump is the user's arrangement, and almost every arrangement is theirs to
- * keep -- but not one that has lost a pane. A layout naming fewer panels than
- * this window has restores a dock holding an empty group, which draws an
- * invitation to drop a pane into it and offers no way to get the missing one
- * back; the title bar's collapse control then folds that emptiness away and
- * brings it back. Panels are not closable any more, so nothing can reach that
- * state from here again, but a dump written before they stopped being closable
- * still can -- and discarding it costs the user a layout they can redo in two
- * drags, where keeping it costs them a pane they cannot.
- *
- * Extra panels are fine and deliberately not checked: a dump that mentions
- * something this build no longer registers is base's to carry forward, which
- * is how uninstalling and reinstalling an application keeps its place.
- *
- * @param {any} layout
- */
-function usableLayout(layout) {
-  const found = new Set([
-    ...layoutPanels(layout?.center),
-    ...["left_dock", "right_dock", "bottom_dock"].flatMap((dock) =>
-      layoutPanels(layout?.[dock]?.panel),
-    ),
-  ]);
-  return WORKSPACE_PANELS.every((name) => found.has(name));
-}
-
-/** The panes this workspace is made of, by their registered names. */
-const WORKSPACE_PANELS = Object.freeze(["watchlist", "detail"]);
-
 /** The pages the title bar switches between. */
 const PAGES = Object.freeze([
   { key: "watchlist", caption: "Watchlist" },
@@ -569,9 +527,6 @@ export default class LongbridgeApp extends View {
     // first: the dock, its panels and the restored flag are all replaced
     // wholesale rather than added to.
     this.workspaceRevision = 0;
-    // Set when `load` below rebuilds the panels, because that changes which
-    // call repaints them. See `redraw`.
-    this.workspaceRestored = false;
     this.workspaceDock = DockArea.new("longbridge-workspace", { version: WORKSPACE_LAYOUT_VERSION });
     this.watchlistPanel = cx.new(WatchlistPanel, { app: this });
     this.detailPanel = cx.new(DetailPanel, { app: this });
@@ -600,25 +555,32 @@ export default class LongbridgeApp extends View {
       size: DETAIL_DOCK_WIDTH,
     });
 
-    // Storage is a capability, and a layout is not worth failing to start over:
-    // a host that granted none gets the seeded layout above and keeps it for
-    // the session.
+    // What is restored is the geometry, not the panels.
+    //
+    // `load` rebuilds every panel through the registry, which means the two
+    // this view just created are replaced by two it has no handle on -- and a
+    // panel it cannot address is a panel it cannot repaint. `window.refresh()`
+    // does not reach them either; measured, the pane rendered twice at startup
+    // and never again, so the watchlist arrived and the pane went on showing
+    // the empty state it had drawn before the data landed. That is the whole
+    // bug, and it only appeared once a layout had been saved, which is why it
+    // looked intermittent.
+    //
+    // So the panels are always the seeded ones and only what the user actually
+    // adjusts is read back: how wide the details are, and whether they are
+    // folded away. Dragging a pane somewhere else is no longer remembered --
+    // a smaller promise, and one this can keep.
     try {
       const saved = localStorage.getItem(WORKSPACE_LAYOUT_KEY);
-      // A layout written by an older build is ignored rather than repaired —
-      // the panels above are already docked, so the window still opens.
-      //
-      // The check is here because nothing else makes one. `load` adopts the
-      // version it reads rather than comparing it, which is deliberate: base
-      // writes the number and hands it back, and deciding what a mismatch
-      // *means* is the application's. So a bump is inert until this line reads
-      // it, and version 1 — Watchlist on the left, details in the center —
-      // would otherwise come straight back and take the collapse control off
-      // the pane that now has it.
       const layout = saved ? JSON.parse(saved) : null;
-      if (layout && layout.version === WORKSPACE_LAYOUT_VERSION && usableLayout(layout)) {
-        this.workspaceDock.load(layout);
-        this.workspaceRestored = true;
+      if (layout && layout.version === WORKSPACE_LAYOUT_VERSION) {
+        const detail = layout.right_dock;
+        if (Number.isFinite(detail?.size)) {
+          this.workspaceDock.set_dock_size("right", detail.size);
+        }
+        if (detail?.open === false && this.workspaceDock.is_dock_open("right")) {
+          this.workspaceDock.toggle_dock("right");
+        }
       }
     } catch {
       this.layoutStorage = false;
@@ -633,7 +595,19 @@ export default class LongbridgeApp extends View {
         this.layoutWrite = null;
         if (this.layoutStorage === false) return;
         try {
-          localStorage.setItem(WORKSPACE_LAYOUT_KEY, JSON.stringify(this.workspaceDock.dump()));
+          // Written in base's shape so an older build could still read it,
+          // but only the two fields this restores are meaningful.
+          localStorage.setItem(
+            WORKSPACE_LAYOUT_KEY,
+            JSON.stringify({
+              version: WORKSPACE_LAYOUT_VERSION,
+              right_dock: {
+                placement: "right",
+                size: this.workspaceDock.dock_size("right") ?? DETAIL_DOCK_WIDTH,
+                open: this.workspaceDock.is_dock_open("right"),
+              },
+            }),
+          );
         } catch {
           this.layoutStorage = false;
         }
@@ -672,9 +646,9 @@ export default class LongbridgeApp extends View {
    *
    * A quote is not a reason to repaint on its own. They arrive in bursts --
    * every instrument in a live Hong Kong and A-share watchlist, several times a
-   * second each -- and `redraw` on a restored layout is `window.refresh()`,
-   * which repaints everything, the price chart included. One of those per quote
-   * is what took this window to seven frames a second.
+   * second each -- and a repaint is two `set_props` and a notify. One of those
+   * per quote is more than a market terminal needs and more than a person can
+   * read.
    *
    * So a quote sets state and asks for a repaint, and this decides when: the
    * first ask schedules one and the rest of the burst ride on it. A tenth of a
@@ -707,23 +681,6 @@ export default class LongbridgeApp extends View {
    */
   redraw(cx) {
     cx.notify();
-    if (this.workspaceRestored) {
-      // A restored layout's panes are not the two this view created. `load`
-      // rebuilds every panel through the registry, so `this.watchlistPanel` and
-      // `this.detailPanel` are orphans from that moment on and `set_props` on
-      // them repaints nothing that is on screen — the window would come up
-      // correct and then freeze at the first quote. Nothing can re-acquire the
-      // live ones either: `panels()` answers with names and ids, not handles,
-      // and it answers with the layout as it stood *before* this turn's edits.
-      //
-      // So the whole window is refreshed instead of two views being notified.
-      // It is the heavier call — every view redraws, the price chart included,
-      // where `set_props` would have left it alone — and it is confined to the
-      // case that needs it, which is why the flag exists rather than this being
-      // what `redraw` always does.
-      window.refresh();
-      return;
-    }
     this.syncWorkspacePanels();
   }
 

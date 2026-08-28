@@ -130,11 +130,21 @@ fn application_exposes_api_backed_read_only_views() {
         main.contains("toggle_dock(\"right\")") && ui.contains("export function detailToggle"),
         "the details pane must still be collapsible from the window chrome"
     );
-    // A layout the user rearranged and lost on the next launch is worse than
-    // one that never moved.
+    // The geometry is remembered; the arrangement is not, and deliberately.
+    // `load` rebuilds every panel through the registry, so the panels this view
+    // created are replaced by two it has no handle on -- and a panel it cannot
+    // address is a panel it cannot repaint. Measured, the pane rendered twice
+    // at startup and never again: the watchlist arrived and the pane went on
+    // showing the empty state it had drawn before the data landed. So the
+    // panels are always seeded here and only the details pane's width and
+    // whether it is folded away are read back.
     assert!(
-        main.contains("WORKSPACE_LAYOUT_KEY") && main.contains("this.workspaceDock.dump()"),
-        "the workspace layout must be written back to storage"
+        main.contains("WORKSPACE_LAYOUT_KEY") && main.contains("dock_size(\"right\")"),
+        "the details pane's width must be written back to storage"
+    );
+    assert!(
+        !main.contains("workspaceDock.load("),
+        "restoring panels loses the handles that repaint them; see the note above"
     );
 
     // A row inside a virtual list cannot register a handler: it is rebuilt on
