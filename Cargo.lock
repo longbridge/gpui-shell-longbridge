@@ -2611,6 +2611,7 @@ dependencies = [
 [[package]]
 name = "gpui-base"
 version = "0.5.2"
+source = "git+https://github.com/longbridge/gpui-component.git#6d07863fe7077f85abfa0ec2fcb05f3e17c573b2"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -2642,6 +2643,7 @@ dependencies = [
 [[package]]
 name = "gpui-fps"
 version = "0.1.0"
+source = "git+https://github.com/longbridge/gpui-component.git#6d07863fe7077f85abfa0ec2fcb05f3e17c573b2"
 dependencies = [
  "gpui",
  "instant",
@@ -2654,6 +2656,7 @@ dependencies = [
 [[package]]
 name = "gpui-shell"
 version = "0.1.0"
+source = "git+https://github.com/longbridge/gpui-component.git#6d07863fe7077f85abfa0ec2fcb05f3e17c573b2"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -2665,12 +2668,7 @@ dependencies = [
  "instant",
  "libc",
  "llrt_buffer",
- "llrt_console",
  "llrt_crypto",
- "llrt_fetch",
- "llrt_fs",
- "llrt_net",
- "llrt_os",
  "llrt_path",
  "llrt_url",
  "llrt_zlib",
@@ -3137,15 +3135,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6303bc9732ae41b04cb554b844a762b4115a61bfaa81e3e83050991eeb56863f"
 dependencies = [
  "digest 0.11.3",
-]
-
-[[package]]
-name = "home"
-version = "0.5.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc627f471c528ff0c4a49e1d5e60450c8f6461dd6d10ba9dcd3a61d3dff7728d"
-dependencies = [
- "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3651,16 +3640,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "junction"
-version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "160f2eade097f30263b548aae5deb12ad349c909baa710fa24b92c9090b2e006"
-dependencies = [
- "scopeguard",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "khronos-egl"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3855,16 +3834,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "llrt_console"
-version = "0.9.0-beta"
-source = "git+https://github.com/awslabs/llrt?rev=7b95c82a9b15e7ddfb2778eca4b5a63111e74f51#7b95c82a9b15e7ddfb2778eca4b5a63111e74f51"
-dependencies = [
- "llrt_logging",
- "llrt_utils",
- "rquickjs",
-]
-
-[[package]]
 name = "llrt_context"
 version = "0.9.0-beta"
 source = "git+https://github.com/awslabs/llrt?rev=7b95c82a9b15e7ddfb2778eca4b5a63111e74f51#7b95c82a9b15e7ddfb2778eca4b5a63111e74f51"
@@ -3917,19 +3886,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "llrt_dns_cache"
-version = "0.9.0-beta"
-source = "git+https://github.com/awslabs/llrt?rev=7b95c82a9b15e7ddfb2778eca4b5a63111e74f51#7b95c82a9b15e7ddfb2778eca4b5a63111e74f51"
-dependencies = [
- "hyper-util",
- "llrt_context",
- "llrt_utils",
- "quick_cache",
- "tokio",
- "tower-service",
-]
-
-[[package]]
 name = "llrt_encoding"
 version = "0.9.0-beta"
 source = "git+https://github.com/awslabs/llrt?rev=7b95c82a9b15e7ddfb2778eca4b5a63111e74f51#7b95c82a9b15e7ddfb2778eca4b5a63111e74f51"
@@ -3961,55 +3917,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "llrt_fetch"
-version = "0.9.0-beta"
-source = "git+https://github.com/awslabs/llrt?rev=7b95c82a9b15e7ddfb2778eca4b5a63111e74f51#7b95c82a9b15e7ddfb2778eca4b5a63111e74f51"
-dependencies = [
- "bytes",
- "either",
- "http-body",
- "http-body-util",
- "hyper",
- "hyper-util",
- "itoa",
- "llrt_abort",
- "llrt_buffer",
- "llrt_compression",
- "llrt_context",
- "llrt_encoding",
- "llrt_http",
- "llrt_json",
- "llrt_stream_web",
- "llrt_url",
- "llrt_utils",
- "once_cell",
- "percent-encoding",
- "pin-project-lite",
- "rand 0.10.2",
- "rquickjs",
- "sha2 0.11.0",
- "tokio",
- "tracing",
- "url",
-]
-
-[[package]]
-name = "llrt_fs"
-version = "0.9.0-beta"
-source = "git+https://github.com/awslabs/llrt?rev=7b95c82a9b15e7ddfb2778eca4b5a63111e74f51#7b95c82a9b15e7ddfb2778eca4b5a63111e74f51"
-dependencies = [
- "either",
- "junction",
- "llrt_buffer",
- "llrt_encoding",
- "llrt_path",
- "llrt_utils",
- "rand 0.10.2",
- "rquickjs",
- "tokio",
-]
-
-[[package]]
 name = "llrt_hooking"
 version = "0.9.0-beta"
 source = "git+https://github.com/awslabs/llrt?rev=7b95c82a9b15e7ddfb2778eca4b5a63111e74f51#7b95c82a9b15e7ddfb2778eca4b5a63111e74f51"
@@ -4017,24 +3924,6 @@ dependencies = [
  "llrt_utils",
  "once_cell",
  "rquickjs",
-]
-
-[[package]]
-name = "llrt_http"
-version = "0.9.0-beta"
-source = "git+https://github.com/awslabs/llrt?rev=7b95c82a9b15e7ddfb2778eca4b5a63111e74f51#7b95c82a9b15e7ddfb2778eca4b5a63111e74f51"
-dependencies = [
- "bytes",
- "http-body-util",
- "hyper",
- "hyper-rustls",
- "hyper-util",
- "llrt_dns_cache",
- "llrt_tls",
- "llrt_utils",
- "once_cell",
- "rquickjs",
- "rustls",
 ]
 
 [[package]]
@@ -4051,66 +3940,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "llrt_logging"
-version = "0.9.0-beta"
-source = "git+https://github.com/awslabs/llrt?rev=7b95c82a9b15e7ddfb2778eca4b5a63111e74f51#7b95c82a9b15e7ddfb2778eca4b5a63111e74f51"
-dependencies = [
- "itoa",
- "llrt_context",
- "llrt_encoding",
- "llrt_json",
- "llrt_numbers",
- "llrt_utils",
- "rquickjs",
- "ryu",
-]
-
-[[package]]
-name = "llrt_net"
-version = "0.9.0-beta"
-source = "git+https://github.com/awslabs/llrt?rev=7b95c82a9b15e7ddfb2778eca4b5a63111e74f51#7b95c82a9b15e7ddfb2778eca4b5a63111e74f51"
-dependencies = [
- "itoa",
- "llrt_buffer",
- "llrt_context",
- "llrt_events",
- "llrt_stream",
- "llrt_utils",
- "rquickjs",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "llrt_numbers"
-version = "0.9.0-beta"
-source = "git+https://github.com/awslabs/llrt?rev=7b95c82a9b15e7ddfb2778eca4b5a63111e74f51#7b95c82a9b15e7ddfb2778eca4b5a63111e74f51"
-dependencies = [
- "itoa",
- "llrt_utils",
- "rquickjs",
- "ryu",
-]
-
-[[package]]
-name = "llrt_os"
-version = "0.9.0-beta"
-source = "git+https://github.com/awslabs/llrt?rev=7b95c82a9b15e7ddfb2778eca4b5a63111e74f51#7b95c82a9b15e7ddfb2778eca4b5a63111e74f51"
-dependencies = [
- "home",
- "libc",
- "llrt_utils",
- "num_cpus",
- "once_cell",
- "rquickjs",
- "uzers",
- "whoami",
- "windows-registry 0.6.1",
- "windows-result 0.4.1",
- "windows-version",
-]
-
-[[package]]
 name = "llrt_path"
 version = "0.9.0-beta"
 source = "git+https://github.com/awslabs/llrt?rev=7b95c82a9b15e7ddfb2778eca4b5a63111e74f51#7b95c82a9b15e7ddfb2778eca4b5a63111e74f51"
@@ -4118,19 +3947,6 @@ dependencies = [
  "llrt_utils",
  "memchr",
  "rquickjs",
-]
-
-[[package]]
-name = "llrt_stream"
-version = "0.9.0-beta"
-source = "git+https://github.com/awslabs/llrt?rev=7b95c82a9b15e7ddfb2778eca4b5a63111e74f51#7b95c82a9b15e7ddfb2778eca4b5a63111e74f51"
-dependencies = [
- "llrt_buffer",
- "llrt_context",
- "llrt_events",
- "llrt_utils",
- "rquickjs",
- "tokio",
 ]
 
 [[package]]
@@ -4154,17 +3970,6 @@ dependencies = [
  "once_cell",
  "rquickjs",
  "tokio",
-]
-
-[[package]]
-name = "llrt_tls"
-version = "0.9.0-beta"
-source = "git+https://github.com/awslabs/llrt?rev=7b95c82a9b15e7ddfb2778eca4b5a63111e74f51#7b95c82a9b15e7ddfb2778eca4b5a63111e74f51"
-dependencies = [
- "once_cell",
- "rustls",
- "tracing",
- "webpki-roots 1.0.9",
 ]
 
 [[package]]
@@ -5735,16 +5540,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "quick_cache"
-version = "0.6.24"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b9c6658afe513a3b484e3abfdaa0d03ef3c0bbf017542c178dd55f94eb3051f9"
-dependencies = [
- "equivalent",
- "hashbrown 0.16.1",
-]
-
-[[package]]
 name = "quinn"
 version = "0.11.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6224,7 +6019,6 @@ version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e04e4eedfb060b503b5f0a2644abb890b0b3620d3fb674f9455f230014964e4"
 dependencies = [
- "either",
  "rquickjs-core",
  "rquickjs-macro",
 ]
@@ -6236,7 +6030,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "16e4f499ac5b943d97ee6dbc44f23c2c10426f420f7d2f1793d6318911b6608c"
 dependencies = [
  "async-lock",
- "either",
  "half",
  "hashbrown 0.17.1",
  "relative-path",
@@ -7922,15 +7715,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "uzers"
-version = "0.12.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b8275fb1afee25b4111d2dc8b5c505dbbc4afd0b990cb96deb2d88bff8be18d"
-dependencies = [
- "libc",
-]
-
-[[package]]
 name = "v_frame"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8485,12 +8269,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "whoami"
-version = "2.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "626c4bac6755d76ffc12cb01b2eac751db1996b9e0041de9aa02c8c211ddc82c"
-
-[[package]]
 name = "winapi"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8788,17 +8566,6 @@ dependencies = [
  "windows-link 0.1.3",
  "windows-result 0.3.4",
  "windows-strings 0.4.2",
-]
-
-[[package]]
-name = "windows-registry"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02752bf7fbdcce7f2a27a742f798510f3e5ad88dbe84871e5168e2120c3d5720"
-dependencies = [
- "windows-link 0.2.1",
- "windows-result 0.4.1",
- "windows-strings 0.5.1",
 ]
 
 [[package]]
