@@ -18,6 +18,7 @@ import {
   encodeRealtimeQuoteRequest,
   encodeSubscribeRequest,
 } from "./protocol.js";
+import * as depthTradesProtocol from "./protocol.js";
 
 const bytes = (...values) => Uint8Array.from(values);
 
@@ -144,6 +145,123 @@ function runVectors() {
       0x4b,
     ),
     "realtime quote protobuf",
+  );
+
+  // These vectors catch missing codecs and a swapped, omitted, or incorrectly
+  // typed protobuf field in the depth and time-and-sales wire contracts.
+  check(
+    typeof depthTradesProtocol.encodeUnsubscribeRequest === "function" &&
+      typeof depthTradesProtocol.encodeSecurityRequest === "function" &&
+      typeof depthTradesProtocol.encodeSecurityTradeRequest === "function" &&
+      typeof depthTradesProtocol.decodeSecurityDepthResponse === "function" &&
+      typeof depthTradesProtocol.decodeSecurityTradeResponse === "function" &&
+      typeof depthTradesProtocol.decodePushDepth === "function" &&
+      typeof depthTradesProtocol.decodePushTrade === "function",
+    "depth and trade codec exports",
+  );
+  check(
+    depthTradesProtocol.COMMAND.DEPTH === 14 &&
+      depthTradesProtocol.COMMAND.TRADES === 17 &&
+      depthTradesProtocol.COMMAND.PUSH_DEPTH === 102 &&
+      depthTradesProtocol.COMMAND.PUSH_TRADE === 104,
+    "depth and trade command values",
+  );
+  checkBytes(
+    depthTradesProtocol.encodeUnsubscribeRequest({
+      symbols: ["AAPL.US"],
+      subTypes: [2, 4],
+    }),
+    // Unsubscribe shares SubscribeRequest's symbol and packed sub_type fields.
+    bytes(0x0a, 0x07, 0x41, 0x41, 0x50, 0x4c, 0x2e, 0x55, 0x53, 0x12, 0x02, 0x02, 0x04),
+    "unsubscribe protobuf",
+  );
+  checkBytes(
+    depthTradesProtocol.encodeSecurityRequest("AAPL.US"),
+    bytes(0x0a, 0x07, 0x41, 0x41, 0x50, 0x4c, 0x2e, 0x55, 0x53),
+    "security request protobuf",
+  );
+  checkBytes(
+    depthTradesProtocol.encodeSecurityTradeRequest({ symbol: "AAPL.US", count: 20 }),
+    bytes(0x0a, 0x07, 0x41, 0x41, 0x50, 0x4c, 0x2e, 0x55, 0x53, 0x10, 0x14),
+    "security trade request protobuf",
+  );
+
+  const depthResponse = depthTradesProtocol.decodeSecurityDepthResponse(
+    bytes(
+      0x0a, 0x06, 0x37, 0x30, 0x30, 0x2e, 0x48, 0x4b,
+      // ask: position=1, omitted price, volume=-5, order_num=7, unknown field 9.
+      0x12, 0x11, 0x08, 0x01, 0x18, 0xfb, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+      0x01, 0x20, 0x07, 0x48, 0x01,
+      // bid: position=2, price=189.50, volume=100, order_num=3.
+      0x1a, 0x0e, 0x08, 0x02, 0x12, 0x06, 0x31, 0x38, 0x39, 0x2e, 0x35, 0x30, 0x18, 0x64,
+      0x20, 0x03,
+      // Unknown top-level field 15.
+      0x78, 0x01,
+    ),
+  );
+  check(
+    depthResponse.symbol === "700.HK" &&
+      depthResponse.asks.length === 1 &&
+      depthResponse.asks[0].position === 1 &&
+      depthResponse.asks[0].price === undefined &&
+      depthResponse.asks[0].volume === -5n &&
+      depthResponse.asks[0].orderNum === 7n &&
+      depthResponse.bids.length === 1 &&
+      depthResponse.bids[0].position === 2 &&
+      depthResponse.bids[0].price === "189.50" &&
+      depthResponse.bids[0].volume === 100n &&
+      depthResponse.bids[0].orderNum === 3n,
+    "SecurityDepthResponse protobuf",
+  );
+
+  const trade = bytes(
+    0x0a, 0x06, 0x31, 0x38, 0x39, 0x2e, 0x35, 0x30,
+    0x10, 0xfe, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01,
+    0x18, 0x80, 0xe2, 0xcf, 0xaa, 0x06,
+    0x22, 0x01, 0x49, 0x28, 0x02, 0x30, 0x02,
+    // Unknown fixed32 field 7.
+    0x3d, 0x01, 0x00, 0x00, 0x00,
+  );
+  const tradeResponse = depthTradesProtocol.decodeSecurityTradeResponse(
+    bytes(0x0a, 0x07, 0x41, 0x41, 0x50, 0x4c, 0x2e, 0x55, 0x53, 0x12, 0x25, ...trade, 0x38, 0x01),
+  );
+  check(
+    tradeResponse.symbol === "AAPL.US" &&
+      tradeResponse.trades.length === 1 &&
+      tradeResponse.trades[0].price === "189.50" &&
+      tradeResponse.trades[0].volume === -2n &&
+      tradeResponse.trades[0].timestamp === 1_700_000_000n &&
+      tradeResponse.trades[0].tradeType === "I" &&
+      tradeResponse.trades[0].direction === 2 &&
+      tradeResponse.trades[0].tradeSession === 2,
+    "SecurityTradeResponse protobuf",
+  );
+  const depthPush = depthTradesProtocol.decodePushDepth(
+    bytes(
+      0x0a, 0x06, 0x37, 0x30, 0x30, 0x2e, 0x48, 0x4b, 0x10, 0x2a,
+      0x1a, 0x11, 0x08, 0x01, 0x18, 0xfb, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+      0x01, 0x20, 0x07, 0x48, 0x01,
+      0x22, 0x0e, 0x08, 0x02, 0x12, 0x06, 0x31, 0x38, 0x39, 0x2e, 0x35, 0x30, 0x18, 0x64,
+      0x20, 0x03,
+    ),
+  );
+  check(
+    depthPush.symbol === "700.HK" &&
+      depthPush.sequence === 42n &&
+      depthPush.asks[0].price === undefined &&
+      depthPush.bids[0].price === "189.50",
+    "PushDepth protobuf",
+  );
+  const tradePush = depthTradesProtocol.decodePushTrade(
+    bytes(0x0a, 0x07, 0x41, 0x41, 0x50, 0x4c, 0x2e, 0x55, 0x53, 0x10, 0x2a, 0x1a, 0x25, ...trade),
+  );
+  check(
+    tradePush.symbol === "AAPL.US" &&
+      tradePush.sequence === 42n &&
+      tradePush.trades[0].tradeType === "I" &&
+      tradePush.trades[0].direction === 2 &&
+      tradePush.trades[0].tradeSession === 2,
+    "PushTrade protobuf",
   );
 
   check(COMMAND.HISTORY_CANDLESTICKS === 27, "history candlestick command");

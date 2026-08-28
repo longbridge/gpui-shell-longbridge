@@ -26,8 +26,12 @@ export const COMMAND = Object.freeze({
   SUBSCRIBE: 6,
   UNSUBSCRIBE: 7,
   REALTIME_QUOTE: 11,
+  DEPTH: 14,
+  TRADES: 17,
   HISTORY_CANDLESTICKS: 27,
   PUSH_QUOTE: 101,
+  PUSH_DEPTH: 102,
+  PUSH_TRADE: 104,
 });
 
 export const SUB_TYPE = Object.freeze({
@@ -399,6 +403,29 @@ export function encodeSubscribeRequest({
   return concat(parts);
 }
 
+/** Encodes quote.UnsubscribeRequest's compatible subscription fields for command 7. */
+export function encodeUnsubscribeRequest(options) {
+  return encodeSubscribeRequest({ ...options, isFirstPush: false });
+}
+
+/** Encodes quote.SecurityRequest, used by the depth command. */
+export function encodeSecurityRequest(symbol) {
+  return stringField(1, symbol, "symbol");
+}
+
+/** Encodes quote.SecurityTradeRequest for command 17. */
+export function encodeSecurityTradeRequest({ symbol, count }) {
+  return concat([
+    stringField(1, symbol, "symbol"),
+    varintField(
+      2,
+      BigInt(requireInteger(count, "count", -0x8000_0000, 0x7fff_ffff)),
+      "count",
+      true,
+    ),
+  ]);
+}
+
 /** Encodes quote.MultiSecurityRequest for real-time quote command 11. */
 export function encodeRealtimeQuoteRequest(symbols) {
   if (!Array.isArray(symbols)) fail("symbols must be an array");
@@ -510,6 +537,14 @@ function unsigned32(value, field) {
   return Number(value);
 }
 
+function signed32(value, field) {
+  const result = signed64(value);
+  if (result < -0x8000_0000n || result > 0x7fff_ffffn) {
+    fail(`protobuf ${field} exceeds int32`);
+  }
+  return Number(result);
+}
+
 function decodeMessage(data, readField) {
   const reader = new ProtoReader(data);
   while (reader.offset < reader.bytes.length) {
@@ -592,6 +627,106 @@ export function decodeSecurityQuoteResponse(data) {
     return true;
   });
   return quotes;
+}
+
+function decodeDepth(data) {
+  const depth = {};
+  decodeMessage(data, (reader, field, wireType) => {
+    if (field === 1) {
+      expectWireType(wireType, 0, field);
+      depth.position = signed32(reader.readVarint("depth position"), "depth position");
+    } else if (field === 2) {
+      expectWireType(wireType, 2, field);
+      depth.price = reader.readString("depth price");
+    } else if (field === 3 || field === 4) {
+      expectWireType(wireType, 0, field);
+      const name = field === 3 ? "volume" : "orderNum";
+      depth[name] = signed64(reader.readVarint(`depth ${name}`));
+    } else return false;
+    return true;
+  });
+  return depth;
+}
+
+function decodeSecurityDepth(data, push) {
+  const response = { asks: [], bids: [] };
+  decodeMessage(data, (reader, field, wireType) => {
+    if (field === 1) {
+      expectWireType(wireType, 2, field);
+      response.symbol = reader.readString("depth symbol");
+    } else if (push && field === 2) {
+      expectWireType(wireType, 0, field);
+      response.sequence = signed64(reader.readVarint("depth sequence"));
+    } else if (field === (push ? 3 : 2) || field === (push ? 4 : 3)) {
+      expectWireType(wireType, 2, field);
+      response[field === (push ? 3 : 2) ? "asks" : "bids"].push(
+        decodeDepth(reader.readBytes("depth level")),
+      );
+    } else return false;
+    return true;
+  });
+  return response;
+}
+
+/** Decodes quote.SecurityDepthResponse returned by command 14. */
+export function decodeSecurityDepthResponse(data) {
+  return decodeSecurityDepth(data, false);
+}
+
+/** Decodes quote.PushDepth delivered by push command 102. */
+export function decodePushDepth(data) {
+  return decodeSecurityDepth(data, true);
+}
+
+function decodeTrade(data) {
+  const trade = {};
+  decodeMessage(data, (reader, field, wireType) => {
+    if (field === 1 || field === 4) {
+      expectWireType(wireType, 2, field);
+      const name = field === 1 ? "price" : "tradeType";
+      trade[name] = reader.readString(`trade ${name}`);
+    } else if (field === 2 || field === 3) {
+      expectWireType(wireType, 0, field);
+      const name = field === 2 ? "volume" : "timestamp";
+      trade[name] = signed64(reader.readVarint(`trade ${name}`));
+    } else if (field === 5) {
+      expectWireType(wireType, 0, field);
+      trade.direction = signed32(reader.readVarint("trade direction"), "trade direction");
+    } else if (field === 6) {
+      expectWireType(wireType, 0, field);
+      trade.tradeSession = unsigned32(reader.readVarint("trade trade_session"), "trade_session");
+    } else return false;
+    return true;
+  });
+  return trade;
+}
+
+function decodeSecurityTrade(data, push) {
+  const response = { trades: [] };
+  decodeMessage(data, (reader, field, wireType) => {
+    if (field === 1) {
+      expectWireType(wireType, 2, field);
+      response.symbol = reader.readString("trade symbol");
+    } else if (push && field === 2) {
+      expectWireType(wireType, 0, field);
+      response.sequence = signed64(reader.readVarint("trade sequence"));
+    } else if (field === (push ? 3 : 2)) {
+      expectWireType(wireType, 2, field);
+      response.trades.push(decodeTrade(reader.readBytes("trade")));
+    } else return false;
+    return true;
+  });
+  return response;
+}
+
+/** Decodes quote.SecurityTradeResponse returned by command 17. */
+export function decodeSecurityTradeResponse(data) {
+  return decodeSecurityTrade(data, false);
+}
+
+/** Decodes quote.PushTrade delivered by push command 104. */
+export function decodePushTrade(data) {
+  return decodeSecurityTrade(data, true);
 }
 
 function decodeCandlestick(data) {
