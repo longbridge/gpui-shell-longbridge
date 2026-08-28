@@ -32,7 +32,7 @@ import {
 } from "./auth.js";
 import { get } from "./http.js";
 import {
-  applyQuote,
+  applyQuotes,
   filterRows,
   initialQuotes,
   sortLikeTerminal,
@@ -395,6 +395,8 @@ export default class LongbridgeApp extends View {
     this.chartDirty = false;
     this.repaint = null;
     this.dirtyPanes = 0;
+    /** Pushes that have arrived but not yet been merged. See `drainQuotes`. */
+    this.pendingQuotes = [];
     // Off unless asked for. The rail names every binding and the row under it
     // reports the window's own measurements -- both are for learning the
     // application and for reading a bug report, and neither is worth four
@@ -663,6 +665,21 @@ export default class LongbridgeApp extends View {
   }
 
   /**
+   * Merges everything that arrived since the last repaint, in one pass.
+   *
+   * Order is preserved, so `mergeQuote` refuses an out-of-order push here
+   * exactly as it would have one arriving on its own.
+   */
+  drainQuotes() {
+    if (this.pendingQuotes.length === 0) return;
+    const arrived = this.pendingQuotes;
+    this.pendingQuotes = [];
+    const receivedAt = Date.now();
+    this.quotes = applyQuotes(this.quotes, arrived, receivedAt);
+    this.portfolioQuotes = applyQuotes(this.portfolioQuotes, arrived, receivedAt);
+  }
+
+  /**
    * Repaints soon, and at most once however many callers ask in between.
    *
    * A quote is not a reason to repaint on its own. They arrive in bursts --
@@ -684,6 +701,7 @@ export default class LongbridgeApp extends View {
     if (this.repaint) return;
     this.repaint = cx.timer.after(100, (cx) => {
       this.repaint = null;
+      this.drainQuotes();
       if (this.chartDirty) {
         this.chartDirty = false;
         this.syncPriceChartView();
@@ -927,9 +945,13 @@ export default class LongbridgeApp extends View {
     // isFirstPush, in one synchronous run -- cost seconds and overrun the
     // sandbox's task budget, which unwound the stream before it could reach
     // `connected`. The one-second clock already re-sorts.
-    const receivedAt = Date.now();
-    this.quotes = applyQuote(this.quotes, quote, receivedAt);
-    this.portfolioQuotes = applyQuote(this.portfolioQuotes, quote, receivedAt);
+    // Buffered, not applied. A connection opens with every instrument twice
+    // over -- the snapshot and then the first push -- in one synchronous run,
+    // and publishing a new list per quote copies the whole watchlist each time.
+    // That burst is what overruns the sandbox's budget, and the interrupt is
+    // not catchable, so it takes the rest of the run with it. Held here and
+    // merged in one pass by the repaint that was already being coalesced.
+    this.pendingQuotes.push(quote);
     if (quote && typeof quote === "object" && quote.symbol === this.selectedSymbol) {
       const candles = this.candleCache.get(this.selectedSymbol);
       if (candles) {

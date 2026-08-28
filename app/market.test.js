@@ -1,6 +1,7 @@
 import { View } from "gpui";
 import {
   applyQuote,
+  applyQuotes,
   formatCompactNumber,
   initialQuotes,
   mergeQuote,
@@ -260,6 +261,35 @@ function runVectors() {
     }
   }
   const elapsed = Date.now() - started;
+
+  // The same burst the way the application applies it now: held until the
+  // repaint and merged in one pass. `applyQuote` copies the whole list per
+  // quote, which is what made the connect burst expensive; this indexes once
+  // and copies once, and has to reach the same answer.
+  const batched = applyQuotes(
+    watchlist,
+    Array.from({ length: 2 }, (_, pass) =>
+      Array.from({ length: watchlist.length }, (_, position) => ({
+        symbol: `S${position}.US`,
+        lastDone: `${100 + pass}`,
+        prevClose: "100",
+      })),
+    ).flat(),
+    1_700_000_000_001,
+  );
+  check(
+    batched[7].last === "101" && batched.length === 200,
+    "a batched burst lands the same last price on the same rows",
+  );
+  check(
+    applyQuotes(watchlist, [], 1) === watchlist,
+    "an empty batch costs nothing and publishes nothing",
+  );
+  check(
+    applyQuotes(batched, [{ symbol: "S7.US", sequence: 3n, lastDone: "1.00" }], 2) !== batched ||
+      batched[7].last === "101",
+    "a batch still refuses a push that would roll a row backward",
+  );
   check(burst[7].last === "101", "the burst leaves the latest price in place");
   // The ceiling is loose on purpose. What this catches is the re-sort, which
   // cost ~3ms per quote against a 192-row list and put a real burst over a

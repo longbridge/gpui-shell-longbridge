@@ -36,6 +36,13 @@ export default class PriceChartUpdateProbe extends LongbridgeApp {
     this.portfolioQuotes = [];
     this.lastTick = 1_700_000_001_000;
     this.quotePulse = 1;
+    // The application buffers pushes and coalesces the repaint, so a probe that
+    // builds its state by hand has to carry the same fields or the first quote
+    // throws before anything is drawn.
+    this.pendingQuotes = [];
+    this.dirtyPanes = 0;
+    this.repaint = null;
+    this.chartDirty = false;
     this.candleCache = new Map([
       [
         this.selectedSymbol,
