@@ -1528,9 +1528,17 @@ export function dockTabBar(tokens, group) {
                 .items_center()
                 .gap(tokens.spacing.xs)
                 .px(tokens.spacing.md)
+                // A tab is a shape, not a word with a line after it. The active
+                // one is drawn on three sides so it joins the pane below rather
+                // than sitting on top of it -- that open bottom edge is what
+                // makes a tab read as a tab. There is no per-side border colour
+                // to paint it out with, so the side is simply not drawn.
+                .border_t(1)
+                .border_l(1)
                 .border_r(1)
+                .when(!tab.active, (element) => element.border_b(1))
                 .border_color(tokens.border)
-                .bg(tab.active ? tokens.background : tokens.surface)
+                .bg(tab.active ? tokens.surface : tokens.muted)
                 .text_size(11)
                 .text_color(tab.active ? tokens.foreground : tokens.muted_foreground)
                 .hover((style) => style.bg(tokens.accent))

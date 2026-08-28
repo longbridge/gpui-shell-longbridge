@@ -651,6 +651,31 @@ export default class LongbridgeApp extends View {
   }
 
   /**
+   * Repaints soon, and at most once however many callers ask in between.
+   *
+   * A quote is not a reason to repaint on its own. They arrive in bursts --
+   * every instrument in a live Hong Kong and A-share watchlist, several times a
+   * second each -- and `redraw` on a restored layout is `window.refresh()`,
+   * which repaints everything, the price chart included. One of those per quote
+   * is what took this window to seven frames a second.
+   *
+   * So a quote sets state and asks for a repaint, and this decides when: the
+   * first ask schedules one and the rest of the burst ride on it. A tenth of a
+   * second is under what reads as delay and far over the rate the pushes arrive
+   * at, which is the point -- the cost stops scaling with how chatty the market
+   * is.
+   *
+   * @param {import("gpui").Context} cx
+   */
+  scheduleRedraw(cx) {
+    if (this.repaint) return;
+    this.repaint = cx.timer.after(100, (cx) => {
+      this.repaint = null;
+      this.redraw(cx);
+    });
+  }
+
+  /**
    * What every mutation site calls: repaint this view, and repaint the panes.
    *
    * One funnel rather than a `cx.notify()` at each site, because after the
@@ -871,10 +896,10 @@ export default class LongbridgeApp extends View {
       this.quotePulse = 0.72;
       cx.timer.after(160, (cx) => {
         this.quotePulse = 1;
-        this.redraw(cx);
+        this.scheduleRedraw(cx);
       });
     }
-    this.redraw(cx);
+    this.scheduleRedraw(cx);
   }
 
   /** @param {import("gpui").Context} cx */
@@ -2071,72 +2096,109 @@ export default class LongbridgeApp extends View {
     return v_flex()
       .overflow_y_scroll()
       .gap(tokens.spacing.md)
+      // The summary and the ring share a row, four parts to six. They answer
+      // the same question -- what is in this account -- from two directions,
+      // and reading one under the other made the page a column of cards where
+      // it is really two views of one thing. The ring takes the larger share:
+      // it carries a legend beside it, and the summary is a handful of figures.
+      //
+      // `flex_wrap` because a narrow window cannot hold both: they stack rather
+      // than squeezing the legend out of the ring.
       .child(
-        panel(tokens)
+        h_flex()
           .flex_none()
+          .flex_wrap()
+          .items_stretch()
+          .gap(tokens.spacing.md)
           .child(
-            h_flex()
-              .items_center()
-              .justify_between()
-              .px(tokens.spacing.md)
-              .py(tokens.spacing.sm)
-              .child(label(tokens, "Portfolio summary", 14).font_weight(700))
-              .child(muted(tokens, account ? `Risk level ${account.risk}` : "Read only")),
-          )
-          .child(rule(tokens))
-          .child(
-            account
-              ? portfolioSummary(tokens, account, presentation.summaries)
-              : emptyPanel(tokens, "No account snapshot", "Waiting for Longbridge account assets."),
-          ),
-      )
-      .when(allocation.slices.length > 0 || allocation.unpriced.length > 0, (element) =>
-        element.child(
-          panel(tokens)
-            .flex_none()
-            .child(
-              h_flex()
-                .items_center()
-                .justify_between()
-                .px(tokens.spacing.md)
-                .py(tokens.spacing.sm)
-                .child(label(tokens, "Asset allocation", 14).font_weight(700))
-                .child(
-                  h_flex()
-                    .items_center()
-                    .gap(tokens.spacing.sm)
-                    .child(muted(tokens, "Market value in USD"))
-                    .child(this.allocationHelp(tokens, allocation)),
-                ),
-            )
-            .child(rule(tokens))
-            .child(
-              h_flex()
-                .flex_wrap()
-                .items_start()
-                .gap(tokens.spacing.xl)
-                .p(tokens.spacing.md)
-                .child(
-                  v_flex().flex_basis(360).flex_grow(1).child(allocationChart(tokens, allocation)),
-                ),
-            ),
-        ),
-      )
-      .child(
-        panel(tokens)
-          .flex_none()
-          .child(
-            h_flex()
-              .items_center()
-              .justify_between()
-              .px(tokens.spacing.md)
-              .py(tokens.spacing.sm)
-              .child(label(tokens, "Holdings", 14).font_weight(700))
+            panel(tokens)
+              .flex_basis(0)
+              .flex_grow(4)
+              .min_w(320)
               .child(
                 h_flex()
                   .items_center()
-                  .gap(tokens.spacing.sm)
-                  .child(filterInput(tokens, this.holdingsFilter, 160))
+                  .justify_between()
+                  .px(tokens.spacing.md)
+                  .py(tokens.spacing.sm)
+                  .child(
+                    h_flex()
+                      .items_baseline()
+                      .gap(tokens.spacing.xs)
+                      .child(label(tokens, "Portfolio summary", 14).font_weight(700))
+                      .child(
+                        muted(tokens, account ? `Risk level ${account.risk}` : "Read only"),
+                      ),
+                  ),
+              )
+              .child(rule(tokens))
+              .child(
+                account
+                  ? portfolioSummary(tokens, account, presentation.summaries)
+                  : emptyPanel(
+                      tokens,
+                      "No account snapshot",
+                      "Waiting for Longbridge account assets.",
+                    ),
+              ),
+          )
+          .when(allocation.slices.length > 0 || allocation.unpriced.length > 0, (element) =>
+            element.child(
+              panel(tokens)
+                .flex_basis(0)
+                .flex_grow(6)
+                .min_w(380)
+                .child(
+                  h_flex()
+                    .items_center()
+                    .justify_between()
+                    .px(tokens.spacing.md)
+                    .py(tokens.spacing.sm)
+                    .child(
+                      h_flex()
+                        .items_baseline()
+                        .gap(tokens.spacing.xs)
+                        .child(label(tokens, "Asset allocation", 14).font_weight(700))
+                        .child(muted(tokens, "Market value in USD")),
+                    )
+                    // The control stays opposite the heading; only the words
+                    // that describe the card moved next to its name.
+                    .child(this.allocationHelp(tokens, allocation)),
+                )
+                .child(rule(tokens))
+                .child(
+                  h_flex()
+                    .flex_wrap()
+                    .items_start()
+                    .gap(tokens.spacing.xl)
+                    .p(tokens.spacing.md)
+                    .child(
+                      v_flex()
+                        .flex_basis(360)
+                        .flex_grow(1)
+                        .child(allocationChart(tokens, allocation)),
+                    ),
+                ),
+            ),
+          ),
+      )
+      .child(
+        panel(tokens)
+          .flex_none()
+          .child(
+            h_flex()
+              .items_center()
+              .justify_between()
+              .px(tokens.spacing.md)
+              .py(tokens.spacing.sm)
+              // The count sits with the title, not across the row from it. It
+              // says how much of *this* is here, so it reads as part of the
+              // heading; opposite the filter it read as a second control.
+              .child(
+                h_flex()
+                  .items_baseline()
+                  .gap(tokens.spacing.xs)
+                  .child(label(tokens, "Holdings", 14).font_weight(700))
                   .child(
                     muted(
                       tokens,
@@ -2145,7 +2207,8 @@ export default class LongbridgeApp extends View {
                         : `${holdingRows.length} of ${this.holdings.length} positions`,
                     ),
                   ),
-              ),
+              )
+              .child(filterInput(tokens, this.holdingsFilter, 160)),
           )
           .child(rule(tokens))
           .child(

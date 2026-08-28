@@ -1,4 +1,5 @@
 use std::{
+    time::Duration,
     fs,
     ops::Deref as _,
     path::{Path, PathBuf},
@@ -611,6 +612,11 @@ fn unrelated_quote_updates_do_not_rebuild_the_price_chart_child(cx: &mut TestApp
         gpui::point(gpui::px(20.), gpui::px(20.)),
         gpui::Modifiers::default(),
     );
+    // Quotes no longer repaint as they land. They arrive in bursts and a
+    // repaint on a restored layout is a whole-window refresh, so the burst is
+    // coalesced into one; the clock this advances past is that coalescing
+    // window, not a delay anybody waits on.
+    context.executor().advance_clock(Duration::from_millis(200));
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));
     let delta = runtime.read_metrics().since(&before);
