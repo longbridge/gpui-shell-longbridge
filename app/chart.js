@@ -390,7 +390,11 @@ export function layoutIntradaySeries(series, { width, height }) {
   );
   const sessionSegments = starts.map(({ index, tradeSession }, startIndex) => {
     const end = starts[startIndex + 1]?.index ?? points.length;
-    return Object.freeze({ tradeSession, points: Object.freeze(points.slice(index, end)) });
+    // Later session paths start at the preceding candle. This draws the
+    // chronological connector at the boundary while the new session supplies
+    // its own tone for the portion that follows the marker.
+    const start = startIndex === 0 ? index : index - 1;
+    return Object.freeze({ tradeSession, points: Object.freeze(points.slice(start, end)) });
   });
   return Object.freeze({
     points: Object.freeze(points),

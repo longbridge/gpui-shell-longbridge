@@ -62,6 +62,32 @@ function runVectors() {
     "intraday line spans the complete session timeline",
   );
 
+  const continuousIntraday = layoutIntradaySeries(
+    {
+      candles: [
+        { ...candle("2026-08-28T20:00:00Z", 101, 3), geometry: Object.freeze({ close: 101 }) },
+        { ...candle("2026-08-28T20:01:00Z", 102, 3), geometry: Object.freeze({ close: 102 }) },
+        { ...candle("2026-08-29T13:30:00Z", 103, 1), geometry: Object.freeze({ close: 103 }) },
+        { ...candle("2026-08-29T13:31:00Z", 104, 1), geometry: Object.freeze({ close: 104 }) },
+        { ...candle("2026-08-29T14:30:00Z", 105, 0), geometry: Object.freeze({ close: 105 }) },
+        { ...candle("2026-08-29T14:31:00Z", 106, 0), geometry: Object.freeze({ close: 106 }) },
+      ],
+      sessionBoundaries: [
+        { index: 0, tradeSession: 3 },
+        { index: 2, tradeSession: 1 },
+        { index: 4, tradeSession: 0 },
+      ],
+    },
+    { width: 300, height: 100 },
+  );
+  const drawablePairs = continuousIntraday.sessionSegments.flatMap((segment) =>
+    segment.points.slice(1).map((point, index) => `${segment.points[index].close}-${point.close}`),
+  );
+  check(
+    drawablePairs.join(",") === "101-102,102-103,103-104,104-105,105-106",
+    "session segments include every adjacent chronological pair, including boundaries",
+  );
+
   const series = prepareFiveDaySeries("700.HK", [
     candle("2026-08-19T02:00:00Z", 3),
     candle("2026-08-17T02:00:00Z", 1),
