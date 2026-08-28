@@ -107,27 +107,23 @@ fn application_exposes_api_backed_read_only_views() {
             && main.contains("DockArea.register_panel(\"detail\", DetailPanel)"),
         "the watchlist and detail panes must be panels of the workspace dock"
     );
-    // Base draws no tab bar and no drop hint, so a dock with neither would be a
-    // workspace whose panes cannot be told apart or moved.
+    // Base draws none of this once gpui-shell is in the picture.
     //
-    // `dockFrame` is not on this list and must not go back on it. That chrome
-    // hook replaces base's whole `render_dock` -- a side dock's own box, the
-    // short circuit that gives a closed one no width, and its resize handle all
-    // come from there -- so drawing it took over the layout and dropped the
-    // right dock out of the row into the flow below the centre. Base draws each
-    // dock's box; the collapse control it was there for is a title-bar button
-    // driven by `DockArea.toggle_dock`.
+    // `dockFrame` is on this list for a reason worth writing down, because it
+    // was taken off once. gpui-shell's `ScriptDockSkin::render_dock` replaces
+    // base's `render_dock` whether or not an application supplies chrome, and
+    // the default chrome returns the content bare -- without the box base wraps
+    // a dock in. A side dock with no width is not a column, so it drops into
+    // the flow below the centre and sizes to its content. Removing `dockFrame`
+    // does not restore base's box; it only swaps our missing one for the
+    // shell's.
     let ui_source = &ui;
-    for chrome in ["dockTabBar", "dockDropHint"] {
+    for chrome in ["dockTabBar", "dockDropHint", "dockFrame"] {
         assert!(
             main.contains(chrome) && ui_source.contains(&format!("export function {chrome}")),
             "the dock's {chrome} must be drawn by the application"
         );
     }
-    assert!(
-        !main.contains("dockFrame") && !ui.contains("dockFrame"),
-        "base owns each dock's own box; see the note above"
-    );
     assert!(
         main.contains("toggle_dock(\"right\")") && ui.contains("export function detailToggle"),
         "the details pane must still be collapsible from the window chrome"

@@ -1558,6 +1558,70 @@ export function dockTabBar(tokens, group) {
     );
 }
 
+/**
+ * A closed bottom dock keeps this much, so its tab bar stays clickable. Base's
+ * own number, and the reason a closed *side* dock instead keeps nothing: there
+ * is no tab bar left to click at zero width, and this window reopens its side
+ * dock from the title bar.
+ */
+const CLOSED_BOTTOM_STRIP = 29;
+
+/**
+ * One dock's own box, and everything base would have drawn around its content.
+ *
+ * This exists because gpui-shell replaces base's `render_dock` whether or not
+ * an application asks it to: `ScriptDockSkin::render_dock` always delegates to
+ * the chrome, and the chrome's default is `content` -- the content bare, with
+ * none of the container base wraps it in. So a side dock arrives with no width,
+ * cannot be a column beside the centre, and falls into the flow sized to
+ * whatever is inside it. Supplying this is not decoration; it is the only way
+ * a dock gets a box at all.
+ *
+ * Every line is base's `render_dock`, ported: the closed-side-dock short
+ * circuit, `flex_none` so the row does not stretch it, the extent along its own
+ * axis and `full` across, `overflow_hidden`, and a resize handle -- which is
+ * also base's and also lost, so it is drawn here or the edge stops being
+ * draggable.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {import("gpui-base").DockRegion} dock
+ * @param {import("gpui").Element} content
+ */
+export function dockFrame(tokens, dock, content) {
+  const vertical = dock.placement === "bottom";
+  // A closed side dock takes no space at all. Returning an empty element and
+  // not a zero-width box: a box still has borders and a hit area.
+  if (!dock.open && !vertical) return div();
+  const extent = dock.open ? dock.size : CLOSED_BOTTOM_STRIP;
+  return h_flex()
+    .flex_none()
+    .relative()
+    .overflow_hidden()
+    .map((element) => (vertical ? element.w_full().h(extent) : element.h_full().w(extent)))
+    .child(content)
+    .child(
+      // Base clamps every position this reports against the area and the
+      // opposite dock, so the handle is a hit area and a colour and no more.
+      div()
+        .id(`dock-resize-${dock.placement}`)
+        .absolute()
+        .map((element) =>
+          vertical
+            ? element.top(0).left(0).w_full().h(4).cursor_row_resize()
+            : element.top(0).h_full().w(4).cursor_col_resize(),
+        )
+        .map((element) =>
+          dock.placement === "left"
+            ? element.right(0)
+            : dock.placement === "right"
+              ? element.left(0)
+              : element,
+        )
+        .hover((style) => style.bg(tokens.primary))
+        .resize_dock(dock),
+    );
+}
+
 export function dockDropHint(tokens, drop) {
   return div()
     .absolute()

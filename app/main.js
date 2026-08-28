@@ -14,6 +14,7 @@ import {
   Tab,
   Tabs,
   dock_area,
+  dock_content,
   h_flex,
   set_theme,
   v_flex,
@@ -55,6 +56,7 @@ import {
   detailToggle,
   PANE_INSET,
   dockDropHint,
+  dockFrame,
   dockTabBar,
   errorMessage,
   filterInput,
@@ -1449,7 +1451,13 @@ export default class LongbridgeApp extends View {
       .min_h(0)
       .tab_bar((group, cx) => dockTabBar(cx.theme(), group))
       .empty_group((_group, cx) => emptyPanel(cx.theme(), "Nothing here", "Drop a pane in."))
-      .drop_indicator((drop, cx) => dockDropHint(cx.theme(), drop));
+      .drop_indicator((drop, cx) => dockDropHint(cx.theme(), drop))
+      // `dockFrame` is base's `render_dock`, ported. It has to be supplied:
+      // gpui-shell replaces base's version whether or not an application asks,
+      // and its default chrome hands back the content bare -- no width, so a
+      // side dock stops being a column and drops into the flow below the
+      // centre. See the note on `dockFrame`.
+      .dock((dock, cx) => dockFrame(cx.theme(), dock, dock_content().flex_1().min_h(0)));
   }
 
   /** @param {import("gpui-base").Theme} tokens */

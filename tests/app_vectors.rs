@@ -351,22 +351,17 @@ fn authenticated_workspace_materializes_a_scrollable_watchlist(cx: &mut TestAppC
         .lines()
         .find(|line| line.contains("dock_area"))
         .expect("workspace dock area");
-    // Three handlers, not four. `:dock(fn)` is deliberately absent: that hook
-    // replaces base's whole `render_dock`, which is where a side dock's own
-    // box, its closed-width short circuit and its resize handle come from, so
-    // chrome that used it had quietly taken over the layout and dropped the
-    // right dock out of the row. The collapse control it existed for is a
-    // title-bar button now, driven by `DockArea.toggle_dock`.
-    for handler in [":tab_bar(fn)", ":empty_group(fn)", ":drop_indicator(fn)"] {
+    // `:dock(fn)` is here because it has to be: gpui-shell replaces base's
+    // `render_dock` whether or not this application supplies chrome, and its
+    // default hands back the content with none of the box base wraps a dock in.
+    // Without a handler a side dock has no width, stops being a column and
+    // falls into the flow below the centre.
+    for handler in [":tab_bar(fn)", ":empty_group(fn)", ":drop_indicator(fn)", ":dock(fn)"] {
         assert!(
             area.contains(handler),
             "the dock draws its own {handler}: {area}"
         );
     }
-    assert!(
-        !area.contains(":dock(fn)"),
-        "base owns each dock's own box; see the note above: {area}"
-    );
     assert!(
         !rendered.contains("h_resizable"),
         "the resizable workspace was replaced by the dock: {rendered}"
