@@ -19,8 +19,49 @@ env:
   RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
 jobs:
+  prepare:
+    name: Select release path
+    runs-on: ubuntu-24.04
+    outputs:
+      previous_tag: ${{ steps.classify.outputs.previous_tag }}
+      reuse_host: ${{ steps.classify.outputs.reuse_host }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+      - name: Find reusable native host
+        id: classify
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          previous_tag=$(gh release list --limit 100 --exclude-drafts --exclude-pre-releases \
+            --json tagName --jq '.[].tagName' | grep -Fxv "$RELEASE_TAG" | head -n 1 || true)
+          echo "previous_tag=$previous_tag" >> "$GITHUB_OUTPUT"
+          reusable_assets=false
+          if [[ -n "$previous_tag" ]]; then
+            assets=$(gh release view "$previous_tag" --json assets --jq '.assets[].name')
+            reusable_assets=true
+            for asset in \
+              longbridge-lite-macos-aarch64.tar.gz \
+              longbridge-lite-linux-x86_64.tar.gz \
+              longbridge-lite-windows-x86_64.zip; do
+              if ! grep -Fxq "$asset" <<< "$assets"; then
+                reusable_assets=false
+              fi
+            done
+          fi
+          if [[ "$reusable_assets" == "true" ]] && scripts/release-fast-path.sh "$previous_tag" "$RELEASE_TAG"; then
+            echo "reuse_host=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "reuse_host=false" >> "$GITHUB_OUTPUT"
+          fi
+
   macos-aarch64:
     name: macOS arm64
+    needs: prepare
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -28,13 +69,27 @@ jobs:
           path: longbridge-lite
           ref: ${{ env.RELEASE_TAG }}
       - name: Install packaging dependencies
+        if: needs.prepare.outputs.reuse_host != 'true'
         run: brew install imagemagick
       - name: Build release binary
+        if: needs.prepare.outputs.reuse_host != 'true'
         working-directory: longbridge-lite
         run: cargo build --locked --release
+      - name: Download previous native host
+        if: needs.prepare.outputs.reuse_host == 'true'
+        working-directory: longbridge-lite
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIOUS_TAG: ${{ needs.prepare.outputs.previous_tag }}
+        run: gh release download "$PREVIOUS_TAG" --pattern longbridge-lite-macos-aarch64.tar.gz --output previous-host.tar.gz
       - name: Build application archive
         working-directory: longbridge-lite
+        env:
+          REUSE_HOST: ${{ needs.prepare.outputs.reuse_host }}
         run: |
+          if [[ "$REUSE_HOST" == "true" ]]; then
+            export LONGBRIDGE_LITE_REUSE_ARCHIVE="$PWD/previous-host.tar.gz"
+          fi
           scripts/package-release.sh macos-aarch64
           mkdir -p /tmp/longbridge-lite-smoke
           tar -xzf dist/longbridge-lite-macos-aarch64.tar.gz -C /tmp/longbridge-lite-smoke
@@ -45,34 +100,9 @@ jobs:
           path: longbridge-lite/dist/longbridge-lite-macos-aarch64.tar.gz
           if-no-files-found: error
 
-  macos-x86_64:
-    name: macOS x86_64
-    runs-on: macos-15-intel
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          path: longbridge-lite
-          ref: ${{ env.RELEASE_TAG }}
-      - name: Install packaging dependencies
-        run: brew install imagemagick
-      - name: Build release binary
-        working-directory: longbridge-lite
-        run: cargo build --locked --release
-      - name: Build application archive
-        working-directory: longbridge-lite
-        run: |
-          scripts/package-release.sh macos-x86_64
-          mkdir -p /tmp/longbridge-lite-smoke
-          tar -xzf dist/longbridge-lite-macos-x86_64.tar.gz -C /tmp/longbridge-lite-smoke
-          '/tmp/longbridge-lite-smoke/Longbridge Lite.app/Contents/MacOS/longbridge-lite' --check-resources
-      - uses: actions/upload-artifact@v4
-        with:
-          name: longbridge-lite-macos-x86_64
-          path: longbridge-lite/dist/longbridge-lite-macos-x86_64.tar.gz
-          if-no-files-found: error
-
   linux-x86_64:
     name: Linux x86_64
+    needs: prepare
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -80,6 +110,7 @@ jobs:
           path: longbridge-lite
           ref: ${{ env.RELEASE_TAG }}
       - name: Install GPUI and packaging dependencies
+        if: needs.prepare.outputs.reuse_host != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -88,11 +119,24 @@ jobs:
             libx11-xcb-dev libxkbcommon-x11-dev libzstd-dev \
             vulkan-validationlayers
       - name: Build release binary
+        if: needs.prepare.outputs.reuse_host != 'true'
         working-directory: longbridge-lite
         run: cargo build --locked --release
+      - name: Download previous native host
+        if: needs.prepare.outputs.reuse_host == 'true'
+        working-directory: longbridge-lite
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIOUS_TAG: ${{ needs.prepare.outputs.previous_tag }}
+        run: gh release download "$PREVIOUS_TAG" --pattern longbridge-lite-linux-x86_64.tar.gz --output previous-host.tar.gz
       - name: Build application archive
         working-directory: longbridge-lite
+        env:
+          REUSE_HOST: ${{ needs.prepare.outputs.reuse_host }}
         run: |
+          if [[ "$REUSE_HOST" == "true" ]]; then
+            export LONGBRIDGE_LITE_REUSE_ARCHIVE="$PWD/previous-host.tar.gz"
+          fi
           scripts/package-release.sh linux-x86_64
           mkdir -p /tmp/longbridge-lite-smoke
           tar -xzf dist/longbridge-lite-linux-x86_64.tar.gz -C /tmp/longbridge-lite-smoke
@@ -105,6 +149,7 @@ jobs:
 
   windows-x86_64:
     name: Windows x86_64
+    needs: prepare
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
@@ -112,16 +157,32 @@ jobs:
           path: longbridge-lite
           ref: ${{ env.RELEASE_TAG }}
       - name: Install packaging dependencies
+        if: needs.prepare.outputs.reuse_host != 'true'
         shell: powershell
         run: choco install imagemagick --yes --no-progress
       - name: Build release binary
+        if: needs.prepare.outputs.reuse_host != 'true'
         working-directory: longbridge-lite
         run: cargo build --locked --release
+      - name: Download previous native host
+        if: needs.prepare.outputs.reuse_host == 'true'
+        working-directory: longbridge-lite
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIOUS_TAG: ${{ needs.prepare.outputs.previous_tag }}
+        shell: powershell
+        run: gh release download $env:PREVIOUS_TAG --pattern longbridge-lite-windows-x86_64.zip --output previous-host.zip
       - name: Build application archive
         working-directory: longbridge-lite
         shell: powershell
+        env:
+          REUSE_HOST: ${{ needs.prepare.outputs.reuse_host }}
         run: |
-          scripts/package-release.ps1
+          if ($env:REUSE_HOST -eq "true") {
+            scripts/package-release.ps1 -ReuseArchive previous-host.zip
+          } else {
+            scripts/package-release.ps1
+          }
           Expand-Archive dist\longbridge-lite-windows-x86_64.zip -DestinationPath $env:RUNNER_TEMP\longbridge-lite-smoke
           & $env:RUNNER_TEMP\longbridge-lite-smoke\longbridge-lite\bin\longbridge-lite.exe --check-resources
       - uses: actions/upload-artifact@v4
@@ -132,7 +193,7 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    needs: [macos-aarch64, macos-x86_64, linux-x86_64, windows-x86_64]
+    needs: [macos-aarch64, linux-x86_64, windows-x86_64]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -147,9 +208,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)
+          version=$(jq -r '.version' app/gpui-shell.json)
           if [[ "$RELEASE_TAG" != "v$version" ]]; then
-            echo "::error::tag $RELEASE_TAG does not match Cargo.toml version $version"
+            echo "::error::tag $RELEASE_TAG does not match app/gpui-shell.json version $version"
             exit 1
           fi
       - name: Add installers and checksums

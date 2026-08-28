@@ -1,21 +1,51 @@
 #!/bin/sh
 set -eu
 
-target="${1:?usage: scripts/package-release.sh <macos-aarch64|macos-x86_64|linux-x86_64> [binary]}"
+target="${1:?usage: scripts/package-release.sh <macos-aarch64|linux-x86_64> [binary]}"
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$repo_root/Cargo.toml" | head -n 1)
+version=$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$repo_root/app/gpui-shell.json" | head -n 1)
 binary=${2:-"$repo_root/target/release/longbridge-lite"}
 dist="$repo_root/dist"
 
 case "$target" in
-  macos-aarch64 | macos-x86_64 | linux-x86_64) ;;
+  macos-aarch64 | linux-x86_64) ;;
   *) printf 'unsupported release target: %s\n' "$target" >&2; exit 2 ;;
 esac
-[ -x "$binary" ] || { printf 'release binary is missing: %s\n' "$binary" >&2; exit 1; }
+[ -n "$version" ] || { printf 'app/gpui-shell.json has no version\n' >&2; exit 1; }
 
 mkdir -p "$dist"
 stage=$(mktemp -d "$dist/.package-$target-XXXXXX")
 trap 'rm -rf "$stage"' EXIT HUP INT TERM
+
+reuse_archive=${LONGBRIDGE_LITE_REUSE_ARCHIVE:-}
+if [ -n "$reuse_archive" ]; then
+  [ -f "$reuse_archive" ] || { printf 'reuse archive is missing: %s\n' "$reuse_archive" >&2; exit 1; }
+  tar -xzf "$reuse_archive" -C "$stage"
+
+  if [ "${target#macos-}" != "$target" ]; then
+    app="$stage/Longbridge Lite.app"
+    [ -x "$app/Contents/MacOS/longbridge-lite" ] || { printf 'reuse archive has no macOS host\n' >&2; exit 1; }
+    rm -rf "$app/Contents/Resources/app"
+    mkdir -p "$app/Contents/Resources/app"
+    cp -R "$repo_root/app/." "$app/Contents/Resources/app/"
+    sed "s/__VERSION__/$version/g" "$repo_root/packaging/macos/Info.plist" > "$app/Contents/Info.plist"
+    archive="$dist/longbridge-lite-$target.tar.gz"
+    tar -czf "$archive" -C "$stage" "Longbridge Lite.app"
+  else
+    app="$stage/longbridge-lite.app"
+    [ -x "$app/bin/longbridge-lite" ] || { printf 'reuse archive has no Linux host\n' >&2; exit 1; }
+    rm -rf "$app/share/app"
+    mkdir -p "$app/share/app"
+    cp -R "$repo_root/app/." "$app/share/app/"
+    archive="$dist/longbridge-lite-linux-x86_64.tar.gz"
+    tar -czf "$archive" -C "$stage" longbridge-lite.app
+  fi
+
+  printf '%s\n' "$archive"
+  exit 0
+fi
+
+[ -x "$binary" ] || { printf 'release binary is missing: %s\n' "$binary" >&2; exit 1; }
 
 if [ "${target#macos-}" != "$target" ]; then
   command -v magick >/dev/null 2>&1 || { printf 'ImageMagick (magick) is required\n' >&2; exit 1; }

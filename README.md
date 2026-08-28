@@ -24,7 +24,7 @@ curl -fsSL https://github.com/longbridge/longbridge-lite/raw/refs/heads/main/ins
 On Linux the installer adds Longbridge Lite to the desktop application menu
 and links `longbridge-lite` into `~/.local/bin`. It requires x86_64 glibc 2.35
 or newer. On macOS it installs `Longbridge Lite.app` into `~/Applications` and
-supports Apple Silicon and Intel. These builds are not signed with an Apple
+supports Apple Silicon. These builds are not signed with an Apple
 Developer ID and are not notarized. If macOS blocks the first launch, explicitly
 remove the downloaded-file quarantine attribute after installation:
 

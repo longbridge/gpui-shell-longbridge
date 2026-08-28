@@ -29,18 +29,13 @@ case "$os:$arch" in
     install_dir="$HOME/Applications/Longbridge Lite.app"
     command_path="$install_dir/Contents/MacOS/longbridge-lite"
     ;;
-  Darwin:x86_64)
-    target="macos-x86_64"
-    install_dir="$HOME/Applications/Longbridge Lite.app"
-    command_path="$install_dir/Contents/MacOS/longbridge-lite"
-    ;;
   Linux:x86_64 | Linux:amd64)
     target="linux-x86_64"
     install_dir="$HOME/.local/longbridge-lite.app"
     command_path="$install_dir/bin/longbridge-lite"
     ;;
   *)
-    printf 'unsupported platform: %s %s (published: macOS arm64/x86_64, Linux x86_64)\n' "$os" "$arch" >&2
+    printf 'unsupported platform: %s %s (published: macOS arm64, Linux x86_64)\n' "$os" "$arch" >&2
     exit 1
     ;;
 esac
