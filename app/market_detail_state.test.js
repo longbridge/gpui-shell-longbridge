@@ -63,6 +63,7 @@ export default class MarketDetailStateProbe extends LongbridgeApp {
     const chartProps = this.publishedPriceChartProps;
     this.selectDetailMarket("A.US", cx);
     this.selectDetailMarket("B.US", cx);
+    const bGeneration = this.detailMarketGeneration;
     check(
       this.depthState.symbol === "B.US" && this.depthState.status === "loading" && this.depthState.asks.length === 0,
       "selecting B immediately clears A depth while it loads",
@@ -73,15 +74,15 @@ export default class MarketDetailStateProbe extends LongbridgeApp {
     );
 
     // A's delayed snapshots arrive only after B became the selection.
-    this.receiveDepth(depth("A.US", "101.00"), cx);
-    this.receiveTrades(trades("A.US", "101.25"), cx);
+    this.receiveDepth(depth("A.US", "101.00"), cx, bGeneration);
+    this.receiveTrades(trades("A.US", "101.25"), cx, bGeneration);
     check(
       this.depthState.asks.length === 0 && this.tradesState.trades.length === 0,
       "a stale detail snapshot cannot publish under B",
     );
 
-    this.receiveDepth(depth("B.US", "102.00"), cx);
-    this.receiveTrades(trades("B.US", "102.25"), cx);
+    this.receiveDepth(depth("B.US", "102.00"), cx, bGeneration);
+    this.receiveTrades(trades("B.US", "102.25"), cx, bGeneration);
     check(
       this.depthState.status === "ready" && this.depthState.asks[0].price === "102.00",
       "the selected depth snapshot publishes normally",
@@ -93,6 +94,26 @@ export default class MarketDetailStateProbe extends LongbridgeApp {
     check(
       this.chartState.symbol === "CHART.US" && this.publishedPriceChartProps === chartProps,
       "detail-only updates do not publish new retained-chart props",
+    );
+
+    // Returning to A is a new selection epoch. A first-A response may arrive
+    // after A → B → A, but it must not be mistaken for the final A request.
+    this.selectDetailMarket("A.US", cx);
+    const firstAGeneration = this.detailMarketGeneration;
+    this.selectDetailMarket("B.US", cx);
+    this.selectDetailMarket("A.US", cx);
+    const finalAGeneration = this.detailMarketGeneration;
+    this.receiveDepth(depth("A.US", "stale-first-A"), cx, firstAGeneration);
+    this.receiveTrades(trades("A.US", "stale-first-A"), cx, firstAGeneration);
+    check(
+      this.depthState.status === "loading" && this.tradesState.status === "loading",
+      "a delayed first-A snapshot or push cannot publish during the final A epoch",
+    );
+    this.receiveDepth(depth("A.US", "103.00"), cx, finalAGeneration);
+    this.receiveTrades(trades("A.US", "103.25"), cx, finalAGeneration);
+    check(
+      this.depthState.asks[0].price === "103.00" && this.tradesState.trades[0].price === "103.25",
+      "only the final A epoch may publish after A → B → A",
     );
 
     this.signOut(cx);

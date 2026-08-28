@@ -815,39 +815,44 @@ export default class LongbridgeApp extends View {
     const stream = this.stream;
     if (!stream || typeof stream.selectDetailSymbol !== "function") return Promise.resolve();
     try {
-      return Promise.resolve(stream.selectDetailSymbol(selected)).catch((error) => {
-        if (
-          generation !== this.detailMarketGeneration ||
-          selected !== this.selectedSymbol ||
-          stream !== this.stream
-        ) {
-          return;
-        }
-        const message = error instanceof Error ? error.message : String(error);
-        this.depthState = { ...this.depthState, status: "error", error: message };
-        this.tradesState = { ...this.tradesState, status: "error", error: message };
-        this.redraw(cx, PANE_DETAIL);
-      });
+      return Promise.resolve(stream.selectDetailSymbol(selected, generation)).catch((error) =>
+        this.receiveDetailError({ symbol: selected, generation, error }, cx),
+      );
     } catch (error) {
-      if (
-        generation === this.detailMarketGeneration &&
-        selected === this.selectedSymbol &&
-        stream === this.stream
-      ) {
-        const message = error instanceof Error ? error.message : String(error);
-        this.depthState = { ...this.depthState, status: "error", error: message };
-        this.tradesState = { ...this.tradesState, status: "error", error: message };
-        this.redraw(cx, PANE_DETAIL);
-      }
+      this.receiveDetailError({ symbol: selected, generation, error }, cx);
       return Promise.resolve();
     }
   }
 
-  /** @param {unknown} depth @param {import("gpui").Context | import("gpui").AsyncContext} cx */
-  receiveDepth(depth, cx) {
+  /**
+   * @param {unknown} detail
+   * @param {import("gpui").Context | import("gpui").AsyncContext} cx
+   */
+  receiveDetailError(detail, cx) {
+    if (
+      !detail ||
+      typeof detail !== "object" ||
+      detail.symbol !== this.selectedSymbol ||
+      detail.generation !== this.detailMarketGeneration
+    ) {
+      return;
+    }
+    const message = detail.error instanceof Error ? detail.error.message : String(detail.error ?? "");
+    this.depthState = { ...this.depthState, status: "error", error: message };
+    this.tradesState = { ...this.tradesState, status: "error", error: message };
+    this.redraw(cx, PANE_DETAIL);
+  }
+
+  /**
+   * @param {unknown} depth
+   * @param {import("gpui").Context | import("gpui").AsyncContext} cx
+   * @param {number} generation
+   */
+  receiveDepth(depth, cx, generation) {
     if (
       !depth ||
       typeof depth !== "object" ||
+      generation !== this.detailMarketGeneration ||
       depth.symbol !== this.selectedSymbol ||
       this.depthState.symbol !== this.selectedSymbol
     ) {
@@ -864,11 +869,16 @@ export default class LongbridgeApp extends View {
     this.redraw(cx, PANE_DETAIL);
   }
 
-  /** @param {unknown} payload @param {import("gpui").Context | import("gpui").AsyncContext} cx */
-  receiveTrades(payload, cx) {
+  /**
+   * @param {unknown} payload
+   * @param {import("gpui").Context | import("gpui").AsyncContext} cx
+   * @param {number} generation
+   */
+  receiveTrades(payload, cx, generation) {
     if (
       !payload ||
       typeof payload !== "object" ||
+      generation !== this.detailMarketGeneration ||
       payload.symbol !== this.selectedSymbol ||
       this.tradesState.symbol !== this.selectedSymbol
     ) {
@@ -1071,13 +1081,17 @@ export default class LongbridgeApp extends View {
         if (generation === this.streamGeneration && this.stream === stream)
           this.receiveQuote(quote, cx);
       },
-      onDepth: (depth) => {
+      onDepth: (depth, detailGeneration) => {
         if (generation === this.streamGeneration && this.stream === stream)
-          this.receiveDepth(depth, cx);
+          this.receiveDepth(depth, cx, detailGeneration);
       },
-      onTrades: (trades) => {
+      onTrades: (trades, detailGeneration) => {
         if (generation === this.streamGeneration && this.stream === stream)
-          this.receiveTrades(trades, cx);
+          this.receiveTrades(trades, cx, detailGeneration);
+      },
+      onDetailError: (detail) => {
+        if (generation === this.streamGeneration && this.stream === stream)
+          this.receiveDetailError(detail, cx);
       },
       onStatus: (status) => {
         if (generation === this.streamGeneration && this.stream === stream)

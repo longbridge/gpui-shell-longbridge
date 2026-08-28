@@ -337,6 +337,26 @@ class MockWebSocket {
   }
 }
 
+class DetailEntitlementWebSocket extends MockWebSocket {
+  respond(packet, socket) {
+    // Auth/Quote subscription is write 2; a later Subscribe is the selected
+    // symbol's Depth/Trades subscription and has its own entitlement.
+    if (packet.command === COMMAND.SUBSCRIBE && socket.writes.length > 2) {
+      socket.deliver(
+        encodeFrame({
+          type: FRAME_TYPE.RESPONSE,
+          command: packet.command,
+          requestId: packet.requestId,
+          status: 7,
+          body: bytes(),
+        }),
+      );
+      return;
+    }
+    super.respond(packet, socket);
+  }
+}
+
 async function runVectors() {
   const transport = new MockWebSocket();
   const timers = new MockTimers();
@@ -702,6 +722,46 @@ async function runVectors() {
     "mismatched reconnect snapshots do not publish under the retained detail selection",
   );
   await detailStream.stop();
+
+  const entitlementTransport = new DetailEntitlementWebSocket();
+  const entitlementTimers = new MockTimers();
+  const entitlementStatuses = [];
+  const detailErrors = [];
+  const entitlementStream = createQuoteStream({
+    accessToken: "test-token",
+    getOtp: async () => "entitlement-otp",
+    symbols: ["AAPL.US"],
+    onStatus: (status) => entitlementStatuses.push(status),
+    onDetailError: (detail) => detailErrors.push(detail),
+    WebSocket: entitlementTransport,
+    timers: entitlementTimers,
+    retryInitialMs: 10,
+    retryMaxMs: 40,
+  });
+  await entitlementStream.selectDetailSymbol("AAPL.US", 81);
+  await entitlementStream.start();
+  await settle();
+  check(
+    entitlementStatuses.filter((status) => status.state === "connected").length === 1,
+    "an initial detail entitlement failure leaves the Quote handshake connected",
+  );
+  check(
+    detailErrors.length === 1 && detailErrors[0].symbol === "AAPL.US" && detailErrors[0].generation === 81,
+    "an initial detail entitlement failure is reported locally with its selection generation",
+  );
+  entitlementTransport.sockets[0].disconnect();
+  await settle();
+  entitlementTimers.fireReconnect();
+  for (let index = 0; index < 4; index += 1) await settle();
+  check(
+    entitlementStatuses.filter((status) => status.state === "connected").length === 2,
+    "a reconnect detail entitlement failure leaves the restored Quote handshake connected",
+  );
+  check(
+    detailErrors.length === 2 && detailErrors[1].generation === 81,
+    "a reconnect detail entitlement failure remains local to the selected panels",
+  );
+  await entitlementStream.stop();
 
   const retryTransport = new MockWebSocket();
   const retryTimers = new MockTimers();

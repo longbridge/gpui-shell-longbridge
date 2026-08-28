@@ -143,6 +143,7 @@ export function createQuoteStream(options) {
   const onQuote = requireCallback(options.onQuote, "onQuote");
   const onDepth = requireCallback(options.onDepth, "onDepth");
   const onTrades = requireCallback(options.onTrades, "onTrades");
+  const onDetailError = requireCallback(options.onDetailError, "onDetailError");
   const onStatus = requireCallback(options.onStatus, "onStatus");
   const transport = options.WebSocket ?? WebSocket;
   if (!transport || typeof transport.connect !== "function")
@@ -181,10 +182,31 @@ export function createQuoteStream(options) {
   let reconnectAttempt = 0;
   let startPromise = null;
   let selectedDetailSymbol = null;
+  let selectedDetailGeneration = null;
+  // A selection is not live for pushes until its own snapshots complete. This
+  // closes the unsubscribe/subscribe overlap where A → B → A could otherwise
+  // label a delayed first-A push with the final A generation.
+  let activeDetailGeneration = null;
+  let detailEpoch = 0;
   let detailTransition = Promise.resolve();
 
   const emitStatus = (state, extra = {}) => onStatus({ state, ...extra });
   const active = (session) => !stopped && current === session;
+  const selectedDetailIs = (symbol, generation) =>
+    selectedDetailSymbol === symbol && selectedDetailGeneration === generation;
+
+  function emitDetailError(symbol, generation, error) {
+    if (!selectedDetailIs(symbol, generation)) return;
+    try {
+      onDetailError({
+        symbol,
+        generation,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } catch (callbackError) {
+      emitStatus("callback_error", { error: String(callbackError?.message ?? callbackError) });
+    }
+  }
 
   function clearHeartbeat() {
     cancel(heartbeatHandle);
@@ -342,62 +364,69 @@ export function createQuoteStream(options) {
     }
     if (
       (packet.command === COMMAND.PUSH_DEPTH || packet.command === COMMAND.PUSH_TRADE) &&
-      payload.symbol !== selectedDetailSymbol
+      (payload.symbol !== selectedDetailSymbol || activeDetailGeneration !== selectedDetailGeneration)
     ) {
       return;
     }
     try {
-      callback(payload);
+      callback(payload, activeDetailGeneration);
     } catch (error) {
       emitStatus("callback_error", { error: String(error?.message ?? error) });
     }
   }
 
-  async function requestDetailSnapshots(session, symbol) {
+  async function requestDetailSnapshots(session, symbol, generation) {
     const [depthBody, tradesBody] = await Promise.all([
       request(session, COMMAND.DEPTH, encodeSecurityRequest(symbol)),
       request(session, COMMAND.TRADES, encodeSecurityTradeRequest({ symbol, count: 20 })),
     ]);
-    if (!active(session) || selectedDetailSymbol !== symbol) return;
+    if (!active(session) || !selectedDetailIs(symbol, generation)) return;
     try {
       const depth = decodeSecurityDepthResponse(depthBody);
       const trades = decodeSecurityTradeResponse(tradesBody);
       if (
         !active(session) ||
-        selectedDetailSymbol !== symbol ||
+        !selectedDetailIs(symbol, generation) ||
         depth.symbol !== symbol ||
         trades.symbol !== symbol
       ) {
         return;
       }
-      onDepth(depth);
-      onTrades(trades);
+      activeDetailGeneration = generation;
+      onDepth(depth, generation);
+      onTrades(trades, generation);
     } catch (error) {
-      emitStatus("callback_error", { error: String(error?.message ?? error) });
+      emitDetailError(symbol, generation, error);
     }
   }
 
-  async function subscribeDetail(session, symbol) {
+  async function subscribeDetail(session, symbol, generation) {
     await request(
       session,
       COMMAND.SUBSCRIBE,
       encodeSubscribeRequest({ symbols: [symbol], subTypes: DETAIL_SUB_TYPES, isFirstPush: true }),
     );
-    if (!active(session) || selectedDetailSymbol !== symbol) return;
-    await requestDetailSnapshots(session, symbol);
+    if (!active(session) || !selectedDetailIs(symbol, generation)) return;
+    await requestDetailSnapshots(session, symbol, generation);
   }
 
-  async function synchronizeDetailSelection(previous, symbol) {
+  async function synchronizeDetailSelection(previous, symbol, generation) {
     const session = current;
     if (!session || !active(session)) return;
-    if (previous) {
-      await request(
-        session,
-        COMMAND.UNSUBSCRIBE,
-        encodeUnsubscribeRequest({ symbols: [previous], subTypes: DETAIL_SUB_TYPES }),
-      );
+    try {
+      if (previous) {
+        await request(
+          session,
+          COMMAND.UNSUBSCRIBE,
+          encodeUnsubscribeRequest({ symbols: [previous], subTypes: DETAIL_SUB_TYPES }),
+        );
+      }
+      if (symbol) await subscribeDetail(session, symbol, generation);
+    } catch (error) {
+      // Depth/Trades permissions are an optional selected-detail capability.
+      // They must not make a healthy Quote handshake disconnect or retry.
+      emitDetailError(symbol, generation, error);
     }
-    if (symbol) await subscribeDetail(session, symbol);
   }
 
   async function readLoop(session) {
@@ -429,6 +458,7 @@ export function createQuoteStream(options) {
 
   async function connectAndSubscribe() {
     let session = null;
+    activeDetailGeneration = null;
     armHandshake(() => session);
     try {
       emitStatus("connecting");
@@ -479,7 +509,9 @@ export function createQuoteStream(options) {
       }
       if (!active(session)) throw new Error("quote stream disconnected during initial snapshot");
 
-      if (selectedDetailSymbol) await subscribeDetail(session, selectedDetailSymbol);
+      if (selectedDetailSymbol) {
+        await synchronizeDetailSelection(null, selectedDetailSymbol, selectedDetailGeneration);
+      }
       if (!active(session)) throw new Error("quote stream disconnected during detail snapshot");
 
       reconnectAttempt = 0;
@@ -592,12 +624,18 @@ export function createQuoteStream(options) {
       );
     },
 
-    selectDetailSymbol(symbol) {
+    selectDetailSymbol(symbol, generation) {
       if (symbol !== null) requireString(symbol, "symbol");
-      if (symbol === selectedDetailSymbol) return detailTransition;
+      const detailGeneration = generation ?? ++detailEpoch;
+      if (symbol === selectedDetailSymbol && detailGeneration === selectedDetailGeneration)
+        return detailTransition;
       const previous = selectedDetailSymbol;
       selectedDetailSymbol = symbol;
-      const transition = detailTransition.then(() => synchronizeDetailSelection(previous, symbol));
+      selectedDetailGeneration = detailGeneration;
+      activeDetailGeneration = null;
+      const transition = detailTransition.then(() =>
+        synchronizeDetailSelection(previous, symbol, detailGeneration),
+      );
       detailTransition = transition.catch(() => {});
       return transition;
     },

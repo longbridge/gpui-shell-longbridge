@@ -109,10 +109,24 @@ fn application_exposes_api_backed_read_only_views() {
     // panels may now use bid, ask, and time-and-sales terminology; `InputState`
     // remains limited to the two list filters, which narrow what is already on
     // screen and never mutate the watchlist.
-    for forbidden in ["Add symbol", "Remove"] {
+    for forbidden in ["Add symbol", "Remove", "Place order", "Cancel order"] {
         assert!(
             !main.contains(forbidden) && !ui.contains(forbidden) && !market.contains(forbidden),
             "forbidden editing or trading surface {forbidden}"
+        );
+    }
+    for forbidden in ["Buy", "Sell"] {
+        assert!(
+            !main.contains(&format!(r#"\"{}\""#, forbidden))
+                && !ui.contains(&format!(r#"\"{}\""#, forbidden))
+                && !market.contains(&format!(r#"\"{}\""#, forbidden)),
+            "forbidden trading control label {forbidden}"
+        );
+    }
+    for forbidden in ["trade::buy", "trade::sell", "trade::place-order", "trade::cancel-order"] {
+        assert!(
+            !main.contains(forbidden) && !ui.contains(forbidden) && !market.contains(forbidden),
+            "forbidden trading action {forbidden}"
         );
     }
     assert!(
