@@ -40,7 +40,16 @@ import {
   watchlistInstruments,
 } from "./market.js";
 import { createQuoteStream } from "./quote_stream.js";
-import { mergeLiveQuote, prepareFiveDaySeries } from "./chart.js";
+import { prepareFiveDaySeries } from "./chart.js";
+import {
+  CHART_MODES,
+  chartRequestIdentity,
+  mergeLiveChartQuote,
+  prepareCandleSeries,
+  prepareIntradaySeries,
+  windowCandles,
+} from "./chart_modes.js";
+import { PERIOD, TRADE_SESSION } from "./protocol.js";
 import { mergeTrades, normalizeDepth } from "./market_detail.js";
 import { allocationInUsd, normalizeUsdRates, portfolioPresentation } from "./portfolio.js";
 import PriceChartView, { PRICE_CHART_LAYOUT } from "./price_chart_view.js";
@@ -139,6 +148,15 @@ const PANE_BOTH = PANE_WATCHLIST | PANE_DETAIL;
 const EMPTY_CANDLES = Object.freeze([]);
 const EMPTY_DETAIL_LEVELS = Object.freeze([]);
 const EMPTY_DETAIL_TRADES = Object.freeze([]);
+const CHART_CACHE_LIMIT = 16;
+const CHART_LATEST_END = "latest";
+const CANDLE_WINDOW_DAYS = Object.freeze({ "1m": 1, "5m": 5, "15m": 15, "1D": 190 });
+const CHART_PERIODS = Object.freeze({
+  "1m": PERIOD.ONE_MINUTE,
+  "5m": PERIOD.FIVE_MINUTE,
+  "15m": PERIOD.FIFTEEN_MINUTE,
+  "1D": PERIOD.DAY,
+});
 
 function emptyDepthState(symbol = null) {
   return {
@@ -428,6 +446,7 @@ export default class LongbridgeApp extends View {
     this.chartState = { symbol: null, state: "idle" };
     this.chartGeneration = 0;
     this.chartThemeRevision = 0;
+    this.initChartModeState();
     this.initDetailMarketState();
     this.initInteractionState();
     this.initKeyboard(cx);
@@ -515,10 +534,71 @@ export default class LongbridgeApp extends View {
       const day = typeof date === "string" ? date : null;
       if (!day || day === this.chartEndDate) return;
       this.chartEndDate = day;
-      this.candleCache.delete(this.selectedSymbol);
       this.loadSelectedChart(cx);
       this.redraw(cx);
     });
+  }
+
+  /** Initializes session-only chart selection and its bounded response cache. */
+  initChartModeState() {
+    // This deliberately never reads or writes localStorage: a chosen chart
+    // mode belongs to this running application session, not the login session.
+    this.chartMode = "5D";
+    this.chartCache = new Map();
+  }
+
+  /** @returns {keyof typeof CHART_MODES} */
+  activeChartMode() {
+    return CHART_MODES[this.chartMode] ? this.chartMode : "5D";
+  }
+
+  chartIdentityEndDate() {
+    return this.chartEndDate ?? CHART_LATEST_END;
+  }
+
+  currentChartIdentity(symbol = this.selectedSymbol) {
+    return symbol ? chartRequestIdentity(symbol, this.activeChartMode(), this.chartIdentityEndDate()) : null;
+  }
+
+  cachedChartSeries(symbol = this.selectedSymbol) {
+    const identity = this.currentChartIdentity(symbol);
+    if (!identity) return EMPTY_CANDLES;
+    const cached = this.chartCache?.get(identity);
+    if (cached) return cached;
+    // Older retained-child fixtures seed the pre-mode cache directly. Keeping
+    // this read-only compatibility path lets the state migration land before
+    // the retained UI changes, without allowing it to mask a new mode cache.
+    return this.activeChartMode() === "5D" ? (this.candleCache?.get(symbol) ?? EMPTY_CANDLES) : EMPTY_CANDLES;
+  }
+
+  hasCachedChartSeries(symbol = this.selectedSymbol) {
+    const identity = this.currentChartIdentity(symbol);
+    return Boolean(
+      identity &&
+        (this.chartCache?.has(identity) ||
+          (this.activeChartMode() === "5D" && this.candleCache?.has(symbol))),
+    );
+  }
+
+  cacheChartSeries(identity, candles) {
+    if (!this.chartCache) this.chartCache = new Map();
+    this.chartCache.delete(identity);
+    this.chartCache.set(identity, candles);
+    while (this.chartCache.size > CHART_CACHE_LIMIT) this.chartCache.delete(this.chartCache.keys().next().value);
+  }
+
+  setChartMode(mode, cx) {
+    if (!CHART_MODES[mode] || mode === this.activeChartMode()) return;
+    this.chartMode = mode;
+    this.loadSelectedChart(cx);
+    this.redraw(cx);
+  }
+
+  /** Invalidates only the currently visible request from the session cache. */
+  invalidateCurrentChartCache() {
+    const identity = this.currentChartIdentity();
+    if (identity) this.chartCache?.delete(identity);
+    if (this.activeChartMode() === "5D") this.candleCache?.delete(this.selectedSymbol);
   }
 
   /**
@@ -533,18 +613,34 @@ export default class LongbridgeApp extends View {
   }
 
   /** The complete immutable input snapshot the child needs to render the chart. */
-  nextPriceChartProps() {
+  chartProps() {
     const symbol = this.selectedSymbol ?? "";
-    const candles = symbol ? (this.candleCache.get(symbol) ?? EMPTY_CANDLES) : EMPTY_CANDLES;
+    const mode = this.activeChartMode();
+    const candles = symbol ? this.cachedChartSeries(symbol) : EMPTY_CANDLES;
     const state =
       this.chartState.symbol === symbol ? this.chartState.state : symbol ? "loading" : "idle";
+    const chartSeries =
+      mode === "intraday"
+        ? prepareIntradaySeries(candles)
+        : mode === "5D"
+          ? prepareFiveDaySeries(symbol, candles)
+          : prepareCandleSeries(windowCandles(candles));
     return {
       symbol,
+      mode,
+      chartSeries,
+      // Task 5 switches the retained child to `chartSeries`. Until then it
+      // receives a five-day-compatible fallback so changing mode cannot make
+      // the existing retained boundary throw during this state-only task.
       series: prepareFiveDaySeries(symbol, candles),
       state,
       layout: PRICE_CHART_LAYOUT,
       themeRevision: this.chartThemeRevision,
     };
+  }
+
+  nextPriceChartProps() {
+    return this.chartProps();
   }
 
   /** Pushes props only when a chart input changed, and only from mutation sites. */
@@ -554,6 +650,8 @@ export default class LongbridgeApp extends View {
     const previous = this.publishedPriceChartProps;
     if (
       previous?.symbol === next.symbol &&
+      previous?.mode === next.mode &&
+      previous?.chartSeries === next.chartSeries &&
       previous?.series === next.series &&
       previous?.state === next.state &&
       previous?.layout === next.layout &&
@@ -1125,17 +1223,15 @@ export default class LongbridgeApp extends View {
     // merged in one pass by the repaint that was already being coalesced.
     this.pendingQuotes.push(quote);
     if (quote && typeof quote === "object" && quote.symbol === this.selectedSymbol) {
-      const candles = this.candleCache.get(this.selectedSymbol);
-      if (candles) {
-        const merged = mergeLiveQuote(this.selectedSymbol, candles, quote);
+      const identity = this.currentChartIdentity();
+      const candles = this.cachedChartSeries();
+      if (this.hasCachedChartSeries() && candles) {
+        const merged = mergeLiveChartQuote(this.selectedSymbol, this.activeChartMode(), candles, quote);
         if (merged !== candles) {
-          this.candleCache.set(this.selectedSymbol, merged);
-          // Not published here. `mergeLiveQuote` answers with a new series for
-          // every push, so the identity guard in `syncPriceChartView` never
-          // holds on this path and each quote handed the whole five days of
-          // candles across the nested-view bridge -- which is the other thing
-          // that was being interrupted for overrunning the sandbox's budget.
-          // The coalesced repaint publishes it instead.
+          if (identity) this.cacheChartSeries(identity, merged);
+          // Not published here. A live merge answers with a new series for
+          // every push, so each quote must wait for the coalesced redraw rather
+          // than crossing the retained-view bridge with a full history window.
           this.chartDirty = true;
         }
       }
@@ -1158,40 +1254,78 @@ export default class LongbridgeApp extends View {
       this.publishChart(cx);
       return;
     }
+    const mode = this.activeChartMode();
+    const identity = this.currentChartIdentity(symbol);
     const generation = ++this.chartGeneration;
     this.chartState = {
       symbol,
-      state: this.candleCache.has(symbol) ? "ready" : "loading",
+      state: this.hasCachedChartSeries(symbol) ? "ready" : "loading",
     };
     this.redraw(cx);
     this.publishChart(cx);
-    if (!stream) return;
+    if (!stream || this.hasCachedChartSeries(symbol)) return;
     // The window ends on the day the picker chose, and on today when it has
     // chosen nothing. Fourteen calendar days back is enough to contain five
     // trading sessions across a holiday.
     const end = this.chartEndDate ? new Date(`${this.chartEndDate}T12:00:00`) : new Date();
-    const start = new Date(end.getTime() - 14 * 86_400_000);
     const compact = (date) => date.toISOString().slice(0, 10).replaceAll("-", "");
     cx.spawn(async (cx) => {
       try {
-        const response = await stream.queryCandlesticks({
-          symbol,
-          startDate: compact(start),
-          endDate: compact(end),
-        });
-        if (generation !== this.chartGeneration || symbol !== this.selectedSymbol) return;
-        this.candleCache.set(symbol, response.candlesticks);
-        this.chartState = { symbol, state: "ready" };
+        let candles;
+        if (mode === "intraday") {
+          const response = await stream.queryIntraday({ symbol, tradeSession: TRADE_SESSION.ALL });
+          candles = response.lines.map((line) => ({
+            ...line,
+            open: line.price,
+            high: line.price,
+            low: line.price,
+            close: line.price,
+          }));
+        } else {
+          const days = mode === "5D" ? 14 : CANDLE_WINDOW_DAYS[mode];
+          const start = new Date(end.getTime() - days * 86_400_000);
+          const response = await stream.queryCandlesticks({
+            symbol,
+            period: CHART_PERIODS[CHART_MODES[mode].period],
+            startDate: compact(start),
+            endDate: compact(end),
+            tradeSession: TRADE_SESSION.NORMAL,
+          });
+          candles = response.candlesticks;
+        }
+        if (!this.publishChartResponse(symbol, identity, generation, candles)) return;
       } catch (_) {
-        if (generation !== this.chartGeneration || symbol !== this.selectedSymbol) return;
+        if (!this.acceptsChartResponse(symbol, identity, generation)) return;
         this.chartState = {
           symbol,
-          state: this.candleCache.has(symbol) ? "ready" : "error",
+          state: this.hasCachedChartSeries(symbol) ? "ready" : "error",
         };
       }
       this.redraw(cx);
       this.publishChart(cx);
     });
+  }
+
+  acceptsChartResponse(symbol, identity, generation) {
+    return (
+      generation === this.chartGeneration &&
+      symbol === this.selectedSymbol &&
+      identity !== null &&
+      identity === this.currentChartIdentity(symbol)
+    );
+  }
+
+  normalizeChartCandles(mode, candles) {
+    const source = Array.isArray(candles) ? candles : EMPTY_CANDLES;
+    if (mode === "intraday") return prepareIntradaySeries(source).candles;
+    return prepareCandleSeries(source).candles;
+  }
+
+  publishChartResponse(symbol, identity, generation, candles) {
+    if (!this.acceptsChartResponse(symbol, identity, generation)) return false;
+    this.cacheChartSeries(identity, this.normalizeChartCandles(this.activeChartMode(), candles));
+    this.chartState = { symbol, state: "ready" };
+    return true;
   }
 
   /**
@@ -1314,6 +1448,7 @@ export default class LongbridgeApp extends View {
     this.selectedSymbol = null;
     this.clearDetailMarket();
     this.candleCache.clear();
+    this.chartCache?.clear();
     this.chartGeneration += 1;
     this.chartState = { symbol: null, state: "idle" };
     this.releasePriceChartView();
@@ -2024,7 +2159,7 @@ export default class LongbridgeApp extends View {
               "Reload 5D chart",
               (_event, cx) => {
                 close(cx);
-                this.candleCache.delete(this.selectedSymbol);
+                this.invalidateCurrentChartCache();
                 this.loadSelectedChart(cx);
               },
               { disabled: !selected },
@@ -2364,7 +2499,7 @@ export default class LongbridgeApp extends View {
     // registered is where the reload is written. Setting what it already holds
     // would be a host call and an event with nothing behind them.
     if (this.chartCalendar.value() !== day) this.chartCalendar.set_value(day);
-    this.candleCache.delete(this.selectedSymbol);
+    this.invalidateCurrentChartCache();
     this.loadSelectedChart(cx);
     this.redraw(cx);
   }
