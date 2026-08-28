@@ -340,6 +340,12 @@ export function createQuoteStream(options) {
     } else {
       return;
     }
+    if (
+      (packet.command === COMMAND.PUSH_DEPTH || packet.command === COMMAND.PUSH_TRADE) &&
+      payload.symbol !== selectedDetailSymbol
+    ) {
+      return;
+    }
     try {
       callback(payload);
     } catch (error) {
@@ -354,8 +360,18 @@ export function createQuoteStream(options) {
     ]);
     if (!active(session) || selectedDetailSymbol !== symbol) return;
     try {
-      onDepth(decodeSecurityDepthResponse(depthBody));
-      onTrades(decodeSecurityTradeResponse(tradesBody));
+      const depth = decodeSecurityDepthResponse(depthBody);
+      const trades = decodeSecurityTradeResponse(tradesBody);
+      if (
+        !active(session) ||
+        selectedDetailSymbol !== symbol ||
+        depth.symbol !== symbol ||
+        trades.symbol !== symbol
+      ) {
+        return;
+      }
+      onDepth(depth);
+      onTrades(trades);
     } catch (error) {
       emitStatus("callback_error", { error: String(error?.message ?? error) });
     }

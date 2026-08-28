@@ -610,6 +610,7 @@ async function runVectors() {
     "trade pushes reach the detail callback",
   );
 
+  const callbacksBeforeSelectionChange = { depths: depths.length, trades: trades.length };
   await detailStream.selectDetailSymbol("MSFT.US");
   await settle();
   check(
@@ -635,7 +636,41 @@ async function runVectors() {
       ),
     "changing detail selection subscribes the new symbol after unsubscribe",
   );
+  check(
+    depths.length === callbacksBeforeSelectionChange.depths &&
+      trades.length === callbacksBeforeSelectionChange.trades,
+    "mismatched detail snapshots do not reach callbacks after a selection change",
+  );
 
+  detailFirst.deliver(
+    encodeFrame({
+      type: FRAME_TYPE.PUSH,
+      command: COMMAND.PUSH_DEPTH,
+      body: bytes(
+        0x0a, 0x07, 0x41, 0x41, 0x50, 0x4c, 0x2e, 0x55, 0x53, 0x10, 0x02, 0x1a, 0x0e,
+        0x08, 0x01, 0x12, 0x06, 0x31, 0x39, 0x31, 0x2e, 0x30, 0x30, 0x18, 0x09, 0x20, 0x04,
+      ),
+    }),
+  );
+  detailFirst.deliver(
+    encodeFrame({
+      type: FRAME_TYPE.PUSH,
+      command: COMMAND.PUSH_TRADE,
+      body: bytes(
+        0x0a, 0x07, 0x41, 0x41, 0x50, 0x4c, 0x2e, 0x55, 0x53, 0x10, 0x02, 0x1a, 0x12,
+        0x0a, 0x06, 0x31, 0x39, 0x31, 0x2e, 0x30, 0x30, 0x10, 0x09, 0x18, 0x2c, 0x22, 0x04,
+        0x54, 0x49, 0x4d, 0x45,
+      ),
+    }),
+  );
+  await settle();
+  check(
+    depths.length === callbacksBeforeSelectionChange.depths &&
+      trades.length === callbacksBeforeSelectionChange.trades,
+    "delayed pushes for the old detail symbol do not reach callbacks",
+  );
+
+  const callbacksBeforeReconnect = { depths: depths.length, trades: trades.length };
   detailFirst.disconnect();
   await settle();
   detailTimers.fireReconnect();
@@ -660,6 +695,11 @@ async function runVectors() {
       decodeFrame(detailSecond.writes[4]).command === COMMAND.DEPTH &&
       decodeFrame(detailSecond.writes[5]).command === COMMAND.TRADES,
     "reconnect restores detail fields after quote setup then refreshes both snapshots",
+  );
+  check(
+    depths.length === callbacksBeforeReconnect.depths &&
+      trades.length === callbacksBeforeReconnect.trades,
+    "mismatched reconnect snapshots do not publish under the retained detail selection",
   );
   await detailStream.stop();
 
