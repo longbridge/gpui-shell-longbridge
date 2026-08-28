@@ -9,6 +9,7 @@ import {
   COMMAND,
   FRAME_TYPE,
   SUB_TYPE,
+  TRADE_SESSION,
   decodeErrorResponse,
   decodeFrame,
   decodePushQuote,
@@ -85,6 +86,34 @@ function responseError(packet) {
   return new Error(
     `Longbridge command ${packet.command} failed with status ${packet.status}${detail}`,
   );
+}
+
+const INTRADAY_SESSIONS = Object.freeze([
+  TRADE_SESSION.NORMAL,
+  TRADE_SESSION.PRE,
+  TRADE_SESSION.POST,
+  TRADE_SESSION.OVERNIGHT,
+]);
+
+function mergeIntradayResponses(symbol, responses) {
+  const indexedLines = [];
+  for (const { lines, tradeSession } of responses) {
+    for (const line of lines) {
+      indexedLines.push({ ...line, tradeSession, index: indexedLines.length });
+    }
+  }
+  indexedLines.sort((left, right) => {
+    if (typeof left.timestamp === "bigint" && typeof right.timestamp === "bigint") {
+      if (left.timestamp < right.timestamp) return -1;
+      if (left.timestamp > right.timestamp) return 1;
+    }
+    if (left.tradeSession !== right.tradeSession) return left.tradeSession - right.tradeSession;
+    return left.index - right.index;
+  });
+  return {
+    symbol: responses.find((response) => response.symbol)?.symbol ?? symbol,
+    lines: indexedLines.map(({ index, ...line }) => line),
+  };
 }
 
 /**
@@ -420,12 +449,21 @@ export function createQuoteStream(options) {
     async queryIntraday({ symbol, tradeSession }) {
       const session = current;
       if (!session || !active(session)) throw new Error("quote stream is not connected");
-      const body = await request(
-        session,
-        COMMAND.INTRADAY,
-        encodeIntradayRequest({ symbol, tradeSession }),
-      );
-      return decodeSecurityIntradayResponse(body);
+      const requestedSessions =
+        tradeSession === TRADE_SESSION.ALL
+          ? INTRADAY_SESSIONS
+          : [tradeSession ?? TRADE_SESSION.NORMAL];
+      const responses = [];
+      for (const requestedSession of requestedSessions) {
+        const body = await request(
+          session,
+          COMMAND.INTRADAY,
+          encodeIntradayRequest({ symbol, tradeSession: requestedSession }),
+        );
+        const decoded = decodeSecurityIntradayResponse(body);
+        responses.push({ ...decoded, tradeSession: requestedSession });
+      }
+      return mergeIntradayResponses(symbol, responses);
     },
 
     async queryCandlesticks({ symbol, period, startDate, endDate, tradeSession, count }) {

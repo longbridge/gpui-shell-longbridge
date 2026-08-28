@@ -822,7 +822,7 @@ function decodeCandlestick(data) {
 }
 
 function decodeIntradayLine(data) {
-  const line = { tradeSession: TRADE_SESSION.NORMAL };
+  const line = {};
   decodeMessage(data, (reader, field, wireType) => {
     if (field === 1 || field === 4 || field === 5) {
       expectWireType(wireType, 2, field);
@@ -832,9 +832,6 @@ function decodeIntradayLine(data) {
       expectWireType(wireType, 0, field);
       const name = field === 2 ? "timestamp" : "volume";
       line[name] = signed64(reader.readVarint(`intraday ${name}`));
-    } else if (field === 6) {
-      expectWireType(wireType, 0, field);
-      line.tradeSession = unsigned32(reader.readVarint("intraday trade_session"), "trade_session");
     } else return false;
     return true;
   });

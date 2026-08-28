@@ -373,17 +373,44 @@ async function runVectors() {
   });
   check(
     intraday.symbol === "AAPL.US" &&
-      intraday.lines[0].price === "189.50" &&
-      intraday.lines[0].tradeSession === TRADE_SESSION.OVERNIGHT,
-    "intraday query returns the decoded correlated response",
+      intraday.lines.length === 4 &&
+      intraday.lines.map((line) => line.tradeSession).join(",") === "0,1,2,3" &&
+      intraday.lines.every((line) => line.price === "189.50"),
+    "all-session intraday query annotates every canonical response at the stream boundary",
+  );
+  const intradaySessions = [
+    TRADE_SESSION.NORMAL,
+    TRADE_SESSION.PRE,
+    TRADE_SESSION.POST,
+    TRADE_SESSION.OVERNIGHT,
+  ];
+  check(
+    intradaySessions.every(
+      (tradeSession, index) =>
+        decodeFrame(first.writes[4 + index]).command === COMMAND.INTRADAY &&
+        sameBytes(
+          decodeFrame(first.writes[4 + index]).body,
+          encodeIntradayRequest({ symbol: "AAPL.US", tradeSession }),
+        ),
+    ),
+    "all-session intraday query issues one command-18 request for every canonical session",
+  );
+
+  const postMarket = await stream.queryIntraday({
+    symbol: "AAPL.US",
+    tradeSession: TRADE_SESSION.POST,
+  });
+  check(
+    postMarket.lines.length === 1 && postMarket.lines[0].tradeSession === TRADE_SESSION.POST,
+    "single-session intraday query annotates canonical lines at the stream boundary",
   );
   check(
-    decodeFrame(first.writes[4]).command === COMMAND.INTRADAY &&
+    decodeFrame(first.writes[8]).command === COMMAND.INTRADAY &&
       sameBytes(
-        decodeFrame(first.writes[4]).body,
-        encodeIntradayRequest({ symbol: "AAPL.US", tradeSession: TRADE_SESSION.ALL }),
+        decodeFrame(first.writes[8]).body,
+        encodeIntradayRequest({ symbol: "AAPL.US", tradeSession: TRADE_SESSION.POST }),
       ),
-    "intraday query uses command 18 with its requested session",
+    "single-session intraday query keeps its request correlated",
   );
 
   const currentCandles = await stream.queryCandlesticks({
@@ -397,9 +424,9 @@ async function runVectors() {
     "current candle query returns its correlated response",
   );
   check(
-    decodeFrame(first.writes[5]).command === COMMAND.CANDLESTICKS &&
+    decodeFrame(first.writes[9]).command === COMMAND.CANDLESTICKS &&
       sameBytes(
-        decodeFrame(first.writes[5]).body,
+        decodeFrame(first.writes[9]).body,
         encodeSecurityCandlestickRequest({
           symbol: "AAPL.US",
           period: PERIOD.FIFTEEN_MINUTE,
@@ -412,7 +439,7 @@ async function runVectors() {
 
   timers.fireHeartbeat();
   await settle();
-  check(decodeFrame(first.writes[6]).command === COMMAND.HEARTBEAT, "heartbeat write");
+  check(decodeFrame(first.writes[10]).command === COMMAND.HEARTBEAT, "heartbeat write");
 
   first.disconnect();
   await settle();
