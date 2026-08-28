@@ -77,7 +77,7 @@ export default class DetailUiProbe extends LongbridgeApp {
         volume: BigInt((index + 1) * 100),
         timestamp: 1_700_000_000n - BigInt(index),
         tradeType: "T",
-        direction: index % 3 === 0 ? 1 : index % 3 === 1 ? -1 : 0,
+        direction: index % 3,
         tradeSession: 0,
       })),
       error: "",

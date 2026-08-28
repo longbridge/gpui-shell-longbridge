@@ -275,6 +275,34 @@ fn price_chart_is_a_retained_child_view() {
 }
 
 #[test]
+fn watchlist_snapshots_responsive_compaction_before_virtual_rows_render() {
+    let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
+    let watchlist = main
+        .split("  watchlist(tokens) {")
+        .nth(1)
+        .and_then(|source| source.split("  /**\n   * A virtualized table").next())
+        .expect("watchlist render method");
+
+    assert!(
+        watchlist.contains("const compact = this.isNarrow();"),
+        "responsive compaction must be read once in the parent render"
+    );
+    assert!(
+        watchlist.contains("watchlistHeader(tokens, compact)"),
+        "the header must use the parent-render snapshot"
+    );
+    assert!(
+        watchlist.contains("quoteRow(") && watchlist.contains("this.lastTick,") && watchlist.contains("compact,"),
+        "the virtual-row callback must capture the snapshot rather than call window.viewport_size()"
+    );
+    assert_eq!(
+        watchlist.matches("this.isNarrow()").count(),
+        1,
+        "virtual rows must make zero QuickJS-to-host viewport calls"
+    );
+}
+
+#[test]
 fn workspace_repaints_do_not_checkpoint_the_market_model() {
     let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
     let workspace = fs::read_to_string(app_dir().join("workspace.js")).expect("workspace.js");

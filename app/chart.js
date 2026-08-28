@@ -43,13 +43,14 @@ function marketOffsetSeconds(symbol, timestamp) {
 }
 
 /** Formats a timestamp in the trading market's wall-clock time. */
-export function formatMarketTime(symbol, timestamp) {
+export function formatMarketTime(symbol, timestamp, includeSeconds = false) {
   const seconds = timestampSeconds(timestamp);
   if (typeof symbol !== "string" || seconds === null) return "";
   const local = new Date((seconds + marketOffsetSeconds(symbol, seconds)) * 1000);
   const hour = String(local.getUTCHours()).padStart(2, "0");
   const minute = String(local.getUTCMinutes()).padStart(2, "0");
-  return `${hour}:${minute}`;
+  if (!includeSeconds) return `${hour}:${minute}`;
+  return `${hour}:${minute}:${String(local.getUTCSeconds()).padStart(2, "0")}`;
 }
 
 /**

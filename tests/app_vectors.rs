@@ -1188,6 +1188,34 @@ fn stock_details_keep_the_chart_visible_beside_collapsible_metadata(cx: &mut Tes
         rendered.contains("↑") && rendered.contains("↓") && rendered.contains("•"),
         "{rendered}"
     );
+    let first_trade = rendered
+        .split_once(r#"time-sales-row-1700000000|188.00|100|T|0|0"#)
+        .map(|(_, row)| row)
+        .expect("first time-and-sales row");
+    assert!(
+        first_trade.contains("• Neutral"),
+        "Longbridge direction 0 must be neutral:\n{first_trade}"
+    );
+    let down_trade = rendered
+        .split_once(r#"time-sales-row-1699999999|188.01|200|T|1|0"#)
+        .map(|(_, row)| row)
+        .expect("down time-and-sales row");
+    assert!(
+        down_trade.contains("↓ Down"),
+        "Longbridge direction 1 must be down:\n{down_trade}"
+    );
+    let up_trade = rendered
+        .split_once(r#"time-sales-row-1699999998|188.02|300|T|2|0"#)
+        .map(|(_, row)| row)
+        .expect("up time-and-sales row");
+    assert!(
+        up_trade.contains("↑ Up"),
+        "Longbridge direction 2 must be up:\n{up_trade}"
+    );
+    assert!(
+        rendered.contains("17:13:20"),
+        "Time & Sales must show selected market-local time, not UTC/browser local time:\n{rendered}"
+    );
     assert!(
         rendered.contains("8 orders") && rendered.contains("12 orders"),
         "{rendered}"
@@ -1203,11 +1231,94 @@ fn stock_details_keep_the_chart_visible_beside_collapsible_metadata(cx: &mut Tes
         "{rendered}"
     );
     assert!(
-        rendered.contains("order-book-ask-slot-1")
-            && rendered.contains("order-book-bid-slot-5")
+        rendered.contains("order-book-ask-level-1")
+            && rendered.contains("order-book-bid-level-1")
             && rendered.contains("time-sales-row-")
             && rendered.contains(".truncate"),
-        "market-detail rows keep stable slots and shrink instead of overlapping:\n{rendered}"
+        "market-detail rows keep domain identities and shrink instead of overlapping:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("order-book-ask-slot") && !rendered.contains("order-book-bid-slot"),
+        "missing depth must not reserve placeholder rows:\n{rendered}"
+    );
+    let order_book = rendered
+        .split_once(r#":id[Str("order-book-panel")]"#)
+        .and_then(|(_, section)| {
+            section
+                .split_once(r#":id[Str("time-sales-panel")]"#)
+                .map(|(section, _)| section)
+        })
+        .expect("order-book section");
+    assert!(
+        !order_book.contains(".border[") && !order_book.contains(".rounded["),
+        "detail sections must use hairlines inside the one detail panel, not nested cards:\n{order_book}"
+    );
+}
+
+#[gpui::test]
+fn market_detail_panels_name_loading_empty_and_error_states(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("detail_ui_states.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let (_root, view) = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+    context.run_until_parked();
+    let draw_view = view.clone();
+    context.draw(
+        gpui::Point::default(),
+        gpui::size(gpui::px(360.), gpui::px(480.)),
+        move |_, _| draw_view.into_any_element(),
+    );
+    let rendered = context.update(|_, cx| {
+        view.read(cx)
+            .snapshot()
+            .map(gpui_shell::RenderSnapshot::debug_tree)
+            .unwrap_or_default()
+    });
+    for expected in [
+        "Loading live market data…",
+        "No order book data",
+        "Depth entitlement unavailable",
+        "No recent trades",
+        "Trade feed unavailable",
+    ] {
+        assert!(
+            rendered.contains(expected),
+            "missing {expected}:\n{rendered}"
+        );
+    }
+}
+
+#[gpui::test]
+fn sparse_order_book_keeps_best_levels_next_to_the_spread(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("detail_ui_sparse.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let (_root, view) = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+    context.run_until_parked();
+    let draw_view = view.clone();
+    context.draw(
+        gpui::Point::default(),
+        gpui::size(gpui::px(360.), gpui::px(300.)),
+        move |_, _| draw_view.into_any_element(),
+    );
+    let rendered = context.update(|_, cx| {
+        view.read(cx)
+            .snapshot()
+            .map(gpui_shell::RenderSnapshot::debug_tree)
+            .unwrap_or_default()
+    });
+
+    assert!(rendered.contains("order-book-ask-level-1"), "{rendered}");
+    assert!(rendered.contains("order-book-bid-level-1"), "{rendered}");
+    assert!(!rendered.contains("order-book-ask-slot"), "{rendered}");
+    assert!(
+        rendered.find("140.30") < rendered.find("Bid 46%")
+            && rendered.find("Bid 46%") < rendered.find("140.20"),
+        "Ask 1 must hug the divider above and Bid 1 below it:\n{rendered}"
     );
 }
 

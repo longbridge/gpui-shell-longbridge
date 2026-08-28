@@ -2038,6 +2038,11 @@ export default class LongbridgeApp extends View {
   watchlist(tokens) {
     const status = streamStatusSummary({ state: this.status.state, delay: this.status.delay });
     const rows = filterRows(this.quotes, this.watchlistQuery, ["code", "name", "symbol"]);
+    // `v_virtual_list` calls its row renderer during layout. Keep the one
+    // QuickJS-to-host viewport read in this parent render and let every row
+    // capture its value; asking the window per visible quote turns scrolling
+    // and live quote repaints into a host-call hot path.
+    const compact = this.isNarrow();
     return this.pane(tokens, "right").child(
       panel(tokens)
         .id("watchlist-pane")
@@ -2070,7 +2075,7 @@ export default class LongbridgeApp extends View {
             "Watchlist",
             rows,
             QUOTE_ROW_HEIGHT,
-            watchlistHeader(tokens, this.isNarrow()),
+            watchlistHeader(tokens, compact),
             (quote, index) =>
               quoteRow(
                 tokens,
@@ -2078,7 +2083,7 @@ export default class LongbridgeApp extends View {
                 quote.symbol === this.selectedSymbol,
                 index,
                 this.lastTick,
-                this.isNarrow(),
+                compact,
               ),
             (symbol, cx) => this.selectQuote(symbol, cx),
             this.watchlistQuery
@@ -2424,6 +2429,7 @@ export default class LongbridgeApp extends View {
    * @param {LongbridgeQuoteRow} quote
    */
   detailSectionsFor(tokens, quote) {
+    const compact = this.isNarrow();
     const toggle = (name) => (open, cx) => {
       this.detailSections = { ...this.detailSections, [name]: open };
       this.redraw(cx);
@@ -2444,13 +2450,18 @@ export default class LongbridgeApp extends View {
       .child(this.chartSection(tokens))
       .child(
         v_flex()
-          .gap(tokens.spacing.md)
+          .gap(tokens.spacing.xs)
           .px(tokens.spacing.md)
-          .py(tokens.spacing.md)
+          .py(tokens.spacing.xs)
+          .child(orderBookPanel(tokens, this.depthState, depthRatio(this.depthState), compact))
+          .child(rule(tokens))
           .child(
-            orderBookPanel(tokens, this.depthState, depthRatio(this.depthState), this.isNarrow()),
-          )
-          .child(timeSalesPanel(tokens, this.tradesState, this.isNarrow())),
+            timeSalesPanel(tokens, this.tradesState, {
+              compact,
+              symbol: quote.symbol,
+              market: quote.market,
+            }),
+          ),
       )
       .child(
         accordionSection(tokens, {

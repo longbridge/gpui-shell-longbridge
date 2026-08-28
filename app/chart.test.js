@@ -124,6 +124,10 @@ function runVectors() {
     formatMarketTime("700.HK", Number(unix("2026-08-24T02:00:00Z"))) === "10:00",
     "formats an HK hover time in Hong Kong time",
   );
+  check(
+    formatMarketTime("AAPL.US", Number(unix("2026-01-09T14:30:45Z")), true) === "09:30:45",
+    "can retain seconds for a market-local trade tape",
+  );
   const usLaidOut = layoutPriceSeries(us, { width: 500, height: 100, dayGap: 10 });
   check(
     usLaidOut.points[0].date === "2026-03-08" && usLaidOut.points.at(-1).date === "2026-03-09",

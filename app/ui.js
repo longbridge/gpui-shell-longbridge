@@ -23,6 +23,7 @@ import {
   v_flex,
 } from "gpui-base";
 import { formatCompactNumber, quoteFreshness, tradeStatusLabel } from "./market.js";
+import { formatMarketTime } from "./chart.js";
 import { tradeIdentity, tradeVolumeRatio } from "./market_detail.js";
 import { allocationColor, avatarColor, changeTone, statusColors, valueTone } from "./palette.js";
 import { foldAllocationSlices } from "./portfolio.js";
@@ -658,44 +659,37 @@ function detailNumber(value) {
   return value === undefined || value === null ? "—" : formatCompactNumber(value);
 }
 
-function detailTime(value) {
-  const seconds = typeof value === "bigint" ? Number(value) : Number(value);
-  if (!Number.isFinite(seconds) || seconds <= 0) return "--";
-  return new Date(seconds * 1_000).toISOString().slice(11, 19);
-}
-
 function tradeDirection(tokens, direction) {
-  if (direction > 0) return { text: "↑ Up", tone: statusColors(tokens).up };
-  if (direction < 0) return { text: "↓ Down", tone: statusColors(tokens).down };
+  if (direction === 2) return { text: "↑ Up", tone: statusColors(tokens).up };
+  if (direction === 1) return { text: "↓ Down", tone: statusColors(tokens).down };
   return { text: "• Neutral", tone: tokens.muted_foreground };
 }
 
-function depthRow(tokens, side, level, slot, compact) {
-  const present = Boolean(level);
-  const order =
-    present && level.orderNum !== undefined ? `${detailNumber(level.orderNum)} orders` : "";
+function depthRow(tokens, side, level, compact) {
+  const levelId = level.position ?? level.price;
+  const order = level.orderNum !== undefined ? `${detailNumber(level.orderNum)} orders` : "";
   return h_flex()
-    .id(`order-book-${side}-slot-${slot}`)
+    .id(`order-book-${side}-level-${levelId}`)
     .items_center()
     .min_w(0)
     .h(22)
     .gap(tokens.spacing.sm)
     .px(tokens.spacing.sm)
     .child(
-      muted(tokens, present ? `${side === "ask" ? "Ask" : "Bid"} ${level.position ?? slot}` : "")
+      muted(tokens, `${side === "ask" ? "Ask" : "Bid"} ${level.position ?? ""}`)
         .w(compact ? "25%" : "20%")
         .min_w(0)
         .truncate(),
     )
     .child(
-      numeric(tokens, present ? (level.price ?? "—") : "—")
+      numeric(tokens, level.price ?? "—")
         .flex_1()
         .min_w(0)
         .truncate()
         .text_right(),
     )
     .child(
-      numeric(tokens, present ? detailNumber(level.volume) : "—")
+      numeric(tokens, detailNumber(level.volume))
         .w(compact ? "30%" : "25%")
         .min_w(0)
         .truncate()
@@ -707,9 +701,9 @@ function depthRow(tokens, side, level, slot, compact) {
 }
 
 /**
- * The selected instrument's five-by-five depth book. Slots, rather than
- * source-array positions, carry identity so a temporarily absent level does
- * not move the ratio bar or reset a retained row between pushes.
+ * The selected instrument's five-by-five depth book. The server sends nearest
+ * levels first; asks are reversed so the best ask sits at the spread and bids
+ * remain nearest-first below it. Missing levels are not synthetic rows.
  *
  * @param {import("gpui-base").Theme} tokens
  * @param {LongbridgeDepthState} state
@@ -719,35 +713,29 @@ function depthRow(tokens, side, level, slot, compact) {
 export function orderBookPanel(tokens, state, ratio, compact = false) {
   const asks = Array.isArray(state?.asks) ? state.asks.slice(0, 5).reverse() : [];
   const bids = Array.isArray(state?.bids) ? state.bids.slice(0, 5) : [];
+  const hasDepth = asks.length > 0 || bids.length > 0;
   const bidPercent = Math.round((ratio?.bid ?? 0) * 100);
   const askPercent = Math.max(0, 100 - bidPercent);
-  const status =
-    state?.status === "ready" ? "Live" : state?.status === "idle" ? "Waiting" : state?.status;
-  return panel(tokens)
+  return v_flex()
     .id("order-book-panel")
     .w_full()
+    .min_w(0)
     .child(
       h_flex()
         .items_center()
-        .justify_between()
-        .px(tokens.spacing.md)
-        .py(tokens.spacing.sm)
-        .child(label(tokens, "Order Book", 13).font_weight(700))
-        .child(muted(tokens, status || "Waiting")),
+        .px(tokens.spacing.sm)
+        .py(tokens.spacing.xs)
+        .child(label(tokens, "Order Book", 13).font_weight(700)),
     )
     .child(rule(tokens))
     .child(
-      state?.status !== "ready"
+      state?.status !== "ready" || !hasDepth
         ? v_flex()
             .p(tokens.spacing.md)
             .child(detailStatus(tokens, state, "No order book data"))
         : v_flex()
             .py(tokens.spacing.xs)
-            .children(
-              Array.from({ length: 5 }, (_item, index) =>
-                depthRow(tokens, "ask", asks[index], index + 1, compact),
-              ),
-            )
+            .children(asks.map((level) => depthRow(tokens, "ask", level, compact)))
             .child(
               v_flex()
                 .gap(tokens.spacing.xs)
@@ -768,15 +756,17 @@ export function orderBookPanel(tokens, state, ratio, compact = false) {
                     .child(muted(tokens, `Ask ${askPercent}%`)),
                 ),
             )
-            .children(
-              Array.from({ length: 5 }, (_item, index) =>
-                depthRow(tokens, "bid", bids[index], index + 1, compact),
-              ),
-            ),
+            .children(bids.map((level) => depthRow(tokens, "bid", level, compact))),
     );
 }
 
-function tradeRow(tokens, trade, maximum, compact) {
+function tradeTime({ symbol, market }, timestamp) {
+  const marketSymbol = symbol || (market ? `market.${market}` : "");
+  return formatMarketTime(marketSymbol, timestamp, true) || "--";
+}
+
+function tradeRow(tokens, trade, maximum, context) {
+  const { compact = false } = context;
   const direction = tradeDirection(tokens, trade.direction);
   const ratio = Math.round(tradeVolumeRatio(trade.volume, maximum) * 100);
   const identity = tradeIdentity(trade);
@@ -789,7 +779,7 @@ function tradeRow(tokens, trade, maximum, compact) {
     .gap(tokens.spacing.sm)
     .px(tokens.spacing.sm)
     .child(
-      muted(tokens, detailTime(trade.timestamp))
+      muted(tokens, tradeTime(context, trade.timestamp))
         .w(compact ? "24%" : "22%")
         .min_w(0)
         .truncate(),
@@ -828,8 +818,9 @@ function tradeRow(tokens, trade, maximum, compact) {
     );
 }
 
-/** @param {import("gpui-base").Theme} tokens @param {LongbridgeTradesState} state @param {boolean} [compact] */
-export function timeSalesPanel(tokens, state, compact = false) {
+/** @param {import("gpui-base").Theme} tokens @param {LongbridgeTradesState} state @param {{ compact?: boolean, symbol?: string, market?: string }} [context] */
+export function timeSalesPanel(tokens, state, context = {}) {
+  const { compact = false } = context;
   const trades = Array.isArray(state?.trades) ? state.trades.slice(0, 20) : [];
   const maximum = trades.reduce((largest, trade) => {
     const volume =
@@ -844,23 +835,16 @@ export function timeSalesPanel(tokens, state, compact = false) {
         : volume
       : Math.max(largest, volume);
   }, 0);
-  const status =
-    state?.status === "ready"
-      ? `${trades.length} live trades`
-      : state?.status === "idle"
-        ? "Waiting"
-        : state?.status;
-  return panel(tokens)
+  return v_flex()
     .id("time-sales-panel")
     .w_full()
+    .min_w(0)
     .child(
       h_flex()
         .items_center()
-        .justify_between()
-        .px(tokens.spacing.md)
-        .py(tokens.spacing.sm)
-        .child(label(tokens, "Time & Sales", 13).font_weight(700))
-        .child(muted(tokens, status || "Waiting")),
+        .px(tokens.spacing.sm)
+        .py(tokens.spacing.xs)
+        .child(label(tokens, "Time & Sales", 13).font_weight(700)),
     )
     .child(rule(tokens))
     .child(
@@ -871,7 +855,7 @@ export function timeSalesPanel(tokens, state, compact = false) {
         : trades.length
           ? v_flex()
               .py(tokens.spacing.xs)
-              .children(trades.map((trade) => tradeRow(tokens, trade, maximum, compact)))
+              .children(trades.map((trade) => tradeRow(tokens, trade, maximum, context)))
           : v_flex()
               .p(tokens.spacing.md)
               .child(detailStatus(tokens, state, "No recent trades")),
