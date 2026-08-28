@@ -29,7 +29,7 @@ import { foldAllocationSlices } from "./portfolio.js";
 
 /** @param {import("gpui-base").Theme} tokens @param {string | number} value @param {number} [size] */
 export const label = (tokens, value, size = 12) =>
-  div().child(String(value)).text_size(size).line_height(1.25).text_color(tokens.foreground);
+  div().text_size(size).line_height(1.25).text_color(tokens.foreground).child(value);
 
 /** @param {import("gpui-base").Theme} tokens @param {string | number} value @param {number} [size] */
 export const numeric = (tokens, value, size = 12) =>
@@ -37,7 +37,7 @@ export const numeric = (tokens, value, size = 12) =>
 
 /** @param {import("gpui-base").Theme} tokens @param {string | number} value */
 export const muted = (tokens, value) =>
-  div().child(String(value)).text_size(11).line_height(1.25).text_color(tokens.muted_foreground);
+  div().text_size(11).line_height(1.25).text_color(tokens.muted_foreground).child(value);
 
 /** @param {import("gpui-base").Theme} tokens */
 export const rule = (tokens) => div().w_full().h(1).bg(tokens.border);
@@ -989,13 +989,13 @@ export function errorMessage(tokens, value) {
     .child(div().w(3).self_stretch().rounded(tokens.radius.full).bg(tokens.destructive))
     .child(
       div()
-        .child(value)
         .flex_1()
         .min_w(0)
         .whitespace_normal()
         .text_size(12)
         .line_height(1.35)
-        .text_color(tokens.foreground),
+        .text_color(tokens.foreground)
+        .child(value),
     );
 }
 

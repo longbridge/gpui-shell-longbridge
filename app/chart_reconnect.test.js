@@ -1,7 +1,9 @@
 import LongbridgeApp from "./main.js";
+import { holdContext } from "./context.js";
 
 export default class ChartReconnectProbe extends LongbridgeApp {
   init(_props, cx) {
+    holdContext(cx);
     this.streamGeneration = 4;
     this.chartGeneration = 9;
     this.stream = {

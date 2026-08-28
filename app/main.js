@@ -2,6 +2,7 @@
 // quotes use the documented WebSocket protocol, and no trading API is exposed.
 
 import { View, div, image } from "gpui";
+import { holdContext } from "./context.js";
 import {
   CalendarState,
   DockArea,
@@ -30,9 +31,9 @@ import {
 } from "./auth.js";
 import { get } from "./http.js";
 import {
+  applyQuote,
   filterRows,
   initialQuotes,
-  mergeQuote,
   sortLikeTerminal,
   streamStatusSummary,
   watchlistInstruments,
@@ -206,6 +207,7 @@ function storedTokens() {
 export default class LongbridgeApp extends View {
   /** @param {import("gpui-shell").Props | undefined} _props @param {import("gpui").AsyncContext} cx */
   init(_props, cx) {
+    holdContext(cx);
     cx.spawn(async (cx) => {
       themes = JSON.parse(await readFile("theme.json", "utf8"));
       set_theme(themes.dark);
@@ -522,7 +524,7 @@ export default class LongbridgeApp extends View {
           console.warn(`could not open the authorization page: ${error}`);
         }
         this.redraw(cx);
-        const tokens = await pollDeviceAuthorization(authorization, { cx });
+        const tokens = await pollDeviceAuthorization(authorization);
         this.hasStoredTokens = true;
         this.authorization = null;
         await this.connect(tokens.accessToken, cx);
@@ -550,7 +552,7 @@ export default class LongbridgeApp extends View {
     this.status = { state: "loading_watchlist" };
     this.redraw(cx);
 
-    const instruments = watchlistInstruments(await get(cx, "/v1/watchlist/groups"));
+    const instruments = watchlistInstruments(await get("/v1/watchlist/groups"));
     if (generation !== this.streamGeneration) return;
     this.instruments = instruments;
     this.quotes = sortLikeTerminal(initialQuotes(instruments), Date.now());
@@ -562,7 +564,7 @@ export default class LongbridgeApp extends View {
     // misleading global Connecting state.
     this.status = { state: "connected" };
     this.redraw(cx);
-    await this.refreshPortfolio(cx);
+    await this.refreshPortfolio();
     if (generation !== this.streamGeneration) return;
     const symbols = [
       ...new Set([
@@ -582,7 +584,6 @@ export default class LongbridgeApp extends View {
     // notify through: `cx` here is the task's `AsyncContext`, which is the
     // flavour that may be held across an await.
     stream = createQuoteStream({
-      cx,
       accessToken: token,
       symbols,
       onQuote: (quote) => {
@@ -605,11 +606,15 @@ export default class LongbridgeApp extends View {
 
   /** @param {unknown} quote @param {import("gpui").AsyncContext} cx */
   receiveQuote(quote, cx) {
-    this.quotes = sortLikeTerminal(
-      this.quotes.map((current) => mergeQuote(current, quote)),
-      this.lastTick,
-    );
-    this.portfolioQuotes = this.portfolioQuotes.map((current) => mergeQuote(current, quote));
+    // Deliberately no re-sort here. `sortLikeTerminal` ranks a row from trade
+    // session counts taken across the whole list, so running it per quote made
+    // the connect burst -- the whole watchlist twice over, snapshot plus
+    // isFirstPush, in one synchronous run -- cost seconds and overrun the
+    // sandbox's task budget, which unwound the stream before it could reach
+    // `connected`. The one-second clock already re-sorts.
+    const receivedAt = Date.now();
+    this.quotes = applyQuote(this.quotes, quote, receivedAt);
+    this.portfolioQuotes = applyQuote(this.portfolioQuotes, quote, receivedAt);
     if (quote && typeof quote === "object" && quote.symbol === this.selectedSymbol) {
       const candles = this.candleCache.get(this.selectedSymbol);
       if (candles) {
@@ -685,7 +690,7 @@ export default class LongbridgeApp extends View {
   loadPortfolio(cx) {
     cx.spawn(async (cx) => {
       try {
-        await this.refreshPortfolio(cx);
+        await this.refreshPortfolio();
         this.error = "";
         this.redraw(cx);
       } catch (error) {
@@ -695,15 +700,14 @@ export default class LongbridgeApp extends View {
     });
   }
 
-  /** @param {import("gpui").AsyncContext} cx */
-  async refreshPortfolio(cx) {
+  async refreshPortfolio() {
     // Keep authenticated reads sequential: if both discover an expired access
     // token together, two refresh-token rotations could race.
-    const account = await get(cx, "/v1/asset/account", { currency: "USD" });
-    const positions = await get(cx, "/v1/asset/stock");
+    const account = await get("/v1/asset/account", { currency: "USD" });
+    const positions = await get("/v1/asset/stock");
     let exchangeRates = null;
     try {
-      exchangeRates = await get(cx, "/v1/asset/exchange_rates");
+      exchangeRates = await get("/v1/asset/exchange_rates");
     } catch (_) {
       // The account snapshot is already USD. Native-currency holdings remain
       // visibly unpriced until the optional exchange-rate read succeeds.

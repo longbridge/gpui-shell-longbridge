@@ -1,5 +1,5 @@
 import { Button, v_flex } from "gpui-base";
-
+import { holdContext } from "./context.js";
 import LongbridgeApp from "./main.js";
 
 /** @param {string} symbol @param {string} last @param {bigint} sequence */
@@ -30,6 +30,7 @@ function quote(symbol, last, sequence) {
 
 export default class PriceChartUpdateProbe extends LongbridgeApp {
   init(_props, cx) {
+    holdContext(cx);
     this.selectedSymbol = "AAPL.US";
     this.quotes = [quote("AAPL.US", "100", 1n), quote("MSFT.US", "200", 1n)];
     this.portfolioQuotes = [];

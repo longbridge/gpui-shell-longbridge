@@ -1,7 +1,9 @@
 import LongbridgeApp from "./main.js";
+import { holdContext } from "./context.js";
 
 export default class PortfolioUiProbe extends LongbridgeApp {
   init(_props, cx) {
+    holdContext(cx);
     // A probe replaces init wholesale, so it owes the view the state a render
     // reaches for unconditionally.
     this.initInteractionState();

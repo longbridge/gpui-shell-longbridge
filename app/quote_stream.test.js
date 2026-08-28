@@ -1,6 +1,6 @@
 import { View } from "gpui";
+import { holdContext } from "./context.js";
 import { v_flex } from "gpui-base";
-
 import { COMMAND, FRAME_TYPE, decodeFrame, encodeAuthRequest, encodeFrame } from "./protocol.js";
 import { createQuoteStream } from "./quote_stream.js";
 
@@ -391,10 +391,47 @@ async function runVectors() {
     "silent auth schedules reconnect",
   );
   await silent.stop();
+
+  // A handshake can stall in a way no single request timeout can see: the
+  // sandbox interrupts a script that overruns its execution budget, and that
+  // interrupt is not catchable, so it unwinds `connectAndSubscribe` past the
+  // catch that would have called `lost`. The socket stays open and keeps
+  // receiving pushes, so nothing downstream ever notices the session never
+  // reached `connected`. Only a deadline over the whole handshake does.
+  const wedgedTransport = new MockWebSocket([COMMAND.REALTIME_QUOTE]);
+  const wedgedTimers = new MockTimers();
+  const wedgedStatuses = [];
+  const wedged = createQuoteStream({
+    accessToken: "test-token",
+    getOtp: async () => "wedged-otp",
+    symbols: ["AAPL.US"],
+    onStatus: (status) => wedgedStatuses.push(status),
+    WebSocket: wedgedTransport,
+    timers: wedgedTimers,
+    timeoutMillis: 60_000,
+    handshakeMillis: 200,
+    retryInitialMs: 10,
+    retryMaxMs: 40,
+  });
+  wedged.start().catch(() => {});
+  await settle();
+  check(
+    wedgedStatuses.at(-1).state === "snapshotting",
+    "the stalled handshake stops short of connected",
+  );
+  wedgedTimers.fireAfter(200);
+  await settle();
+  check(
+    wedgedStatuses.some((status) => status.state === "reconnecting"),
+    "a handshake that never finishes is torn down and retried",
+  );
+  check(wedgedTransport.sockets[0].closed, "the stalled session's socket is closed");
+  await wedged.stop();
 }
 
 export default class QuoteStreamVectorProbe extends View {
   init(_props, cx) {
+    holdContext(cx);
     this.result = "pending";
     cx.spawn(async (cx) => {
       try {

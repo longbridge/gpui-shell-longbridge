@@ -1,6 +1,5 @@
 import { View } from "gpui";
 import { v_flex } from "gpui-base";
-
 import { allocationChart } from "./ui.js";
 
 // Seven priced positions against five hues: the chart has to fold, and the

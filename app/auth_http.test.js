@@ -1,6 +1,7 @@
 // A network-free shell contract for the real auth.js and http.js modules.
 
 import { View } from "gpui";
+import { holdContext } from "./context.js";
 import { v_flex } from "gpui-base";
 import { beginDeviceAuthorization, formBody, pollDeviceAuthorization } from "./auth.js";
 import { get, socketOtp } from "./http.js";
@@ -166,8 +167,7 @@ async function permanentOauthErrorTerminates() {
 
 // Longbridge returns security names in the language the request asks for, so an
 // authenticated read must pin English rather than inherit the account default.
-/** @param {import("gpui").AsyncContext} cx */
-async function authenticatedReadsRequestEnglish(cx) {
+async function authenticatedReadsRequestEnglish() {
   const original = globalThis.fetch;
   const calls = [];
   globalThis.fetch = async (url, options) => {
@@ -184,7 +184,7 @@ async function authenticatedReadsRequestEnglish(cx) {
     };
   };
   try {
-    await socketOtp(cx, "test-token");
+    await socketOtp("test-token");
   } finally {
     globalThis.fetch = original;
   }
@@ -195,8 +195,7 @@ async function authenticatedReadsRequestEnglish(cx) {
   );
 }
 
-/** @param {import("gpui").AsyncContext} cx */
-async function runVectors(cx) {
+async function runVectors() {
   check(
     formBody({ client_id: "public client", grant_type: "refresh_token" }) ===
       "client_id=public+client&grant_type=refresh_token",
@@ -207,16 +206,17 @@ async function runVectors(cx) {
   await slowDownIsSharedOncePerRound();
   await transientRegionDoesNotAbortItsSibling();
   await permanentOauthErrorTerminates();
-  await authenticatedReadsRequestEnglish(cx);
+  await authenticatedReadsRequestEnglish();
 }
 
 export default class AuthHttpContract extends View {
   init(_props, cx) {
+    holdContext(cx);
     this.result = "pending";
     cx.spawn(async (cx) => {
       try {
         await cx.sleep(0);
-        await runVectors(cx);
+        await runVectors();
         this.result = "ok";
       } catch (error) {
         this.result = `failed:${error.message}`;

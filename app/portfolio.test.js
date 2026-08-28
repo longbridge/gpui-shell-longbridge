@@ -1,5 +1,4 @@
 import { View } from "gpui";
-
 import {
   allocationInUsd,
   foldAllocationSlices,

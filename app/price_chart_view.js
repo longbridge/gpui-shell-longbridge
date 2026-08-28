@@ -1,6 +1,5 @@
 import { Background, PathBuilder, View, div } from "gpui";
 import { Progress, ProgressIndicator, ProgressTrack, h_flex, v_flex } from "gpui-base";
-
 import { findNearestPricePoint, formatMarketTime, layoutPriceSeries } from "./chart.js";
 import { label, muted, numeric } from "./ui.js";
 

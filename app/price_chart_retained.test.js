@@ -1,5 +1,5 @@
 import { Button, h_flex, v_flex } from "gpui-base";
-
+import { holdContext } from "./context.js";
 import LongbridgeApp from "./main.js";
 
 /** @param {string} iso @param {number} close */
@@ -15,6 +15,7 @@ const candle = (iso, close) => ({
 
 export default class RetainedPriceChartProbe extends LongbridgeApp {
   init(_props, cx) {
+    holdContext(cx);
     this.selectedSymbol = "AAPL.US";
     this.candleCache = new Map([
       [

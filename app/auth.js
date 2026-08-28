@@ -2,6 +2,8 @@
 // dynamic client registration: register this application once out-of-band and
 // replace CLIENT_ID with that public identifier before distributing it.
 
+import { context } from "./context.js";
+
 /**
  * The one, fixed public-client identifier for this application.
  *
@@ -94,8 +96,10 @@ export function loadTokens() {
   if (saved === null) return null;
   try {
     return tokensFromStore(JSON.parse(saved));
-  } catch (_) {
-    // A half-written or hand-edited entry is no session, not a crash.
+  } catch {
+    // A value that will not parse means the same thing as one that parses to
+    // the wrong shape: not signed in. Throwing here would take the window down
+    // at startup over a file the user cannot see.
     return null;
   }
 }
@@ -215,16 +219,13 @@ async function pollDeviceRegion(authorization, clientId, region, fetchImpl, now)
  * `slow_down` increases the interval for subsequent polls as RFC 8628 requires.
  *
  * @param {DeviceAuthorization} authorization
- * @param {{ cx?: import("gpui").AsyncContext, fetch?: typeof fetch, sleep?: (ms: number) => Promise<void>, now?: () => number, saveTokens?: (tokens: Tokens) => Promise<void> }} [dependencies]
  * @returns {Promise<Tokens>}
  */
 export async function pollDeviceAuthorization(authorization, dependencies = {}) {
   const clientId = configuredClientId();
   const fetchImpl = dependencies.fetch || fetch;
-  // Waiting between polls outlives the call that started it, so the delay comes
-  // from the `AsyncContext` the caller is running under rather than from a
-  // module-level timer this module could not own.
-  const sleepImpl = dependencies.sleep || ((ms) => dependencies.cx.sleep(ms));
+  const sleepImpl =
+    dependencies.sleep || (/** @param {number} ms */ (ms) => context().sleep(ms));
   const now = dependencies.now || Date.now;
   const save = dependencies.saveTokens || saveTokens;
   let intervalMs = authorization.intervalMs || DEFAULT_POLL_INTERVAL_MS;

@@ -1,6 +1,5 @@
 import { View } from "gpui";
 import { Table, v_flex } from "gpui-base";
-
 import { menuTrigger, quoteDetail, quoteRow, watchlistHeader } from "./ui.js";
 
 export default class WatchlistUiProbe extends View {

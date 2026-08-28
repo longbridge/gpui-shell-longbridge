@@ -1,4 +1,5 @@
 import { v_flex } from "gpui-base";
+import { holdContext } from "./context.js";
 import LongbridgeApp from "./main.js";
 
 function quote(index) {
@@ -28,6 +29,7 @@ function quote(index) {
 
 export default class WorkspaceUiProbe extends LongbridgeApp {
   init(_props, cx) {
+    holdContext(cx);
     // A probe replaces init wholesale, so it owes the view the state a render
     // reaches for unconditionally.
     this.initInteractionState();

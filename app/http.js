@@ -2,6 +2,7 @@
 // owns the two necessary form POSTs in auth.js, and no order-writing method is
 // available from this module.
 
+import { context } from "./context.js";
 import { OPENAPI_BASE_URL, accessToken, refreshAccessToken } from "./auth.js";
 
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -46,8 +47,8 @@ function endpoint(path, query) {
   return `${OPENAPI_BASE_URL}${path}${queryString(query)}`;
 }
 
-/** @param {import("gpui").AsyncContext} cx @param {string} url @param {string} token */
-async function request(cx, url, token) {
+/** @param {string} url @param {string} token */
+async function request(url, token) {
   return Promise.race([
     fetch(url, {
       headers: {
@@ -56,7 +57,7 @@ async function request(cx, url, token) {
         Authorization: `Bearer ${token}`,
       },
     }),
-    cx.sleep(REQUEST_TIMEOUT_MS).then(() => {
+    context().sleep(REQUEST_TIMEOUT_MS).then(() => {
       throw new Error("Longbridge API request timed out");
     }),
   ]);
@@ -72,20 +73,15 @@ async function responseError(response) {
  * Performs an authenticated, read-only GET. A 401 triggers one refresh-token
  * rotation and exactly one retry; any second 401 is returned as an error.
  *
- * The timeout is a race against `cx.sleep`, so this takes the `AsyncContext`
- * of whatever task is doing the reading rather than reaching for an ambient
- * one: a read belongs to the task that asked for it.
- *
- * @param {import("gpui").AsyncContext} cx
  * @param {string} path
  * @param {Record<string, string | number | boolean | undefined>} [query]
  */
-export async function get(cx, path, query = {}) {
+export async function get(path, query = {}) {
   const url = endpoint(path, query);
-  let response = await request(cx, url, await accessToken());
+  let response = await request(url, await accessToken());
   if (response.status === 401) {
     const tokens = await refreshAccessToken();
-    response = await request(cx, url, tokens.accessToken);
+    response = await request(url, tokens.accessToken);
   }
   if (!response.ok) await responseError(response);
   try {
@@ -95,18 +91,13 @@ export async function get(cx, path, query = {}) {
   }
 }
 
-/**
- * Requests the one-time password required by WebSocket command 2.
- *
- * @param {import("gpui").AsyncContext} cx
- * @param {string} token
- */
-export async function socketOtp(cx, token) {
+/** Requests the one-time password required by WebSocket command 2. */
+export async function socketOtp(token) {
   const url = endpoint("/v1/socket/token", {});
-  let response = await request(cx, url, token);
+  let response = await request(url, token);
   if (response.status === 401) {
     const refreshed = await refreshAccessToken();
-    response = await request(cx, url, refreshed.accessToken);
+    response = await request(url, refreshed.accessToken);
   }
   if (!response.ok) await responseError(response);
   let payload;

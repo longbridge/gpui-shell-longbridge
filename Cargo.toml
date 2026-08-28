@@ -5,6 +5,10 @@ edition = "2024"
 publish = false
 
 [dependencies]
+# Tracks the branch carrying the keyboard, pointer, window and dock components
+# this application is written against. It is the default branch plus that work;
+# the default branch alone has the dock but not `Accordion` or `Avatar`, so the
+# window fails to load against it. Back to the default branch once it lands.
 gpui-shell = { git = "https://github.com/longbridge/gpui-component.git", branch = "shell-keyboard-pointer-actions-window" }
 gpui = { git = "https://github.com/zed-industries/zed", features = ["profiler"] }
 gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
