@@ -1,11 +1,12 @@
 [package]
-name = "gpui-shell-longbridge"
+name = "longbridge-lite"
 version = "0.1.0"
 edition = "2024"
 publish = false
 
 [dependencies]
-gpui-shell = { git = "https://github.com/longbridge/gpui-component.git" }
+gpui-shell = { git = "https://github.com/longbridge/gpui-component" }
+gpui-base = { git = "https://github.com/longbridge/gpui-component" }
 gpui = { git = "https://github.com/zed-industries/zed", features = ["profiler"] }
 gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

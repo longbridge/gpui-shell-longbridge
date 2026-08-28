@@ -249,18 +249,50 @@ export function mergeQuote(current, incoming, receivedAt = Date.now()) {
  * Ordering stays fresh on the one-second clock that already re-sorts.
  */
 export function applyQuote(quotes, incoming, receivedAt = Date.now()) {
-  if (!incoming || typeof incoming !== "object") return quotes;
-  // Watchlist symbols are unique, so the first match owns the quote.
+  return applyQuotes(quotes, [incoming], receivedAt);
+}
+
+/**
+ * Applies a burst of pushes in one pass.
+ *
+ * `applyQuote` publishes a new list per quote: it scans for the symbol and
+ * copies the whole array. That is right for one push and wrong for the burst a
+ * connection opens with -- every instrument twice over, the snapshot and then
+ * the first push, in one synchronous run. At fifty-six instruments that is a
+ * hundred and twelve scans and a hundred and twelve copies of a fifty-six
+ * element array, which is the shape that overran the sandbox's budget and left
+ * the run interrupted.
+ *
+ * This indexes once, merges in place, and copies once. Out-of-order pushes are
+ * still refused, because that judgement belongs to `mergeQuote` and it is
+ * applied per quote here exactly as it is there.
+ *
+ * @param {LongbridgeQuoteRow[]} quotes
+ * @param {unknown[]} incoming In arrival order.
+ * @param {number} [receivedAt]
+ */
+export function applyQuotes(quotes, incoming, receivedAt = Date.now()) {
+  if (!Array.isArray(incoming) || incoming.length === 0) return quotes;
+  /** @type {Map<string, number>} */
+  const positions = new Map();
   for (let position = 0; position < quotes.length; position += 1) {
-    const current = quotes[position];
-    if (current.symbol !== incoming.symbol) continue;
-    const merged = mergeQuote(current, incoming, receivedAt);
-    if (merged === current) return quotes;
-    const next = quotes.slice();
-    next[position] = merged;
-    return next;
+    positions.set(quotes[position].symbol, position);
   }
-  return quotes;
+
+  let next = null;
+  for (const quote of incoming) {
+    if (!quote || typeof quote !== "object") continue;
+    const position = positions.get(quote.symbol);
+    if (position === undefined) continue;
+    const rows = next ?? quotes;
+    const merged = mergeQuote(rows[position], quote, receivedAt);
+    if (merged === rows[position]) continue;
+    // The copy happens once, on the first push that actually changes
+    // something; everything after it merges into the list already copied.
+    if (!next) next = quotes.slice();
+    next[position] = merged;
+  }
+  return next ?? quotes;
 }
 
 export function quoteFreshness(quote, now = Date.now()) {

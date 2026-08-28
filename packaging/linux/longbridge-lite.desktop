@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Longbridge Lite
+Comment=A lightweight native Longbridge market workspace
+Exec=longbridge-lite
+Icon=longbridge-lite
+Terminal=false
+Categories=Finance;Office;
+StartupWMClass=longbridge-lite

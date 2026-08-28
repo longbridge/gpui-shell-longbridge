@@ -309,6 +309,33 @@ export function layoutPriceSeries(
   return geometry;
 }
 
+/**
+ * The direction of the charted window: the last drawn close less the first.
+ *
+ * This is the only reading the chart itself can make about its own series, and
+ * it is what tones the line. It is deliberately the *window's* move and not the
+ * session's: the plot spans five days, so its colour must answer the question
+ * the plot asks, which is where the price is against where these five days
+ * started — not against yesterday's close, which the geometry never carries.
+ *
+ * Downsampling cannot move it. `extremaIndices` always keeps each session's own
+ * first and last candle, so the first and last points of the geometry are the
+ * first and last candles of the window whether or not anything between them was
+ * shed. Zero — a flat window, or no data at all — is a direction too, and the
+ * caller paints it in the neutral foreground rather than picking a side.
+ *
+ * @param {{ points?: Array<{ close: unknown }> }} geometry
+ * @returns {number}
+ */
+export function priceWindowChange(geometry) {
+  const points = geometry?.points;
+  if (!Array.isArray(points) || points.length === 0) return 0;
+  const first = numeric(points[0].close);
+  const last = numeric(points.at(-1).close);
+  if (first === null || last === null) return 0;
+  return last - first;
+}
+
 /** Returns the chart point nearest to a plot-local x coordinate. */
 export function findNearestPricePoint(geometry, x) {
   const points = geometry?.points;

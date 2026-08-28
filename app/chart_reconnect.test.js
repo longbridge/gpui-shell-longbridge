@@ -1,4 +1,3 @@
-
 import LongbridgeApp from "./main.js";
 import { holdContext } from "./context.js";
 
@@ -16,7 +15,7 @@ export default class ChartReconnectProbe extends LongbridgeApp {
       queryCandlesticks: async () => ({ candlesticks: /** @type {any[]} */ ([]) }),
     };
 
-    void this.connect("replacement-token");
+    void this.connect("replacement-token", cx);
     if (this.chartGeneration !== 10) {
       throw new Error("reconnect did not invalidate the superseded chart request before stop");
     }

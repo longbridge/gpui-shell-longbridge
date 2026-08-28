@@ -43,9 +43,21 @@ export function formBody(fields) {
     .join("&");
 }
 
+/**
+ * How long an OAuth request may take before it is treated as lost.
+ *
+ * `http.js` bounds its API requests the same way and for the same reason, but
+ * this file did not, and the difference was not academic: `get` refreshes the
+ * token on a 401 and retries, so a refresh that never answered left the window
+ * on "Loading watchlist" with no error, no log and no end -- the request was
+ * still outstanding, so nothing had failed yet. It stayed that way for as long
+ * as the window was open.
+ */
+const OAUTH_TIMEOUT_MS = 15_000;
+
 /** @param {string} endpoint @param {Record<string, string>} fields @param {Record<string, string>} [extraHeaders] @param {typeof fetch} [fetchImpl] */
 async function postForm(endpoint, fields, extraHeaders = {}, fetchImpl = fetch) {
-  const response = await fetchImpl(endpoint, {
+  const sent = fetchImpl(endpoint, {
     method: "POST",
     headers: {
       Accept: "application/json",
@@ -54,6 +66,14 @@ async function postForm(endpoint, fields, extraHeaders = {}, fetchImpl = fetch) 
     },
     body: formBody(fields),
   });
+  const response = await Promise.race([
+    sent,
+    context()
+      .sleep(OAUTH_TIMEOUT_MS)
+      .then(() => {
+        throw new Error("Longbridge OAuth request timed out");
+      }),
+  ]);
   const body = await response.text();
   let json;
   try {

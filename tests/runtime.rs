@@ -60,10 +60,17 @@ fn logged_out_application_loads_through_the_public_shell_runtime(cx: &mut TestAp
         rendered.contains("longbridge-sign-in"),
         "the sign-in card must offer the action:\n{rendered}"
     );
-    // The identity belongs to the chrome; the card must not repeat it.
+    // The window draws its own title bar -- the host opens it without a system
+    // one -- and that bar is where the window's identity lives. The card only
+    // asks for the session; if the tagline ever reappears it has been put back
+    // into content that should not be naming the window.
+    assert!(
+        rendered.contains("window-title-bar"),
+        "the window has to draw its own title bar:\n{rendered}"
+    );
     assert_eq!(
         rendered.matches("Read-only market terminal").count(),
-        1,
+        0,
         "{rendered}"
     );
     assert!(!rendered.contains("Stock detail"), "{rendered}");
