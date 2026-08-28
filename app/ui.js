@@ -25,19 +25,75 @@ import {
   v_flex,
 } from "gpui-base";
 import { formatCompactNumber, quoteFreshness, tradeStatusLabel } from "./market.js";
+import { allocationColor, changeTone, statusColors, valueTone } from "./palette.js";
 import { foldAllocationSlices } from "./portfolio.js";
+
+/**
+ * The one transition this interface uses. A terminal answers immediately; the
+ * only thing worth easing is a value fading in over the one it replaced, and
+ * it is worth easing at one speed everywhere rather than three.
+ */
+const MOTION = Object.freeze({ duration: 150, easing: "ease-out" });
 
 /** @param {import("gpui-base").Theme} tokens @param {string | number} value @param {number} [size] */
 export const label = (tokens, value, size = 12) =>
   div().text_size(size).line_height(1.25).text_color(tokens.foreground).child(value);
 
-/** @param {import("gpui-base").Theme} tokens @param {string | number} value @param {number} [size] */
-export const numeric = (tokens, value, size = 12) =>
-  label(tokens, value, size).font_family("monospace");
+/**
+ * A figure rather than prose: a price, a quantity, a percentage, a duration.
+ *
+ * It states no family of its own. The whole window is monospaced from the root
+ * container down and every text style in GPUI cascades, so a family written
+ * here would not add a mono face — it would *replace* the one the application
+ * registered with whatever this string happened to resolve to, and these
+ * elements would be the only text in the window drawn in a different face.
+ *
+ * What survives is the name at the call site. `numeric` marks a value as a
+ * figure wherever one is drawn, which is what a later change to how figures
+ * are set — tabular digits, alignment, a colour floor — would need to find.
+ *
+ * @param {import("gpui-base").Theme} tokens @param {string | number} value @param {number} [size]
+ */
+export const numeric = (tokens, value, size = 12) => label(tokens, value, size);
 
 /** @param {import("gpui-base").Theme} tokens @param {string | number} value */
 export const muted = (tokens, value) =>
   div().text_size(11).line_height(1.25).text_color(tokens.muted_foreground).child(value);
+
+/**
+ * A section heading or a column head: small, bold, muted and upper case, the
+ * way a terminal writes small-caps. Only the visible text is folded — every
+ * lookup keyed by a heading's title still takes the title as it was written.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {string} value
+ */
+export const smallCaps = (tokens, value) =>
+  muted(tokens, String(value).toUpperCase()).font_weight(700);
+
+/**
+ * The box every 24px icon control in this file is drawn in, so that a toggle,
+ * a menu trigger and a dock's collapse control are one family rather than
+ * three sizes. The border is always drawn and only ever changes colour: a
+ * control that grows a border on hover moves its neighbours.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @template {import("gpui").Element} E
+ * @param {E} element
+ */
+const iconBox = (tokens, element) =>
+  element
+    .flex()
+    .items_center()
+    .justify_center()
+    .w(24)
+    .h(24)
+    .flex_none()
+    .rounded(tokens.radius.sm)
+    .border(1);
+
+/** @param {string} asset */
+const icon = (asset) => svg(asset).w(12).h(12).flex_none();
 
 /** @param {import("gpui-base").Theme} tokens */
 export const rule = (tokens) => div().w_full().h(1).bg(tokens.border);
@@ -79,8 +135,11 @@ export function action(tokens, id, caption, onClick, options = {}) {
           ? tokens.destructive
           : tokens.destructive_foreground
         : tokens.foreground;
+  // Every variant draws a border; the quiet one draws it in its own fill. A
+  // button that gains a border on hover is a button that resizes on hover, and
+  // its neighbours move with it.
   const border = ghost
-    ? tokens.surface
+    ? background
     : selected || primary
       ? tokens.primary
       : destructive
@@ -96,12 +155,12 @@ export function action(tokens, id, caption, onClick, options = {}) {
     .h(28)
     .px(tokens.spacing.sm)
     .rounded(tokens.radius.sm)
-    .border(ghost ? 0 : 1)
+    .border(1)
     .border_color(border)
     .bg(background)
     .text_size(11)
     .text_color(foreground)
-    .transition("opacity", { duration: 120, easing: "ease-out" })
+    .transition("opacity", MOTION)
     .focus((style) => style.bg(tokens.accent).text_color(tokens.accent_foreground))
     .when(!disabled, (element) =>
       element.on_click(onClick).hover((style) => {
@@ -127,27 +186,50 @@ export function action(tokens, id, caption, onClick, options = {}) {
 export function themeButton(tokens, onClick) {
   const dark = tokens.appearance === "dark";
   const hint = dark ? "Switch to light theme" : "Switch to dark theme";
-  return Button.new("theme-toggle")
+  return iconBox(tokens, Button.new("theme-toggle"))
     .accessibility_label(hint)
     .tooltip(hint)
     .on_click(onClick)
-    .flex()
-    .items_center()
-    .justify_center()
-    .w(24)
-    .h(24)
-    .rounded(tokens.radius.sm)
-    .border(0)
+    .border_color(tokens.surface)
+    .bg(tokens.surface)
     .text_color(tokens.muted_foreground)
-    .transition("opacity", { duration: 120, easing: "ease-out" })
+    .transition("opacity", MOTION)
     .hover((style) => style.bg(tokens.accent).text_color(tokens.accent_foreground))
     .focus((style) => style.bg(tokens.accent).text_color(tokens.accent_foreground))
-    .child(
-      svg(dark ? "assets/sun.svg" : "assets/moon.svg")
-        .w(12)
-        .h(12)
-        .flex_none(),
-    );
+    .child(icon(dark ? "assets/sun.svg" : "assets/moon.svg"));
+}
+
+/**
+ * The control that folds the stock details away, and brings them back.
+ *
+ * It lives in the window's chrome rather than in the pane it hides, which is
+ * not a placement preference: a control inside the detail pane would go with
+ * the pane, and a toggle you cannot reach once you have used it is a one-way
+ * door.
+ *
+ * The state is read from the dock rather than kept beside it -- the user can
+ * also collapse the pane by dragging its edge shut, and a mirrored boolean
+ * would start lying the first time they did. Both icons show a pane, present
+ * or gone, so the state is legible without relying on the fill alone.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {boolean} open
+ * @param {(event: import("gpui").ClickEvent, cx: import("gpui").Context) => void} onClick
+ */
+export function detailToggle(tokens, open, onClick) {
+  const hint = open ? "Hide stock details" : "Show stock details";
+  return iconBox(tokens, Button.new("detail-toggle"))
+    .accessibility_label(hint)
+    .tooltip(hint)
+    .selected(open)
+    .on_click(onClick)
+    .border_color(open ? tokens.border : tokens.surface)
+    .bg(open ? tokens.muted : tokens.surface)
+    .text_color(open ? tokens.foreground : tokens.muted_foreground)
+    .transition("opacity", MOTION)
+    .hover((style) => style.bg(tokens.accent).text_color(tokens.accent_foreground))
+    .focus((style) => style.bg(tokens.accent).text_color(tokens.accent_foreground))
+    .child(icon(open ? "assets/panel-right.svg" : "assets/panel-right-collapsed.svg"));
 }
 
 /** @param {import("gpui-base").Theme} tokens @param {string} id @param {string} caption @param {string} url */
@@ -175,12 +257,17 @@ export function connectionPill(tokens, value) {
     value === "subscribing" ||
     value === "snapshotting" ||
     value === "reconnecting";
+  // A feed's health is a reading, not an interface state: green, yellow and
+  // red come from the status row so the one interactive accent keeps meaning
+  // "you can press this". The colour is never the whole signal — the word
+  // beside it says the same thing.
+  const status = statusColors(tokens);
   const color = active
-    ? tokens.primary
+    ? status.up
     : waiting
-      ? tokens.primary
+      ? status.warning
       : value === "error"
-        ? tokens.destructive
+        ? status.down
         : tokens.muted_foreground;
   return h_flex()
     .id("connection-state")
@@ -188,8 +275,8 @@ export function connectionPill(tokens, value) {
     .gap(tokens.spacing.xs)
     .tooltip(`Quote stream: ${value}`)
     .opacity(waiting ? 0.72 : 1)
-    .transition("opacity", { duration: 180, easing: "ease-out" })
-    .child(div().w(6).h(6).rounded(tokens.radius.full).bg(color))
+    .transition("opacity", MOTION)
+    .child(div().w(6).h(6).rounded(tokens.radius.none).bg(color))
     .child(
       muted(
         tokens,
@@ -207,6 +294,10 @@ export function connectionPill(tokens, value) {
 // What each abbreviated column actually reports. A tooltip takes a string
 // rather than an element, and it is the pointer's affordance only — the
 // accessible name is the visible header text itself.
+//
+// Keyed by the title as it is written, not as it is drawn: a header is folded
+// to upper case on its way to the screen, and a lookup that followed it there
+// would have to be re-keyed every time a column is renamed.
 const COLUMN_HINTS = Object.freeze({
   Instrument: "Ticker and security name",
   Last: "Most recent traded price",
@@ -261,7 +352,7 @@ function tableHeaderRow(tokens, id, columns) {
                   .flex()
                   .items_center()
                   .tooltip(COLUMN_HINTS[column.title] ?? column.title)
-                  .child(muted(tokens, column.title)),
+                  .child(smallCaps(tokens, column.title)),
               ),
           ),
         ),
@@ -389,17 +480,10 @@ export function filterInput(tokens, state, width = 180) {
  * @param {boolean} [open]
  */
 export function menuTrigger(tokens, id, hint, open = false) {
-  return Button.new(id)
+  return iconBox(tokens, Button.new(id))
     .accessibility_label(hint)
     .tooltip(hint)
     .selected(open)
-    .flex()
-    .items_center()
-    .justify_center()
-    .w(24)
-    .h(24)
-    .rounded(tokens.radius.sm)
-    .border(1)
     .border_color(open ? tokens.accent : tokens.surface)
     .bg(open ? tokens.accent : tokens.surface)
     .text_color(open ? tokens.accent_foreground : tokens.muted_foreground)
@@ -436,11 +520,7 @@ export const QUOTE_ROW_HEIGHT = 44;
  * @param {number} [now]
  */
 export function quoteRow(tokens, quote, selected, rowIndex = 0, now = Date.now()) {
-  const tone = quote.change.startsWith("-")
-    ? tokens.destructive
-    : quote.change.startsWith("+")
-      ? tokens.primary
-      : tokens.foreground;
+  const tone = changeTone(tokens, quote.change);
   const cell = (column, build) => build(TableCell.new(`quote-${quote.symbol}-${column}`, column));
   return TableRow.new(`quote-${quote.symbol}`, rowIndex + 2)
     .flex()
@@ -454,7 +534,7 @@ export function quoteRow(tokens, quote, selected, rowIndex = 0, now = Date.now()
     .border_color(tokens.border)
     .bg(selected ? tokens.accent : tokens.surface)
     .opacity(quote.receivedAt ? 1 : 0.68)
-    .transition("opacity", { duration: 160, easing: "ease-out" })
+    .transition("opacity", MOTION)
     .text_color(selected ? tokens.accent_foreground : tokens.foreground)
     .hover((style) => style.bg(tokens.accent).text_color(tokens.accent_foreground))
     .child(
@@ -514,14 +594,6 @@ export function quoteRow(tokens, quote, selected, rowIndex = 0, now = Date.now()
     );
 }
 
-function quoteTone(tokens, change) {
-  return change.startsWith("-")
-    ? tokens.destructive
-    : change.startsWith("+")
-      ? tokens.primary
-      : tokens.foreground;
-}
-
 function marketTime(timestamp) {
   if (!timestamp) return "--";
   return `${new Date(timestamp).toISOString().slice(11, 19)} UTC`;
@@ -542,6 +614,8 @@ function metricRows(tokens, entries) {
       entries.map((entry) =>
         v_flex()
           .gap(tokens.spacing.xxs)
+          // A field label, not a heading: §7.10 puts these in muted foreground
+          // beside their value and leaves small-caps to the section above them.
           .child(muted(tokens, entry.title))
           .child(numeric(tokens, entry.value, 13)),
       ),
@@ -550,7 +624,7 @@ function metricRows(tokens, entries) {
 
 /** @param {import("gpui-base").Theme} tokens @param {LongbridgeQuoteRow} quote @param {number} [now] */
 export function quoteDetail(tokens, quote, now = Date.now(), pulseOpacity = 1) {
-  const tone = quoteTone(tokens, quote.change);
+  const tone = changeTone(tokens, quote.change);
   return v_flex()
     .id("quote-detail-content")
     .flex_1()
@@ -564,7 +638,7 @@ export function quoteDetail(tokens, quote, now = Date.now(), pulseOpacity = 1) {
         .child(
           v_flex()
             .gap(tokens.spacing.xs)
-            .child(label(tokens, quote.name, 20))
+            .child(label(tokens, quote.name, 16).font_weight(700))
             .child(muted(tokens, `${quote.market} · ${quote.symbol} · ${quote.currency}`))
             .child(muted(tokens, tradeStatusLabel(quote))),
         )
@@ -574,7 +648,7 @@ export function quoteDetail(tokens, quote, now = Date.now(), pulseOpacity = 1) {
             .items_end()
             .gap(tokens.spacing.xs)
             .opacity(quote.receivedAt ? pulseOpacity : 0.72)
-            .transition("opacity", { duration: 180, easing: "ease-out" })
+            .transition("opacity", MOTION)
             .child(numeric(tokens, quote.last, 28))
             .child(
               numeric(tokens, `${quote.change} · ${quote.changePercent}`, 13).text_color(tone),
@@ -609,27 +683,9 @@ export function quoteDetail(tokens, quote, now = Date.now(), pulseOpacity = 1) {
     );
 }
 
-// Five categorical hues, assigned in a fixed order and never cycled — a sixth
-// holding folds into "Other" rather than borrowing a hue that already means
-// something else (see `foldAllocationSlices`). Each mode is stepped for its own
-// surface rather than flipped from the other, and both were validated together
-// for lightness band, chroma floor, colour-vision-deficient separation and
-// contrast against this application's surfaces (#ffffff and #0a0a0a). Adjacent
-// wedges clear the CVD gate by ΔE 9.1 light / 8.4 dark. Three of the light
-// steps sit under 3:1 against white, which is why the legend beside the ring
-// always carries the name, the value and the percentage: identity is never
-// colour alone.
-const ALLOCATION_HUES = Object.freeze({
-  light: ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4"],
-  dark: ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181"],
-});
-
-/** A wedge's colour. "Other" is a remainder, not an identity, so it stays grey. */
-function allocationColor(tokens, slice, index) {
-  if (slice.other) return tokens.muted_foreground;
-  const hues = ALLOCATION_HUES[tokens.is_dark ? "dark" : "light"];
-  return hues[Math.min(index, hues.length - 1)];
-}
+// The ring's categorical hues live in `palette.js` with the status row: they
+// are the other thing the semantic token set cannot carry, and one module owns
+// every colour this application draws that is not a token.
 
 // Trimmed from both ends of every wedge so neighbouring fills are separated by
 // the surface rather than meeting flush. Skipped when one holding is the whole
@@ -661,6 +717,7 @@ function donutSlice(tokens, slice, index, total, count) {
 
 /** @param {import("gpui-base").Theme} tokens @param {ReturnType<import("./portfolio.js").allocationInUsd>} group */
 export function allocationChart(tokens, group) {
+  const unpriced = group.unpriced.length;
   let offset = 0;
   const slices = foldAllocationSlices(group).map((slice) => {
     const result = { ...slice, offset };
@@ -691,7 +748,7 @@ export function allocationChart(tokens, group) {
                   div()
                     .w(7)
                     .h(7)
-                    .rounded(tokens.radius.full)
+                    .rounded(tokens.radius.none)
                     .bg(allocationColor(tokens, slice, index)),
                 )
                 .child(label(tokens, slice.name)),
@@ -717,8 +774,8 @@ export function allocationChart(tokens, group) {
     .child(
       h_flex()
         .justify_between()
-        .child(label(tokens, group.currency))
-        .child(muted(tokens, "Allocation")),
+        .child(label(tokens, group.currency).font_weight(700))
+        .child(smallCaps(tokens, "Allocation")),
     )
     .child(
       h_flex()
@@ -739,8 +796,8 @@ export function allocationChart(tokens, group) {
         )
         .child(legend),
     )
-    .when(group.unpriced.length > 0, (element) =>
-      element.child(muted(tokens, `${group.unpriced.length} unpriced position(s)`)),
+    .when(unpriced > 0, (element) =>
+      element.child(muted(tokens, `${unpriced} unpriced position${unpriced === 1 ? "" : "s"}`)),
     );
 }
 
@@ -760,10 +817,6 @@ export function detailGrid(tokens, entries) {
     );
 }
 
-function pnlTone(tokens, value) {
-  return value < 0 ? tokens.destructive : value > 0 ? tokens.primary : tokens.foreground;
-}
-
 /**
  * @param {import("gpui-base").Theme} tokens
  * @param {{ netAssets: string, totalCash: string, buyingPower: string, currency: string }} account
@@ -775,8 +828,10 @@ export function portfolioSummary(tokens, account, summaries) {
       .flex_basis(170)
       .flex_grow(1)
       .gap(tokens.spacing.xs)
+      // A field label beside its value, so muted rather than small-caps — the
+      // heading above this row is the section, these are its readings.
       .child(muted(tokens, title))
-      .child(numeric(tokens, value, 18).text_color(tone));
+      .child(numeric(tokens, value, 16).text_color(tone));
   const pnl = summaries.length
     ? summaries
     : [
@@ -800,7 +855,7 @@ export function portfolioSummary(tokens, account, summaries) {
         metric(
           "Today's P/L",
           `${summary.todayPnl} ${summary.currency}`,
-          pnlTone(tokens, summary.todayPnlValue),
+          valueTone(tokens, summary.todayPnlValue),
         ),
       ),
     )
@@ -809,7 +864,7 @@ export function portfolioSummary(tokens, account, summaries) {
         metric(
           "Total P/L",
           `${summary.totalPnl} ${summary.currency}`,
-          pnlTone(tokens, summary.totalPnlValue),
+          valueTone(tokens, summary.totalPnlValue),
         ),
       ),
     )
@@ -845,8 +900,8 @@ export const HOLDING_ROW_HEIGHT = 42;
  * @param {number} rowIndex
  */
 export function holdingRow(tokens, holding, rowIndex = 0) {
-  const todayTone = pnlTone(tokens, holding.todayPnlValue);
-  const totalTone = pnlTone(tokens, holding.totalPnlValue);
+  const todayTone = valueTone(tokens, holding.todayPnlValue);
+  const totalTone = valueTone(tokens, holding.totalPnlValue);
   const cell = (column, build) =>
     build(TableCell.new(`holding-${holding.symbol}-${column}`, column));
   return TableRow.new(`holding-${holding.symbol}`, rowIndex + 2)
@@ -933,7 +988,7 @@ export function deviceCodeBox(tokens, code) {
     .border_color(tokens.border)
     .bg(tokens.muted)
     .child(
-      numeric(tokens, code.split("").join(" "), 22).font_weight(600).text_color(tokens.foreground),
+      numeric(tokens, code.split("").join(" "), 24).font_weight(700).text_color(tokens.foreground),
     );
 }
 
@@ -957,7 +1012,7 @@ export function step(tokens, index, title) {
         .w(16)
         .h(16)
         .flex_none()
-        .rounded(tokens.radius.full)
+        .rounded(tokens.radius.none)
         .bg(tokens.secondary)
         .child(numeric(tokens, index, 10).text_color(tokens.secondary_foreground)),
     )
@@ -986,7 +1041,7 @@ export function errorMessage(tokens, value) {
     .border(1)
     .border_color(tokens.destructive)
     .bg(tokens.surface)
-    .child(div().w(3).self_stretch().rounded(tokens.radius.full).bg(tokens.destructive))
+    .child(div().w(3).self_stretch().rounded(tokens.radius.none).bg(tokens.destructive))
     .child(
       div()
         .flex_1()
@@ -1009,8 +1064,10 @@ export function errorMessage(tokens, value) {
 /**
  * The two-letter badge that opens a watchlist row.
  *
- * `Avatar` picks between its two slots and draws nothing else, so the circle,
- * the size and the type are all written here. This one has no image on
+ * `Avatar` picks between its two slots and draws nothing else, so the shape,
+ * the size and the type are all written here. It is a square block rather than
+ * a disc: this interface has no circles in it, and two letters in a filled
+ * square is what a terminal writes a badge as. This one has no image on
  * purpose: there is no per-market artwork in the application directory, and an
  * avatar whose image never resolves is exactly the case the fallback exists
  * for.
@@ -1025,7 +1082,7 @@ export function marketAvatar(tokens, market, size = 26) {
     .flex_none()
     .w(size)
     .h(size)
-    .rounded_full()
+    .rounded(tokens.radius.sm)
     .overflow_hidden()
     .bg(tokens.muted)
     .fallback(
@@ -1034,9 +1091,9 @@ export function marketAvatar(tokens, market, size = 26) {
         .flex()
         .items_center()
         .justify_center()
-        .text_size(9)
+        .text_size(10)
         .line_height(1)
-        .font_weight(600)
+        .font_weight(700)
         .text_color(tokens.muted_foreground)
         .child(initials),
     );
@@ -1052,8 +1109,11 @@ export function marketAvatar(tokens, market, size = 26) {
  * repeat it and crop its bars against the mask.
  *
  * So the fallback is what an avatar with nothing to show is everywhere else:
- * a head and a pair of shoulders. The shoulders are a circle wider than the
- * frame, so the avatar's own mask is what cuts them into a shape.
+ * a head and a pair of shoulders, drawn as `assets/user.svg` — one icon on the
+ * same 24×24 grid and 2px stroke as the theme toggle and the dock's panel
+ * marks, rather than a person assembled out of two rounded containers. It
+ * takes its colour from the button's `text_color` through `currentColor`, so
+ * the mark follows the trigger's state instead of pinning its own fill.
  *
  * @param {import("gpui-base").Theme} tokens
  * @param {string} id
@@ -1071,28 +1131,26 @@ export function sessionAvatar(tokens, id, hint, open = false) {
     .w(26)
     .h(26)
     .flex_none()
-    .rounded_full()
+    .rounded(tokens.radius.sm)
     .border(1)
     .border_color(open ? tokens.ring : tokens.border)
     .bg(open ? tokens.accent : tokens.surface)
+    .text_color(open ? tokens.accent_foreground : tokens.muted_foreground)
     .hover((style) => style.border_color(tokens.ring))
     .focus((style) => style.border_color(tokens.ring))
     .child(
       Avatar.new()
         .w(20)
         .h(20)
-        .rounded_full()
+        .rounded(tokens.radius.sm)
         .overflow_hidden()
         .fallback(
           AvatarFallback.new()
             .size_full()
             .flex()
-            .flex_col()
             .items_center()
-            .pt(4)
-            .gap(1)
-            .child(div().w(7).h(7).flex_none().rounded_full().bg(tokens.muted_foreground))
-            .child(div().w(13).h(10).flex_none().rounded_full().bg(tokens.muted_foreground)),
+            .justify_center()
+            .child(icon("assets/user.svg")),
         ),
     );
 }
@@ -1154,7 +1212,7 @@ export function accordionSection(tokens, options) {
                   .child(
                     div()
                       .w(10)
-                      .text_size(9)
+                      .text_size(10)
                       .line_height(1)
                       .text_color(tokens.muted_foreground)
                       .child(open ? "▾" : "▸"),
@@ -1239,7 +1297,7 @@ export function pager(tokens, id, page, pages, onSelect) {
           .border_color(current ? tokens.ring : tokens.border)
           .bg(current ? tokens.secondary : tokens.surface)
           .text_color(current ? tokens.foreground : tokens.muted_foreground)
-          .font_weight(current ? 600 : 400)
+          .font_weight(current ? 700 : 400)
           .hover((style) => style.bg(tokens.accent).text_color(tokens.accent_foreground))
           .focus((style) => style.border_color(tokens.ring))
           .on_click((_event, cx) => onSelect(entry.page, cx))
@@ -1315,7 +1373,7 @@ export function calendarGrid(tokens, calendar, options) {
               .flex()
               .flex_1()
               .justify_center()
-              .text_size(9)
+              .text_size(10)
               .line_height(1.6)
               .text_color(tokens.muted_foreground)
               .id(`calendar-weekday-${index}`)
@@ -1382,19 +1440,23 @@ export function calendarGrid(tokens, calendar, options) {
  */
 export function kbd(tokens, keystroke, state = {}) {
   const { down = false, held = false } = state;
-  return div()
-    .flex_none()
-    .px(tokens.spacing.xs)
-    .py(1)
-    .rounded(tokens.radius.sm)
-    .border(1)
-    .border_color(down ? tokens.ring : tokens.border)
-    .bg(down ? tokens.accent : tokens.muted)
-    .text_size(9)
-    .line_height(1.4)
-    .font_family("monospace")
-    .text_color(down ? tokens.accent_foreground : tokens.muted_foreground)
-    .child(held ? `${keystroke} (held)` : keystroke);
+  return (
+    div()
+      .flex_none()
+      .px(tokens.spacing.xs)
+      .py(1)
+      .rounded(tokens.radius.sm)
+      .border(1)
+      .border_color(down ? tokens.ring : tokens.border)
+      .bg(down ? tokens.accent : tokens.muted)
+      .text_size(10)
+      .line_height(1.4)
+      // No family here either, for the reason `numeric` gives: the root sets the
+      // one the whole window inherits, and a key cap is the last place that
+      // should be the single element drawn in a different face.
+      .text_color(down ? tokens.accent_foreground : tokens.muted_foreground)
+      .child(held ? `${keystroke} (held)` : keystroke)
+  );
 }
 
 // The dock's chrome.
@@ -1414,11 +1476,12 @@ export function kbd(tokens, keystroke, state = {}) {
 /** The height of a dock's title strip, and of the tab bar beside it. */
 export const DOCK_BAR_HEIGHT = 30;
 
+
 /** The readable half of `shell:<application>/<panel>`. */
 export function panelTitle(name) {
   const slash = name.lastIndexOf("/");
   const bare = slash === -1 ? name : name.slice(slash + 1);
-  return bare === "watchlist" ? "Watchlist" : bare === "detail" ? "Stock Details" : bare;
+  return bare === "watchlist" ? "Watchlist" : bare === "detail" ? "Stock details" : bare;
 }
 
 /**
@@ -1470,74 +1533,6 @@ export function dockTabBar(tokens, group) {
     );
 }
 
-/**
- * One dock's frame: what it is called, the control that collapses it, the
- * strip that resizes it — and the content, wherever this puts it.
- *
- * @param {import("gpui-base").Theme} tokens
- * @param {import("gpui-base").DockRegion} dock
- * @param {import("gpui").Element} content
- */
-export function dockFrame(tokens, dock, content) {
-  const vertical = dock.placement === "bottom";
-  return v_flex()
-    .size_full()
-    .relative()
-    .bg(tokens.background)
-    .child(
-      h_flex()
-        .h(DOCK_BAR_HEIGHT)
-        .items_center()
-        .justify_between()
-        .px(tokens.spacing.md)
-        .bg(tokens.surface)
-        .border_b(1)
-        .border_color(tokens.border)
-        .child(muted(tokens, dock.placement.toUpperCase()))
-        .child(
-          div()
-            .id(`dock-collapse-${dock.placement}`)
-            .px(tokens.spacing.xs)
-            .rounded(tokens.radius.sm)
-            .text_size(11)
-            .text_color(tokens.muted_foreground)
-            .hover((style) => style.bg(tokens.accent))
-            .toggle_dock(dock)
-            .accessibility_label(dock.open ? "Collapse pane" : "Expand pane")
-            .child(dock.open ? "–" : "+"),
-        ),
-    )
-    .child(content)
-    .child(
-      // Base clamps every position this reports against the area and the
-      // opposite dock, so the handle is a hit area and a colour and no more.
-      div()
-        .id(`dock-resize-${dock.placement}`)
-        .absolute()
-        .map((element) =>
-          vertical
-            ? element.top(0).left(0).w_full().h(4).cursor_row_resize()
-            : element.top(0).h_full().w(4).cursor_col_resize(),
-        )
-        .map((element) =>
-          dock.placement === "left"
-            ? element.right(0)
-            : dock.placement === "right"
-              ? element.left(0)
-              : element,
-        )
-        .hover((style) => style.bg(tokens.primary))
-        .resize_dock(dock),
-    );
-}
-
-/**
- * Where a dragged pane would land. The bounds are already resolved — base
- * snaps and clamps before a skin sees them — so this only paints.
- *
- * @param {import("gpui-base").Theme} tokens
- * @param {import("gpui-base").DockDrop} drop
- */
 export function dockDropHint(tokens, drop) {
   return div()
     .absolute()

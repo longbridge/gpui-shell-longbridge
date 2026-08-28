@@ -210,20 +210,26 @@ fn watchlist_row_renders_scannable_market_columns(cx: &mut TestAppContext) {
             .unwrap_or_default()
     });
     for expected in [
-        "Instrument",
-        "Last",
-        "Change",
-        "Volume",
-        "Session",
+        // The column heads, folded to terminal small-caps on their way to the
+        // screen. `COLUMN_HINTS` is still keyed by the title as written, which
+        // the tooltip assertion further down reads.
+        "INSTRUMENT",
+        "LAST",
+        "CHANGE",
+        "VOLUME",
+        "SESSION",
         "Apple",
         "text \"AAPL\"",
         "188.00",
         "+4.44%",
         "8.59B",
         "Trading",
+        // Field labels beside their values, which stay sentence case.
         "Previous close",
         "Open",
         "Day range",
+        "Volume",
+        "Session",
         "Turnover",
         "Last market update",
         "Data health",
@@ -245,9 +251,14 @@ fn watchlist_row_renders_scannable_market_columns(cx: &mut TestAppContext) {
         "the row must carry a market badge:\n{rendered}"
     );
     assert!(!rendered.contains("AvatarImage"), "{rendered}");
+    // The row's figures are monospaced because the whole window is, from the
+    // application root down -- which this probe deliberately does not render,
+    // so the half it can prove is that nothing here overrides that family.
+    // `a_bound_chord_reaches_the_action_that_switches_page` renders the real
+    // root and asserts the other half: that exactly one element sets one.
     assert!(
-        rendered.contains(".font_family[Str(\"monospace\")]"),
-        "{rendered}"
+        !rendered.contains(".font_family["),
+        "a figure must inherit the root's family, not restate one:\n{rendered}"
     );
 
     // A TableHead is a semantic table part, not an interactive shell element.
@@ -340,12 +351,22 @@ fn authenticated_workspace_materializes_a_scrollable_watchlist(cx: &mut TestAppC
         .lines()
         .find(|line| line.contains("dock_area"))
         .expect("workspace dock area");
-    for handler in [":tab_bar(fn)", ":empty_group(fn)", ":drop_indicator(fn)", ":dock(fn)"] {
+    // Three handlers, not four. `:dock(fn)` is deliberately absent: that hook
+    // replaces base's whole `render_dock`, which is where a side dock's own
+    // box, its closed-width short circuit and its resize handle come from, so
+    // chrome that used it had quietly taken over the layout and dropped the
+    // right dock out of the row. The collapse control it existed for is a
+    // title-bar button now, driven by `DockArea.toggle_dock`.
+    for handler in [":tab_bar(fn)", ":empty_group(fn)", ":drop_indicator(fn)"] {
         assert!(
             area.contains(handler),
             "the dock draws its own {handler}: {area}"
         );
     }
+    assert!(
+        !area.contains(":dock(fn)"),
+        "base owns each dock's own box; see the note above: {area}"
+    );
     assert!(
         !rendered.contains("h_resizable"),
         "the resizable workspace was replaced by the dock: {rendered}"
@@ -737,19 +758,28 @@ fn portfolio_renders_pnl_summary_and_position_columns(cx: &mut TestAppContext) {
         "Today's P/L",
         "Total P/L",
         "Asset allocation",
-        "Allocation",
+        // The ring's own heading and the Holdings column head, both drawn as
+        // terminal small-caps.
+        "ALLOCATION",
         "Apple",
         "100.0%",
         "+30.00 USD",
         "+80.00 USD",
-        "Last / Cost",
-        ".font_family[Str(\"monospace\")]",
+        "LAST / COST",
     ] {
         assert!(
             rendered.contains(expected),
             "missing {expected}:\n{rendered}"
         );
     }
+    // Portfolio figures are monospaced because the window is, set once at the
+    // application root -- which this probe renders the page without. So what
+    // it proves is that no figure here overrides that family; the root's own
+    // half is asserted in `a_bound_chord_reaches_the_action_that_switches_page`.
+    assert!(
+        !rendered.contains(".font_family["),
+        "a figure must inherit the root's family, not restate one:\n{rendered}"
+    );
     assert!(rendered.contains("Table \"allocation-USD\""), "{rendered}");
     assert!(rendered.contains("path fill"), "{rendered}");
 
@@ -1008,6 +1038,29 @@ fn a_bound_chord_reaches_the_action_that_switches_page(cx: &mut TestAppContext) 
         "the root must declare the context the keymap is written against:\n{before}"
     );
 
+    // This probe is the one that renders the real application root, so it is
+    // where the interface's typeface is provable: one monospaced family, set
+    // once, inherited by every label and every figure below it. The value is
+    // deliberately not pinned -- which family the platform can actually
+    // resolve is `main.js`'s business, and it changes as the bundled face is
+    // registered. What must hold is that exactly one element states a family:
+    // `numeric()` used to state `monospace` per figure, which would now
+    // override the registered face rather than add to it, leaving those
+    // elements the only text in the window drawn differently.
+    let root = before
+        .lines()
+        .find(|line| line.contains("div :id[Str(\"workspace-root\")]"))
+        .expect("workspace root");
+    assert!(
+        root.contains(".font_family["),
+        "the window's family is set once, at the root: {root}"
+    );
+    assert_eq!(
+        before.matches(".font_family[").count(),
+        1,
+        "no element below the root may restate the family it inherits:\n{before}"
+    );
+
     context.simulate_keystrokes("cmd-2");
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));
@@ -1025,8 +1078,13 @@ fn a_bound_chord_reaches_the_action_that_switches_page(cx: &mut TestAppContext) 
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));
     let typed = tree(&mut context);
+    // The chord still arrives as the whole unparsed `ctrl-alt-y`; what changed
+    // is how it is *written* for a reader. Modifiers in a fixed order, a space
+    // either side of every `+`, one name per key — the same grammar the footer's
+    // shortcut rail uses, because a chord that just happened and a chord that is
+    // available are the same kind of thing said in the same kind of cap.
     assert!(
-        typed.contains("text \"ctrl-alt-y\""),
+        typed.contains("text \"Ctrl + Alt + Y\""),
         "an unbound chord must reach on_key_down:\n{typed}"
     );
 
@@ -1247,10 +1305,13 @@ fn the_diagnostics_popover_answers_every_window_measurement(cx: &mut TestAppCont
 
     // And every change, on a button rather than in the pass that draws --
     // which is the other half, and refused from `render`.
+    // The rem-size commands are the type scale's body, title and heading steps
+    // now; 18 was not on it, and a control offering a size the interface never
+    // draws in is offering one nothing was measured against.
     for command in [
+        "shell-rem-12",
         "shell-rem-14",
         "shell-rem-16",
-        "shell-rem-18",
         "shell-focus-next",
         "shell-focus-prev",
         "shell-activate",

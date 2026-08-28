@@ -17,6 +17,9 @@
     "storage": true,
     "clipboard": {
       "write": true
+    },
+    "process": {
+      "exit": true
     }
   }
 }

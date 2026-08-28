@@ -14,7 +14,6 @@ import {
   Tab,
   Tabs,
   dock_area,
-  dock_content,
   h_flex,
   set_theme,
   v_flex,
@@ -22,6 +21,7 @@ import {
 } from "gpui-base";
 import { fps_monitor } from "gpui-fps";
 import { readFile } from "fs/promises";
+import { exit, platform } from "process";
 import {
   accessToken,
   beginDeviceAuthorization,
@@ -42,7 +42,7 @@ import { createQuoteStream } from "./quote_stream.js";
 import { mergeLiveQuote, prepareFiveDaySeries } from "./chart.js";
 import { allocationInUsd, normalizeUsdRates, portfolioPresentation } from "./portfolio.js";
 import PriceChartView, { PRICE_CHART_LAYOUT } from "./price_chart_view.js";
-import { DetailPanel, WatchlistPanel } from "./workspace.js";
+import { DetailPanel, WatchlistPanel, holdWorkspaceApp } from "./workspace.js";
 import {
   accordionGroup,
   accordionSection,
@@ -52,8 +52,8 @@ import {
   detailGrid,
   emptyPanel,
   kbd,
+  detailToggle,
   dockDropHint,
-  dockFrame,
   dockTabBar,
   errorMessage,
   filterInput,
@@ -88,12 +88,91 @@ let themes = null;
 // allocation chart reachable above it without a scroll.
 /** Where the workspace layout is kept between runs, and under which shape. */
 const WORKSPACE_LAYOUT_KEY = "workspace.layout";
-const WORKSPACE_LAYOUT_VERSION = 1;
-/** The watchlist dock's starting width; after that the user's drag decides. */
-const WATCHLIST_DOCK_WIDTH = 620;
+// 2, because 1 was the layout that docked Watchlist on the left and left the
+// details in the center. A saved layout from that build would put the
+// placements straight back and take the details' collapse control with them.
+const WORKSPACE_LAYOUT_VERSION = 2;
+/** The detail dock's starting width; after that the user's drag decides. */
+const DETAIL_DOCK_WIDTH = 460;
+/**
+ * What the two panes give each other, in pixels, split between them.
+ *
+ * `background` is deeper than `surface`, so eight pixels of it between two
+ * panels reads as canvas showing through rather than as a seam inside one
+ * panel. Each pane gives half on the side it faces, which leaves the
+ * workspace's outer edges where they were.
+ */
+const PANE_GAP = 4;
 
 const HOLDINGS_VIEWPORT_ROWS = 10;
 const EMPTY_CANDLES = Object.freeze([]);
+
+/**
+ * The height of the window's own title bar, and the room macOS needs on its
+ * left for the traffic lights.
+ *
+ * `src/main.rs` carries the same height: it is what the host centers the
+ * traffic lights against when it opens the window, before this script draws
+ * anything, so a change here is a change there. The leading inset is this
+ * script's alone -- the lights are drawn over the top-left corner of the
+ * content, and only a platform that has them needs the room.
+ */
+const TITLE_BAR_HEIGHT = 44;
+// `process.platform` is the host's name for the platform -- Rust's
+// `std::env::consts::OS` -- and not Node's, so macOS is "macos" and never
+// "darwin". Getting that wrong is silent: the inset falls back to the narrow
+// one and the traffic lights are drawn straight over the logo.
+const MACOS = platform === "macos";
+// The lights start at the host's 15px inset and the three of them run about
+// 54px, so they end near 69. This is not that number plus a hair: a control
+// sitting a few pixels off the last light reads as a fourth one. The gap is
+// wide enough to be a gap.
+const TITLE_BAR_LEADING = MACOS ? 96 : 12;
+
+/**
+ * The one font family the whole interface is drawn in.
+ *
+ * Omarchy's information hierarchy is monospaced, and its fallback chain is
+ * `"JetBrains Mono", "JetBrainsMono Nerd Font", ui-monospace, monospace`. None
+ * of that chain can be written here: `font_family` reaches GPUI's
+ * `Font::family`, which is a *single* installed family name and not a CSS list.
+ * A comma-separated value is looked up verbatim, matches nothing, and falls
+ * through to GPUI's own fallback stack -- the platform's **proportional** UI
+ * face. The generic names miss for the same reason: neither `monospace` nor
+ * `ui-monospace` is a family CoreText will match.
+ *
+ * So the chain is not resolved here at all; it is removed. `src/main.rs`
+ * bundles JetBrains Mono into the binary and registers it with the text system
+ * before the first frame, which is what makes this one name resolve on every
+ * machine -- including the ones with no JetBrains Mono installed, which is most
+ * of them. A script cannot ask what is installed, and this is why it does not
+ * have to. The name has to match the family in those files.
+ *
+ * Worth knowing what that means about what came before: `ui.js`'s `numeric()`
+ * asked for `"monospace"`, so the figures in this application -- prices,
+ * quantities, percentages, the whole reason a terminal is monospaced -- were
+ * almost certainly never drawn in a mono face at all. A vector asserting
+ * `.font_family[Str("monospace")]` could not have caught it either: it read the
+ * string that was declared, not the face that got drawn. Bundling the typeface
+ * fixes that as a side effect, which is why `numeric()` no longer names a
+ * family and no element below the root does.
+ */
+const MONOSPACE = "JetBrains Mono";
+
+/** The pages the title bar switches between. */
+const PAGES = Object.freeze([
+  { key: "watchlist", caption: "Watchlist" },
+  { key: "portfolio", caption: "Portfolio" },
+]);
+
+/**
+ * One duration, one curve, for every transition in the application.
+ *
+ * @param {import("gpui").Element} element @param {string} property
+ */
+function motion(element, property) {
+  return element.transition(property, { duration: 150, easing: "ease-out" });
+}
 
 /**
  * The window is narrow enough to stack the Watchlist over the details rather
@@ -129,6 +208,68 @@ export const KEY_BINDINGS = Object.freeze([
   { keystroke: "alt-up", action: "watchlist::previous", context: "Workspace" },
   { keystroke: "escape", action: "workspace::dismiss", context: "Workspace" },
 ]);
+
+/**
+ * How a chord is written for a reader, as opposed to how it is bound.
+ *
+ * A keystroke is `"cmd-shift-f"` everywhere it is *declared* -- that spelling
+ * is the keymap's, it is the same string on every platform, and it is what a
+ * comparison is written against. It is not what a person reads. The display
+ * form is one grammar: modifiers in a fixed order, spaces around every `+`, and
+ * one name per key rather than whatever the binding happened to abbreviate.
+ *
+ * Fixed order rather than the order the binding was written in, so `cmd-shift-f`
+ * and a hypothetical `shift-cmd-f` would read the same. Deliberately Cmd and not
+ * `Super`: `Super` is Hyprland's modifier and this is a macOS window, where the
+ * platform modifier is Cmd and the runtime spells it `cmd` on every platform.
+ */
+const MODIFIER_ORDER = Object.freeze(["cmd", "ctrl", "shift", "alt"]);
+const MODIFIER_NAMES = Object.freeze({ cmd: "Cmd", ctrl: "Ctrl", shift: "Shift", alt: "Alt" });
+// One name per key, so nothing in the interface says `Enter` in one place and
+// `Return` in another, or `Up` where its neighbour says `Arrow Down`.
+const KEY_NAMES = Object.freeze({
+  escape: "Escape",
+  enter: "Return",
+  up: "Arrow Up",
+  down: "Arrow Down",
+  left: "Arrow Left",
+  right: "Arrow Right",
+  space: "Space",
+  tab: "Tab",
+  backspace: "Backspace",
+  delete: "Delete",
+});
+
+/** @param {string} keystroke A keymap chord, e.g. `"cmd-shift-f"`. */
+export function chordLabel(keystroke) {
+  const parts = String(keystroke).split("-");
+  const key = parts.pop() ?? "";
+  const modifiers = MODIFIER_ORDER.filter((name) => parts.includes(name)).map(
+    (name) => MODIFIER_NAMES[name],
+  );
+  const named =
+    KEY_NAMES[key] ?? (key.length === 1 ? key.toUpperCase() : key.charAt(0).toUpperCase() + key.slice(1));
+  return [...modifiers, named].join(" + ");
+}
+
+/**
+ * What each bound action does, in the words the footer rail shows.
+ *
+ * Keyed by action rather than by chord, because the chord is the keymap's to
+ * decide and this is only the caption beside it: rebinding `cmd-r` changes what
+ * the rail draws without touching this table, and adding a caption for an
+ * action nothing binds adds nothing to the rail at all.
+ */
+const SHORTCUT_CAPTIONS = Object.freeze({
+  "workspace::watchlist": "Watchlist",
+  "workspace::portfolio": "Portfolio",
+  "workspace::reconnect": "Reconnect",
+  "workspace::toggle-theme": "Switch theme",
+  "workspace::toggle-fullscreen": "Full screen",
+  "watchlist::next": "Next row",
+  "watchlist::previous": "Previous row",
+  "workspace::dismiss": "Dismiss",
+});
 
 /** `YYYY-MM-DD` in local time, which is the spelling `CalendarState` uses. */
 function calendarDay(date) {
@@ -362,21 +503,35 @@ export default class LongbridgeApp extends View {
    * @param {import("gpui").Context} cx
    */
   initWorkspaceDock(cx) {
+    // Before anything can rebuild a panel. A pane the dock reconstructs from a
+    // saved layout is constructed with no props, so the application it draws
+    // cannot arrive that way; it takes the held one instead.
+    holdWorkspaceApp(this);
     // Registered before the layout is restored: this is what lets a saved
     // layout find the class its panel is rebuilt from.
     DockArea.register_panel("watchlist", WatchlistPanel);
     DockArea.register_panel("detail", DetailPanel);
 
     this.workspaceRevision = 0;
+    // Set when `load` below rebuilds the panels, because that changes which
+    // call repaints them. See `redraw`.
+    this.workspaceRestored = false;
     this.workspaceDock = DockArea.new("longbridge-workspace", { version: WORKSPACE_LAYOUT_VERSION });
     this.watchlistPanel = cx.new(WatchlistPanel, { app: this });
     this.detailPanel = cx.new(DetailPanel, { app: this });
-    this.workspaceDock.add_panel(this.watchlistPanel, {
-      name: "watchlist",
-      placement: "left",
-      size: WATCHLIST_DOCK_WIDTH,
+    // Watchlist is the center and the details are the right dock, which is the
+    // opposite of how they started. Only a left, right or bottom dock is a
+    // *dock*: the center is the area itself, it has no frame, and so it has no
+    // collapse control -- which put the affordance on the pane nobody wants to
+    // put away. The watchlist is the list this window is for; the details are
+    // what it is showing about one row of it, and that is the half worth
+    // folding out of the way.
+    this.workspaceDock.add_panel(this.watchlistPanel, { name: "watchlist", placement: "center" });
+    this.workspaceDock.add_panel(this.detailPanel, {
+      name: "detail",
+      placement: "right",
+      size: DETAIL_DOCK_WIDTH,
     });
-    this.workspaceDock.add_panel(this.detailPanel, { name: "detail", placement: "center" });
 
     // Storage is a capability, and a layout is not worth failing to start over:
     // a host that granted none gets the seeded layout above and keeps it for
@@ -385,7 +540,19 @@ export default class LongbridgeApp extends View {
       const saved = localStorage.getItem(WORKSPACE_LAYOUT_KEY);
       // A layout written by an older build is ignored rather than repaired —
       // the panels above are already docked, so the window still opens.
-      if (saved) this.workspaceDock.load(JSON.parse(saved));
+      //
+      // The check is here because nothing else makes one. `load` adopts the
+      // version it reads rather than comparing it, which is deliberate: base
+      // writes the number and hands it back, and deciding what a mismatch
+      // *means* is the application's. So a bump is inert until this line reads
+      // it, and version 1 — Watchlist on the left, details in the center —
+      // would otherwise come straight back and take the collapse control off
+      // the pane that now has it.
+      const layout = saved ? JSON.parse(saved) : null;
+      if (layout && layout.version === WORKSPACE_LAYOUT_VERSION) {
+        this.workspaceDock.load(layout);
+        this.workspaceRestored = true;
+      }
     } catch {
       this.layoutStorage = false;
     }
@@ -434,6 +601,23 @@ export default class LongbridgeApp extends View {
    */
   redraw(cx) {
     cx.notify();
+    if (this.workspaceRestored) {
+      // A restored layout's panes are not the two this view created. `load`
+      // rebuilds every panel through the registry, so `this.watchlistPanel` and
+      // `this.detailPanel` are orphans from that moment on and `set_props` on
+      // them repaints nothing that is on screen — the window would come up
+      // correct and then freeze at the first quote. Nothing can re-acquire the
+      // live ones either: `panels()` answers with names and ids, not handles,
+      // and it answers with the layout as it stood *before* this turn's edits.
+      //
+      // So the whole window is refreshed instead of two views being notified.
+      // It is the heavier call — every view redraws, the price chart included,
+      // where `set_props` would have left it alone — and it is confined to the
+      // case that needs it, which is why the flag exists rather than this being
+      // what `redraw` always does.
+      window.refresh();
+      return;
+    }
     this.syncWorkspacePanels();
   }
 
@@ -909,107 +1093,109 @@ export default class LongbridgeApp extends View {
     )
       .relative()
       .size_full()
+      // Once, at the root. Every text style in GPUI cascades, so this is the
+      // family the whole tree inherits and no element below states one of its
+      // own -- see `MONOSPACE` for why it is a single name and not a chain.
+      .font_family(MONOSPACE)
       .child(
         v_flex()
           .w_full()
           .h_full()
           .bg(tokens.background)
-          .p(tokens.spacing.sm)
-          .gap(tokens.spacing.sm)
-          .child(this.header(tokens))
-          .child(this.hasStoredTokens ? this.workspace(tokens) : this.loginGate(tokens))
-          .child(this.footer(tokens)),
-      )
-      .child(fps_monitor().anchor("bottom_left"));
+          // The title bar reaches both edges and the window's very top, because
+          // it *is* the window's top: there is no system one behind it. Only
+          // what is under it is inset.
+          .child(this.titleBar(tokens))
+          .child(
+            v_flex()
+              .flex_1()
+              .min_h(0)
+              .p(tokens.spacing.sm)
+              .gap(tokens.spacing.sm)
+              .child(
+                // The performance overlay is anchored in *this* box rather than
+                // in the window, which is what keeps it off the footer. Anchored
+                // to the window it sat in the bottom-left corner, on top of
+                // "Read only · Trading disabled"; anchored here it stops where
+                // the workspace stops, which is the row above.
+                v_flex()
+                  .relative()
+                  .flex_1()
+                  .min_h(0)
+                  .child(this.hasStoredTokens ? this.workspace(tokens) : this.loginGate(tokens))
+                  .child(fps_monitor().anchor("bottom_left")),
+              )
+              .child(this.footer(tokens)),
+          ),
+      );
   }
 
-  /** @param {import("gpui-base").Theme} tokens */
-  header(tokens) {
+  /**
+   * The window's own title bar. There is no system one behind it: the host
+   * opens the window with a transparent title bar, so this row is both the
+   * application's chrome and the strip the window is dragged by.
+   *
+   * Three tracks, and the outer two share a width so the middle one is centered
+   * on the window rather than on whatever is left over: identity on the left,
+   * the page switch in the middle, the session's own controls on the right.
+   * `TITLE_BAR_LEADING` is the room macOS needs for the traffic lights, which
+   * are drawn over this corner by the system.
+   *
+   * @param {import("gpui-base").Theme} tokens
+   */
+  titleBar(tokens) {
     return h_flex()
+      .id("window-title-bar")
+      .flex_none()
+      .h(TITLE_BAR_HEIGHT)
+      .w_full()
       .items_center()
-      .justify_between()
       .gap(tokens.spacing.md)
-      .px(tokens.spacing.md)
-      .py(tokens.spacing.sm)
+      .pl(TITLE_BAR_LEADING)
+      .pr(tokens.spacing.md)
+      .bg(tokens.surface)
+      .border_b(1)
+      .border_color(tokens.border)
       .child(
         h_flex()
-          .items_center()
-          .gap(tokens.spacing.lg)
+          .flex_1()
+          .min_w(0)
+          // The mark and the name are one lockup, so they sit on a shared
+          // baseline. Not `items_center`, which leaves the name floating above
+          // the mark's foot, and not `items_end` either: that aligns the *line
+          // box*, and a 1.25 line box keeps room under the baseline for
+          // descenders, so the mark still ends up sitting low by that much.
+          // Baseline alignment puts the mark's foot on the letters' own.
+          .items_baseline()
+          // 6, not a spacing token: this is the gap inside one lockup, which is
+          // an optical fit between a mark and a wordmark rather than a layout
+          // step. The scale's neighbours (4 and 8) are both wrong by eye here.
+          .gap(6)
           .child(
             image(tokens.appearance === "dark" ? "assets/logo-dark.svg" : "assets/logo-light.svg")
-              .w(28)
-              .h(28)
+              .w(20)
+              .h(20)
               .flex_none()
               .accessibility_label("Longbridge"),
           )
-          .child(
-            v_flex()
-              .gap(tokens.spacing.xxs)
-              .child(label(tokens, "Longbridge", 16))
-              .child(muted(tokens, "Read-only market terminal")),
-          )
-          .when(this.hasStoredTokens, (element) =>
-            element.child(
-              Tabs.new("workspace-tabs")
-                .axis("horizontal")
-                .flex()
-                .items_center()
-                .gap(tokens.spacing.xs)
-                .child(
-                  Tab.new("page-watchlist")
-                    .selected(this.page === "watchlist")
-                    .on_click((_event, cx) => {
-                      this.page = "watchlist";
-                      this.redraw(cx);
-                    })
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .h(32)
-                    .px(tokens.spacing.sm)
-                    .rounded(tokens.radius.sm)
-                    .bg(this.page === "watchlist" ? tokens.secondary : tokens.surface)
-                    .text_size(11)
-                    .font_weight(this.page === "watchlist" ? 600 : 400)
-                    .text_color(
-                      this.page === "watchlist" ? tokens.foreground : tokens.muted_foreground,
-                    )
-                    .hover((style) => style.bg(tokens.accent))
-                    .focus((style) => style.bg(tokens.accent).text_color(tokens.accent_foreground))
-                    .child("Watchlist"),
-                )
-                .child(
-                  Tab.new("page-portfolio")
-                    .selected(this.page === "portfolio")
-                    .on_click((_event, cx) => {
-                      this.page = "portfolio";
-                      this.loadPortfolio(cx);
-                      this.redraw(cx);
-                    })
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .h(32)
-                    .px(tokens.spacing.sm)
-                    .rounded(tokens.radius.sm)
-                    .bg(this.page === "portfolio" ? tokens.secondary : tokens.surface)
-                    .text_size(11)
-                    .font_weight(this.page === "portfolio" ? 600 : 400)
-                    .text_color(
-                      this.page === "portfolio" ? tokens.foreground : tokens.muted_foreground,
-                    )
-                    .hover((style) => style.bg(tokens.accent))
-                    .focus((style) => style.bg(tokens.accent).text_color(tokens.accent_foreground))
-                    .child("Portfolio"),
-                ),
-            ),
-          ),
+          .child(label(tokens, "Longbridge", 13).font_weight(700)),
       )
+      // The switch is only a switch once there is something to switch between,
+      // and both pages need a session.
+      .when(this.hasStoredTokens, (element) => element.child(this.pageSwitch(tokens)))
       .child(
         h_flex()
+          .flex_1()
+          .min_w(0)
           .items_center()
+          .justify_end()
           .gap(tokens.spacing.sm)
           .child(connectionPill(tokens, this.status.state))
+          .when(this.hasStoredTokens, (element) =>
+            element.child(
+              detailToggle(tokens, this.isDetailOpen(), (_event, cx) => this.toggleDetail(cx)),
+            ),
+          )
           .child(
             themeButton(tokens, (_event, cx) =>
               this.chooseTheme(tokens.appearance === "dark" ? "light" : "dark", cx),
@@ -1019,6 +1205,69 @@ export default class LongbridgeApp extends View {
           // and switches theme, and neither is a property of a list. The
           // window's own corner is where a session's controls live.
           .when(this.hasStoredTokens, (element) => element.child(this.userMenu(tokens))),
+      );
+  }
+
+  /**
+   * The page switch, as one segmented control.
+   *
+   * Two tabs styled individually read as decoration -- a pair of quiet chips
+   * with nothing saying they are alternatives -- and a selection has to be a
+   * persistent state, not a hover. So the pair sits in one track: a recessed
+   * well in `muted`, with the current page filled in `background` and the
+   * others showing the well through.
+   *
+   * What carries the state is fill and foreground only. No border, which boxes
+   * each segment and undoes the track, and no shadow, which reads as grime
+   * under a 24px chip rather than as elevation. Weight is constant across
+   * states for the same reason a border would be: a segment that changes weight
+   * changes width, and the control twitches every time the page changes.
+   *
+   * This belongs in `ui.js` beside the other primitives, as `navTabs(tokens,
+   * items, active, onSelect)`. It is written out here because `ui.js` has an
+   * owner and a frozen export list; see the report.
+   *
+   * @param {import("gpui-base").Theme} tokens
+   */
+  pageSwitch(tokens) {
+    return Tabs.new("workspace-tabs")
+      .axis("horizontal")
+      .accessibility_label("Pages")
+      .flex()
+      .items_center()
+      .flex_none()
+      .gap(2)
+      .px(tokens.spacing.xs)
+      .py(3)
+      .rounded(tokens.radius.md)
+      .bg(tokens.muted)
+      .children(
+        PAGES.map((item) => {
+          const selected = item.key === this.page;
+          return motion(
+            Tab.new(`page-${item.key}`)
+              .selected(selected)
+              .on_click((_event, cx) => this.showPage(item.key, cx))
+              .flex()
+              .items_center()
+              .justify_center()
+              .h(24)
+              .px(tokens.spacing.md)
+              .rounded(tokens.radius.sm)
+              // An unselected segment is the well showing through, so it is
+              // filled with the well's own colour rather than left unset: the
+              // component brings a fill of its own, and this is what makes it
+              // not show.
+              .bg(selected ? tokens.background : tokens.muted)
+              .text_size(12)
+              .font_weight(700)
+              .text_color(selected ? tokens.foreground : tokens.muted_foreground),
+            "opacity",
+          )
+            .hover((style) => style.text_color(tokens.foreground))
+            .focus((style) => style.text_color(tokens.foreground))
+            .child(item.caption);
+        }),
       );
   }
 
@@ -1065,7 +1314,31 @@ export default class LongbridgeApp extends View {
             .child(action(tokens, "retry-connection", "Retry", (_event, cx) => this.resume(cx))),
         ),
       )
-      .child(page.flex_1().min_h(0).transition("opacity", { duration: 160, easing: "ease-out" }));
+      .child(motion(page.flex_1().min_h(0), "opacity"));
+  }
+
+  /**
+   * A workspace pane's outer box: the panel inside it, and this pane's half of
+   * the gap between the two of them, on the side it faces.
+   *
+   * The inset is here rather than on the panel because a panel draws its own
+   * border and fill, so padding written on it would put the gap *inside* that
+   * border and separate nothing. It is here rather than on the dock, too: a
+   * dock's frame is chrome around the pane, and what needs to move is the pane.
+   *
+   * @param {import("gpui-base").Theme} tokens
+   * @param {"left" | "right"} facing Which side the other pane is on.
+   */
+  pane(tokens, facing) {
+    // `flex_1().min_h(0)`, not `size_full()`. A percentage height only resolves
+    // against a parent whose own height is already definite; where it is not,
+    // `height: 100%` collapses to auto, and every `flex_1` child inside then
+    // has no free space to grow into and falls back to its content height --
+    // which is the pane floating at the top of an empty region. Growing into
+    // the parent's main axis asks for no such resolution, and the cross axis is
+    // already stretch.
+    const box = v_flex().flex_1().min_h(0).w_full().bg(tokens.background);
+    return facing === "right" ? box.pr(PANE_GAP) : box.pl(PANE_GAP);
   }
 
   /** @param {import("gpui-base").Theme} tokens */
@@ -1076,6 +1349,26 @@ export default class LongbridgeApp extends View {
       .justify_center()
       .p(tokens.spacing.lg)
       .child(v_flex().w(400).child(this.authPanel(tokens)));
+  }
+
+  /**
+   * Whether the stock details are showing.
+   *
+   * Read from the dock every time rather than mirrored on this view: the pane
+   * can also be closed by dragging its edge shut, and a copy of the flag would
+   * be wrong from the first time that happened.
+   */
+  isDetailOpen() {
+    return Boolean(this.workspaceDock?.is_dock_open("right"));
+  }
+
+  /** @param {import("gpui").Context} cx */
+  toggleDetail(cx) {
+    if (!this.workspaceDock) return;
+    this.workspaceDock.toggle_dock("right");
+    // The dock writes its own layout back through `layout_changed`; this is
+    // only the title bar catching up with the icon it should now be showing.
+    cx.notify();
   }
 
   /**
@@ -1092,67 +1385,78 @@ export default class LongbridgeApp extends View {
    * @param {import("gpui-base").Theme} tokens
    */
   watchlistPage(tokens) {
+    // No `.dock()` here, deliberately. That hook does not decorate a dock --
+    // it *replaces* base's whole `render_dock`, which is where a side dock's
+    // own box comes from (`Left | Right => h_flex().h_full().w(size)`), along
+    // with the early return that gives a closed dock no width and the resize
+    // handle on its edge. Chrome that returns anything else has silently taken
+    // over the layout, and a dock that no longer states its width stops being
+    // a column beside the centre and drops into the flow below it.
+    //
+    // None of that is worth owning. The one thing this window wanted from dock
+    // chrome was a collapse control, and `DockArea` exposes that directly --
+    // `is_dock_open` and `toggle_dock` take a placement -- so the control lives
+    // in the title bar and base keeps the layout it is good at.
     return dock_area(this.workspaceDock)
       .flex_1()
       .min_h(0)
       .tab_bar((group, cx) => dockTabBar(cx.theme(), group))
       .empty_group((_group, cx) => emptyPanel(cx.theme(), "Nothing here", "Drop a pane in."))
-      .drop_indicator((drop, cx) => dockDropHint(cx.theme(), drop))
-      // Whatever this returns replaces the dock's content, so the panes go
-      // where `dock_content()` is.
-      .dock((dock, cx) => dockFrame(cx.theme(), dock, dock_content().flex_1().min_h(0)));
+      .drop_indicator((drop, cx) => dockDropHint(cx.theme(), drop));
   }
 
   /** @param {import("gpui-base").Theme} tokens */
   watchlist(tokens) {
     const status = streamStatusSummary({ state: this.status.state, delay: this.status.delay });
     const rows = filterRows(this.quotes, this.watchlistQuery, ["code", "name", "symbol"]);
-    return panel(tokens)
-      .id("watchlist-pane")
-      // On the pane rather than on whatever holds it: the pane is now a dock
-      // panel's whole body, and there is no wrapper left to carry this.
-      .on_mouse_down("right", (_event, cx) => this.copySelectedSymbol(cx))
-      .child(
-        h_flex()
-          .items_center()
-          .justify_between()
-          .px(tokens.spacing.md)
-          .py(tokens.spacing.sm)
-          .child(v_flex().gap(tokens.spacing.xxs).child(label(tokens, "Watchlist")))
-          .child(
-            h_flex()
-              .items_center()
-              .gap(tokens.spacing.sm)
-              .child(filterInput(tokens, this.watchlistFilter))
-              .child(muted(tokens, status)),
-          ),
-      )
-      .child(rule(tokens))
-      .when(Boolean(this.streamError), (element) =>
-        element.child(errorMessage(tokens, streamStatusSummary(this.status))),
-      )
-      .child(
-        this.instrumentTable(
-          tokens,
-          "watchlist",
-          "Watchlist",
-          rows,
-          QUOTE_ROW_HEIGHT,
-          watchlistHeader(tokens),
-          (quote, index) =>
-            quoteRow(tokens, quote, quote.symbol === this.selectedSymbol, index, this.lastTick),
-          (symbol, cx) => this.selectQuote(symbol, cx),
-          this.watchlistQuery
-            ? emptyPanel(tokens, "No matches", "Nothing in the watchlist matches that filter.")
-            : emptyPanel(
-                tokens,
-                "Watchlist is empty",
-                "Add securities in Longbridge, then reconnect to refresh this read-only view.",
-              ),
+    return this.pane(tokens, "right").child(
+      panel(tokens)
+        .id("watchlist-pane")
+        .flex_1()
+        .min_h(0)
+        // On the pane rather than on whatever holds it: the pane is now a dock
+        // panel's whole body, and there is no wrapper left to carry this.
+        .on_mouse_down("right", (_event, cx) => this.copySelectedSymbol(cx))
+        .child(
+          h_flex()
+            .items_center()
+            .justify_between()
+            .px(tokens.spacing.md)
+            .py(tokens.spacing.sm)
+            // No title here. The tab above this row already says "Watchlist",
+            // and a pane that names itself twice is two headers wearing one
+            // pane. What is left is what the tab cannot carry: the filter and
+            // the feed's state.
+            .child(filterInput(tokens, this.watchlistFilter))
+            .child(muted(tokens, status)),
         )
-          .flex_1()
-          .min_h(0),
-      );
+        .child(rule(tokens))
+        .when(Boolean(this.streamError), (element) =>
+          element.child(errorMessage(tokens, streamStatusSummary(this.status))),
+        )
+        .child(
+          this.instrumentTable(
+            tokens,
+            "watchlist",
+            "Watchlist",
+            rows,
+            QUOTE_ROW_HEIGHT,
+            watchlistHeader(tokens),
+            (quote, index) =>
+              quoteRow(tokens, quote, quote.symbol === this.selectedSymbol, index, this.lastTick),
+            (symbol, cx) => this.selectQuote(symbol, cx),
+            this.watchlistQuery
+              ? emptyPanel(tokens, "No matches", "Nothing in the watchlist matches that filter.")
+              : emptyPanel(
+                  tokens,
+                  "Watchlist is empty",
+                  "Add securities in Longbridge, then reconnect to refresh this read-only view.",
+                ),
+          )
+            .flex_1()
+            .min_h(0),
+        ),
+    );
   }
 
   /**
@@ -1333,6 +1637,27 @@ export default class LongbridgeApp extends View {
               },
               { detail: "Clears the saved session", destructive: true },
             ),
+          )
+          .child(rule(tokens))
+          .child(
+            // Leaving is in the menu because the window no longer carries a
+            // system title bar on every platform: macOS still draws its traffic
+            // lights over the corner, but a Linux window has no close button of
+            // its own to offer. `process.exit` is a request -- the host decides
+            // what it means, and this one quits -- so the keyboard route and
+            // this item end in the same place. The hint is spelled as the
+            // binding `src/main.rs` actually registers, like every other hint
+            // in this menu.
+            menuItem(
+              tokens,
+              "user-menu-exit",
+              "Exit",
+              (_event, cx) => {
+                close(cx);
+                exit(0);
+              },
+              { detail: MACOS ? "cmd-q" : "alt-f4" },
+            ),
           ),
       );
   }
@@ -1370,31 +1695,36 @@ export default class LongbridgeApp extends View {
   stockDetail(tokens) {
     const quote =
       this.quotes.find((entry) => entry.symbol === this.selectedSymbol) ?? this.quotes[0];
-    return panel(tokens)
-      .id("stock-detail-pane")
-      .child(
-        h_flex()
-          .items_center()
-          .justify_between()
-          .px(tokens.spacing.md)
-          .py(tokens.spacing.sm)
-          .child(label(tokens, "Stock Details"))
-          .child(muted(tokens, "Real-time quote.")),
-      )
-      .child(rule(tokens))
-      .child(
-        quote
-          ? v_flex()
-              .flex_1()
-              .min_h(0)
-              .overflow_y_scrollbar()
-              .child(this.detailSectionsFor(tokens, quote))
-          : emptyPanel(
-              tokens,
-              "Watchlist is empty",
-              "Add securities in Longbridge, then reconnect to refresh this read-only view.",
-            ),
-      );
+    return this.pane(tokens, "left").child(
+      panel(tokens)
+        .id("stock-detail-pane")
+        .flex_1()
+        .min_h(0)
+        .child(
+          h_flex()
+            .items_center()
+            .justify_between()
+            .px(tokens.spacing.md)
+            .py(tokens.spacing.sm)
+            // Same as the watchlist: the tab names the pane, so this row only
+            // says what the tab cannot.
+            .child(muted(tokens, "Real-time quote")),
+        )
+        .child(rule(tokens))
+        .child(
+          quote
+            ? v_flex()
+                .flex_1()
+                .min_h(0)
+                .overflow_y_scrollbar()
+                .child(this.detailSectionsFor(tokens, quote))
+            : emptyPanel(
+                tokens,
+                "Watchlist is empty",
+                "Add securities in Longbridge, then reconnect to refresh this read-only view.",
+              ),
+        ),
+    );
   }
 
   /**
@@ -1642,7 +1972,7 @@ export default class LongbridgeApp extends View {
               .justify_between()
               .px(tokens.spacing.md)
               .py(tokens.spacing.sm)
-              .child(label(tokens, "Portfolio summary"))
+              .child(label(tokens, "Portfolio summary", 14).font_weight(700))
               .child(muted(tokens, account ? `Risk level ${account.risk}` : "Read only")),
           )
           .child(rule(tokens))
@@ -1662,7 +1992,7 @@ export default class LongbridgeApp extends View {
                 .justify_between()
                 .px(tokens.spacing.md)
                 .py(tokens.spacing.sm)
-                .child(label(tokens, "Asset allocation"))
+                .child(label(tokens, "Asset allocation", 14).font_weight(700))
                 .child(
                   h_flex()
                     .items_center()
@@ -1693,7 +2023,7 @@ export default class LongbridgeApp extends View {
               .justify_between()
               .px(tokens.spacing.md)
               .py(tokens.spacing.sm)
-              .child(label(tokens, "Holdings"))
+              .child(label(tokens, "Holdings", 14).font_weight(700))
               .child(
                 h_flex()
                   .items_center()
@@ -1781,7 +2111,7 @@ export default class LongbridgeApp extends View {
       )
       .content(
         popoverSurface(tokens, { width: 280 })
-          .child(label(tokens, "How this chart is built"))
+          .child(label(tokens, "How this chart is built", 13).font_weight(700))
           .child(
             muted(
               tokens,
@@ -1839,7 +2169,7 @@ export default class LongbridgeApp extends View {
                       ? "Restoring your session"
                       : "Sign in to continue",
                   14,
-                ),
+                ).font_weight(700),
               )
               .child(
                 muted(
@@ -1917,31 +2247,111 @@ export default class LongbridgeApp extends View {
       );
   }
 
-  /** @param {import("gpui-base").Theme} tokens */
+  /**
+   * The footer: what is available here, and what is going on.
+   *
+   * Two rows, because they answer different questions. The rail says which
+   * commands this view actually has; the status row says what the window and
+   * the feed are doing, and it keeps the readout of the last chord delivered --
+   * which is *what just happened*, not what is available, and the two are not
+   * the same thing even though both are drawn as key caps.
+   *
+   * @param {import("gpui-base").Theme} tokens
+   */
   footer(tokens) {
     const updated = this.quotes.reduce((latest, quote) => Math.max(latest, quote.receivedAt), 0);
-    return h_flex()
-      .items_center()
-      .justify_between()
-      .px(tokens.spacing.sm)
-      .child(muted(tokens, "Read only · Trading disabled"))
-      .child(this.windowReadout(tokens))
+    return v_flex()
+      .flex_none()
+      .gap(tokens.spacing.xs)
+      .child(this.shortcutRail(tokens))
       .child(
         h_flex()
           .items_center()
-          .gap(tokens.spacing.sm)
+          .justify_between()
+          .px(tokens.spacing.sm)
+          .child(muted(tokens, "Read only · Trading disabled"))
+          .child(this.windowReadout(tokens))
           .child(
-            muted(
-              tokens,
-              updated
-                ? `Last tick ${Math.max(0, Math.floor((this.lastTick - updated) / 1_000))}s ago`
-                : "Awaiting quotes",
-            ),
-          )
-          // The far corner, because the performance overlay is anchored in the
-          // other one and a control underneath it cannot be pressed.
-          .child(this.diagnostics(tokens)),
+            h_flex()
+              .items_center()
+              .gap(tokens.spacing.sm)
+              .child(
+                muted(
+                  tokens,
+                  updated
+                    ? `Last tick ${Math.max(0, Math.floor((this.lastTick - updated) / 1_000))}s ago`
+                    : "Awaiting quotes",
+                ),
+              )
+              // The far corner, because the performance overlay is anchored in
+              // the other one and a control underneath it cannot be pressed.
+              .child(this.diagnostics(tokens)),
+          ),
       );
+  }
+
+  /**
+   * The chords this view has, drawn from the keymap rather than written out.
+   *
+   * Every entry is a binding in `KEY_BINDINGS`, so the rail cannot name a chord
+   * that does not work: a rebinding changes what it draws, and deleting a
+   * binding deletes its hint. `chordLabel` is what turns the keymap's spelling
+   * into the reader's.
+   *
+   * Only what is available *here*. The two selection chords step through the
+   * Watchlist and return immediately on any other page, and Escape is only
+   * Escape while something is open to put away -- `dismiss` hands the action
+   * onward when there is not. Listing either unconditionally would be listing a
+   * command that does nothing, which is the one thing a hint rail must not do.
+   *
+   * @param {import("gpui-base").Theme} tokens
+   */
+  shortcutRail(tokens) {
+    const available = (action) => {
+      switch (action) {
+        case "workspace::watchlist":
+        case "workspace::portfolio":
+        case "workspace::reconnect":
+          return this.hasStoredTokens;
+        case "watchlist::next":
+        case "watchlist::previous":
+          return this.hasStoredTokens && this.page === "watchlist";
+        case "workspace::dismiss":
+          return this.hasSomethingToDismiss();
+        default:
+          // Theme and full screen are the window's, and the window is always
+          // there -- including on the sign-in screen.
+          return true;
+      }
+    };
+    const hints = KEY_BINDINGS.filter(
+      (binding) => SHORTCUT_CAPTIONS[binding.action] && available(binding.action),
+    );
+    return h_flex()
+      .items_center()
+      // It wraps rather than truncating or scrolling: a hint that ran off the
+      // edge of a narrow window would be a hint nobody has.
+      .flex_wrap()
+      .gap(tokens.spacing.md)
+      .px(tokens.spacing.sm)
+      .children(
+        hints.map((binding) =>
+          h_flex()
+            // The cap and its caption are one hint, so they do not wrap apart
+            // from each other.
+            .flex_none()
+            .items_center()
+            .gap(tokens.spacing.xs)
+            .child(kbd(tokens, chordLabel(binding.keystroke)))
+            .child(muted(tokens, SHORTCUT_CAPTIONS[binding.action])),
+        ),
+      );
+  }
+
+  /** Whether Escape has something of this application's to put away. */
+  hasSomethingToDismiss() {
+    if (this.calendarOpen || this.userMenuOpen || this.allocationHelpOpen) return true;
+    return Boolean(this.page === "portfolio" ? this.holdingsQuery : this.watchlistQuery);
   }
 
   /**
@@ -1960,7 +2370,13 @@ export default class LongbridgeApp extends View {
     const parts = [
       `${Math.round(viewport.width)}×${Math.round(viewport.height)}`,
       `${Math.round(window.rem_size())}px/rem`,
-      window.appearance(),
+      // The theme, not `window.appearance()`. They are two different facts and
+      // this row is read as "what am I looking at": the window reports the
+      // *system's* appearance, so a dark interface on a machine set to light
+      // mode said `light` while every pixel on screen said otherwise. The
+      // window's own answer is still on screen -- the diagnostics popover
+      // carries it, beside this one, where the two are labelled apart.
+      tokens.appearance,
       window.is_window_active() ? "active" : "background",
     ];
     if (window.is_fullscreen()) parts.push("fullscreen");
@@ -1972,13 +2388,19 @@ export default class LongbridgeApp extends View {
       .child(muted(tokens, parts.join(" · ")))
       .when(Boolean(this.lastKeystroke), (element) =>
         element.child(
-          kbd(tokens, this.lastKeystroke, {
+          // Displayed the way the rail displays a chord, because it is the same
+          // kind of thing said in the same kind of cap. A key the keymap does
+          // not bind still arrives here -- `backspace`, a bare letter -- and
+          // reads as its own name.
+          kbd(tokens, chordLabel(this.lastKeystroke), {
             down: this.keyDown,
             held: this.keyHeld,
           }),
         ),
       )
-      .when(this.pointerDown, (element) => element.child(kbd(tokens, "mouse-left", { down: true })));
+      // Not through `chordLabel`: this is a button, not a chord, and the
+      // formatter would read the hyphen as a modifier and say `Mouse + Left`.
+      .when(this.pointerDown, (element) => element.child(kbd(tokens, "Mouse left", { down: true })));
   }
 
   /**
@@ -2006,7 +2428,7 @@ export default class LongbridgeApp extends View {
       .trigger(menuTrigger(tokens, "shell-diagnostics-trigger", "Window diagnostics", this.diagnosticsOpen))
       .content(
         popoverSurface(tokens, { width: 300 })
-          .child(label(tokens, "Window"))
+          .child(label(tokens, "Window", 13).font_weight(700))
           .child(
             detailGrid(tokens, [
               {
@@ -2023,6 +2445,12 @@ export default class LongbridgeApp extends View {
                 title: "Pointer",
                 value: `${Math.round(pointer.x)},${Math.round(pointer.y)}`,
               },
+              // Both, and labelled apart. The theme is what the interface is
+              // drawn in and what the footer reports; the appearance is the
+              // system's, which is the window fact this popover is here to
+              // prove can be read at all. They disagree whenever someone runs
+              // a dark interface on a machine set to light.
+              { title: "Theme", value: tokens.appearance },
               { title: "Appearance", value: window.appearance() },
               { title: "Active", value: window.is_window_active() ? "yes" : "no" },
               {
@@ -2041,7 +2469,10 @@ export default class LongbridgeApp extends View {
             h_flex()
               .gap(tokens.spacing.xs)
               .children(
-                [14, 16, 18].map((size) =>
+                // The scale's body, title and heading steps. 18 was not on
+                // it, and a control that offers a size the interface never
+                // draws in is offering a size nothing was measured against.
+                [12, 14, 16].map((size) =>
                   command(`shell-rem-${size}`, `${size}px`, () => window.set_rem_size(size)).flex_1(),
                 ),
               ),

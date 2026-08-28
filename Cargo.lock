@@ -2690,6 +2690,7 @@ name = "gpui-shell-longbridge"
 version = "0.1.0"
 dependencies = [
  "gpui",
+ "gpui-base",
  "gpui-shell",
  "gpui_platform",
  "tracing-subscriber",

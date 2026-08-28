@@ -7,20 +7,57 @@
 // application's description — the dock area holds it — so it repaints only when
 // something tells it to, which is what `set_props` is for.
 //
-// `update(props)` is empty on purpose. The props carry a revision the
-// application bumps whenever the data these draw has changed; the value is never
-// read, because the point of the call is the refresh it causes, not what it
-// delivers. Writing it out is what makes that legible.
+// `update(props)` is empty of everything but the application for that reason.
+// The props carry a revision the application bumps whenever the data these draw
+// has changed; the value is never read, because the point of the call is the
+// refresh it causes, not what it delivers.
 
 import { View } from "gpui";
 
 /** @import { Context } from "gpui" */
 
+/**
+ * The application these panes draw.
+ *
+ * It is held here rather than only passed in props, and that is not a
+ * convenience — it is the only way a restored pane can draw anything.
+ * `DockArea.load` rebuilds a saved layout by constructing the class registered
+ * under each panel's name, and it constructs it with no props: an application
+ * is a live view, so it was never in the dump to begin with. A pane that took
+ * its application only from `props.app` therefore came back from a restart with
+ * `undefined` in its place, and rendered nothing at all — the layout was right,
+ * the tabs were there, and both panes were blank.
+ *
+ * So the application hands itself over once, before the dock is built, and a
+ * pane falls back to it whenever it was constructed without one. Same shape as
+ * `context.js`, and for the same reason: one held reference, set from `init`,
+ * with a narrow blast radius and an error rather than a silent `undefined` when
+ * it is missing.
+ */
+let heldApp = null;
+
+/** @param {any} app */
+export function holdWorkspaceApp(app) {
+  heldApp = app;
+}
+
+function workspaceApp() {
+  if (!heldApp) {
+    throw new Error(
+      "no application has been held yet; LongbridgeApp holds one before it builds the dock",
+    );
+  }
+  return heldApp;
+}
+
 /** The half a panel shares: who owns the data it draws. */
 class WorkspacePanel extends View {
-  /** @param {{ app: any }} props */
+  /** @param {{ app?: any }} [props] */
   init(props) {
-    this.app = props.app;
+    // A panel this application added itself is handed the application; one the
+    // dock rebuilt from a saved layout is handed nothing, and takes the held
+    // one. Both end up with the same object.
+    this.app = props?.app ?? workspaceApp();
   }
 
   /** @param {{ app?: any }} props */

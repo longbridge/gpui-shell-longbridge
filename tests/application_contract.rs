@@ -30,8 +30,17 @@ fn application_exposes_api_backed_read_only_views() {
         market.contains("sortLikeTerminal"),
         "watchlist must use terminal-compatible sorting"
     );
-    for expected in ["Watchlist", "Stock Details", "Portfolio", "Holdings"] {
-        assert!(main.contains(expected), "missing view copy {expected}");
+    // Sentence case, per the interface's copy rules: a view's name is a noun,
+    // not a title. `Stock details` was `Stock Details` before the restyle.
+    //
+    // Either file counts. A pane's name is written once, on its tab, and the
+    // tab is drawn by `panelTitle` in `ui.js`; the pane's own header stopped
+    // repeating it, because a pane that names itself twice is two headers.
+    for expected in ["Watchlist", "Stock details", "Portfolio", "Holdings"] {
+        assert!(
+            main.contains(expected) || ui.contains(expected),
+            "missing view copy {expected}"
+        );
     }
     assert!(
         main.contains("priceChart") && main.contains("allocationChart"),
@@ -98,15 +107,31 @@ fn application_exposes_api_backed_read_only_views() {
             && main.contains("DockArea.register_panel(\"detail\", DetailPanel)"),
         "the watchlist and detail panes must be panels of the workspace dock"
     );
-    // Base draws no chrome, so a dock with none would be a workspace with no
-    // tab bar, no title strip and nothing to drag.
+    // Base draws no tab bar and no drop hint, so a dock with neither would be a
+    // workspace whose panes cannot be told apart or moved.
+    //
+    // `dockFrame` is not on this list and must not go back on it. That chrome
+    // hook replaces base's whole `render_dock` -- a side dock's own box, the
+    // short circuit that gives a closed one no width, and its resize handle all
+    // come from there -- so drawing it took over the layout and dropped the
+    // right dock out of the row into the flow below the centre. Base draws each
+    // dock's box; the collapse control it was there for is a title-bar button
+    // driven by `DockArea.toggle_dock`.
     let ui_source = &ui;
-    for chrome in ["dockTabBar", "dockFrame", "dockDropHint"] {
+    for chrome in ["dockTabBar", "dockDropHint"] {
         assert!(
             main.contains(chrome) && ui_source.contains(&format!("export function {chrome}")),
             "the dock's {chrome} must be drawn by the application"
         );
     }
+    assert!(
+        !main.contains("dockFrame") && !ui.contains("dockFrame"),
+        "base owns each dock's own box; see the note above"
+    );
+    assert!(
+        main.contains("toggle_dock(\"right\")") && ui.contains("export function detailToggle"),
+        "the details pane must still be collapsible from the window chrome"
+    );
     // A layout the user rearranged and lost on the next launch is worse than
     // one that never moved.
     assert!(

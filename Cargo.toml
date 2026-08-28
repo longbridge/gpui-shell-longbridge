@@ -10,6 +10,10 @@ publish = false
 # the default branch alone has the dock but not `Accordion` or `Avatar`, so the
 # window fails to load against it. Back to the default branch once it lands.
 gpui-shell = { git = "https://github.com/longbridge/gpui-component.git", branch = "shell-keyboard-pointer-actions-window" }
+# Direct for one line. `set_theme` carries the semantic tokens only, so the
+# color base draws a dock's split handle from is out of the script's reach and
+# the host has to project it -- see the `resizable.handle` write in `main`.
+gpui-base = { git = "https://github.com/longbridge/gpui-component.git", branch = "shell-keyboard-pointer-actions-window" }
 gpui = { git = "https://github.com/zed-industries/zed", features = ["profiler"] }
 gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

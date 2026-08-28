@@ -5,6 +5,7 @@ import {
   layoutPriceSeries,
   mergeLiveQuote,
   prepareFiveDaySeries,
+  priceWindowChange,
 } from "./chart.js";
 
 function check(condition, message) {
@@ -278,6 +279,40 @@ function runVectors() {
   check(
     denseGeometry.points[1].x - denseGeometry.points[0].x < 8,
     "thinning does not stretch a session across the gap reserved for the next",
+  );
+
+  // The chart tones its line, its gradient and its hover block by the direction
+  // of the window it is drawing, so that reading is data rather than styling and
+  // is asserted here. It is the window's own move: the last drawn close against
+  // the first, never against a previous close the geometry does not carry.
+  check(priceWindowChange(laidOut) === 4, "a rising window reads as its own net change");
+  const falling = layoutPriceSeries(
+    prepareFiveDaySeries("700.HK", [
+      candle("2026-08-24T02:00:00Z", 9),
+      candle("2026-08-24T02:01:00Z", 4),
+    ]),
+    { width: 500, height: 100, dayGap: 10 },
+  );
+  check(priceWindowChange(falling) === -5, "a falling window reads negative");
+  const flat = layoutPriceSeries(
+    prepareFiveDaySeries("700.HK", [
+      candle("2026-08-24T02:00:00Z", 7),
+      candle("2026-08-24T02:01:00Z", 7),
+    ]),
+    { width: 500, height: 100, dayGap: 10 },
+  );
+  check(priceWindowChange(flat) === 0, "a flat window has no direction");
+  check(priceWindowChange({ points: [] }) === 0, "an empty window has no direction");
+  check(priceWindowChange(undefined) === 0, "a missing geometry has no direction");
+
+  // Downsampling may not repaint the chart. Each session keeps its own first and
+  // last candle, so a thinned window starts and ends on the same closes the full
+  // one did and the colour cannot flip with the point budget.
+  check(
+    denseGeometry.points.length < dense.points.length &&
+      priceWindowChange(denseGeometry) === priceWindowChange(dense) &&
+      priceWindowChange(denseGeometry) === 101,
+    "thinning the drawn points cannot move the window's direction",
   );
 
   // The budget is an input, so it is part of the question the cache answers.
