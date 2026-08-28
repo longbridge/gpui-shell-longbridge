@@ -548,6 +548,9 @@ export default class LongbridgeApp extends View {
     DockArea.register_panel("watchlist", WatchlistPanel);
     DockArea.register_panel("detail", DetailPanel);
 
+    // Reset runs this a second time, so nothing here may assume it is the
+    // first: the dock, its panels and the restored flag are all replaced
+    // wholesale rather than added to.
     this.workspaceRevision = 0;
     // Set when `load` below rebuilds the panels, because that changes which
     // call repaints them. See `redraw`.
@@ -1401,6 +1404,40 @@ export default class LongbridgeApp extends View {
   }
 
   /**
+   * Puts the workspace back the way it ships.
+   *
+   * A dock area is the one part of this window whose shape is the user's, and
+   * the price of that is a shape they can get stuck in: a pane dragged into the
+   * centre and its dock left holding nothing, a pane collapsed and its handle
+   * off the edge of the window. Every one of those is recoverable by hand and
+   * none of them is obvious, so the way back is a menu item rather than a
+   * paragraph in a README.
+   *
+   * The stored layout goes first. Rebuilding the dock republishes one through
+   * `layout_changed`, so clearing afterwards would only delete the layout that
+   * was just written, and the next launch would restore the shape this is
+   * supposed to be undoing.
+   *
+   * @param {import("gpui").Context} cx
+   */
+  resetWorkspace(cx) {
+    if (this.layoutWrite) {
+      this.layoutWrite = null;
+    }
+    try {
+      localStorage.removeItem(WORKSPACE_LAYOUT_KEY);
+    } catch {
+      // A host that granted no storage has nothing to forget, and the rebuild
+      // below is the part that matters.
+      this.layoutStorage = false;
+    }
+    this.initWorkspaceDock(cx);
+    this.redraw(cx);
+    cx.notify();
+    window.push_toast({ title: "Layout reset", level: "success", id: "workspace-reset" });
+  }
+
+  /**
    * Whether the stock details are showing.
    *
    * Read from the dock every time rather than mirrored on this view: the pane
@@ -1610,6 +1647,12 @@ export default class LongbridgeApp extends View {
               },
               { detail: "cmd-r" },
             ),
+          )
+          .child(
+            menuItem(tokens, "user-menu-reset-layout", "Reset layout", (_event, cx) => {
+              close(cx);
+              this.resetWorkspace(cx);
+            }),
           )
           .child(
             menuItem(
