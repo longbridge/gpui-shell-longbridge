@@ -515,6 +515,24 @@ export function menuTrigger(tokens, id, hint, open = false) {
 export const QUOTE_ROW_HEIGHT = 44;
 
 /**
+ * Shared interactive states for rows that can be pointed at or pressed.
+ * Selection is optional because Holdings has no persistent row selection,
+ * while Watchlist uses the selected row to drive Stock Details.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @template {import("gpui").Element} E
+ * @param {E} row
+ * @param {boolean} [selected]
+ */
+function interactiveTableRow(tokens, row, selected = false) {
+  return row
+    .bg(selected ? tokens.accent : tokens.surface)
+    .text_color(selected ? tokens.accent_foreground : tokens.foreground)
+    .hover((style) => style.bg(tokens.accent).text_color(tokens.accent_foreground))
+    .active((style) => style.bg(tokens.accent).text_color(tokens.accent_foreground));
+}
+
+/**
  * A watchlist row, as a table row rather than a button that looks like one.
  *
  * It registers no click handler of its own: rows are rebuilt every frame the
@@ -536,21 +554,22 @@ export const QUOTE_ROW_HEIGHT = 44;
 export function quoteRow(tokens, quote, selected, rowIndex = 0, now = Date.now()) {
   const tone = changeTone(tokens, quote.change);
   const cell = (column, build) => build(TableCell.new(`quote-${quote.symbol}-${column}`, column));
-  return TableRow.new(`quote-${quote.symbol}`, rowIndex + 2)
-    .flex()
-    .items_center()
-    .w_full()
-    .h(QUOTE_ROW_HEIGHT)
-    .gap(tokens.spacing.sm)
-    .px(tokens.spacing.sm)
-    .py(tokens.spacing.xs)
-    .border_b(1)
-    .border_color(tokens.border)
-    .bg(selected ? tokens.accent : tokens.surface)
+  return interactiveTableRow(
+    tokens,
+    TableRow.new(`quote-${quote.symbol}`, rowIndex + 2)
+      .flex()
+      .items_center()
+      .w_full()
+      .h(QUOTE_ROW_HEIGHT)
+      .gap(tokens.spacing.sm)
+      .px(tokens.spacing.sm)
+      .py(tokens.spacing.xs)
+      .border_b(1)
+      .border_color(tokens.border),
+    selected,
+  )
     .opacity(quote.receivedAt ? 1 : 0.68)
     .transition("opacity", MOTION)
-    .text_color(selected ? tokens.accent_foreground : tokens.foreground)
-    .hover((style) => style.bg(tokens.accent).text_color(tokens.accent_foreground))
     .child(
       cell(1, (element) =>
         element
@@ -918,17 +937,19 @@ export function holdingRow(tokens, holding, rowIndex = 0) {
   const totalTone = valueTone(tokens, holding.totalPnlValue);
   const cell = (column, build) =>
     build(TableCell.new(`holding-${holding.symbol}-${column}`, column));
-  return TableRow.new(`holding-${holding.symbol}`, rowIndex + 2)
-    .flex()
-    .items_center()
-    .w_full()
-    .h(HOLDING_ROW_HEIGHT)
-    .gap(tokens.spacing.sm)
-    .px(tokens.spacing.sm)
-    .py(tokens.spacing.xs)
-    .border_b(1)
-    .border_color(tokens.border)
-    .hover((style) => style.bg(tokens.muted))
+  return interactiveTableRow(
+    tokens,
+    TableRow.new(`holding-${holding.symbol}`, rowIndex + 2)
+      .flex()
+      .items_center()
+      .w_full()
+      .h(HOLDING_ROW_HEIGHT)
+      .gap(tokens.spacing.sm)
+      .px(tokens.spacing.sm)
+      .py(tokens.spacing.xs)
+      .border_b(1)
+      .border_color(tokens.border),
+  )
     .child(
       cell(1, (element) =>
         element
@@ -1406,6 +1427,9 @@ export function calendarGrid(tokens, calendar, options) {
  */
 export function kbd(tokens, keystroke, state = {}) {
   const { down = false, held = false } = state;
+  const quietFill = /^#[0-9a-f]{6}$/i.test(tokens.muted)
+    ? `${tokens.muted}80`
+    : tokens.muted;
   return (
     div()
       .flex_none()
@@ -1414,7 +1438,10 @@ export function kbd(tokens, keystroke, state = {}) {
       .rounded(tokens.radius.sm)
       .border(1)
       .border_color(down ? tokens.ring : tokens.border)
-      .bg(down ? tokens.accent : tokens.muted)
+      // Status-bar shortcuts are supporting metadata, not buttons. Fade only
+      // the resting fill; the label and border stay fully legible, and a key
+      // that is physically down keeps the full-strength accent response.
+      .bg(down ? tokens.accent : quietFill)
       .text_size(10)
       .line_height(1.4)
       // No family here either, for the reason `numeric` gives: the root sets the
