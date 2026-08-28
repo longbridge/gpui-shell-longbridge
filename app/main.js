@@ -1748,7 +1748,7 @@ export default class LongbridgeApp extends View {
                 close(cx);
                 window.dispatch_action("workspace::reconnect");
               },
-              { detail: "cmd-r" },
+              { detail: chordLabel("cmd-r") },
             ),
           )
           .child(
@@ -1767,7 +1767,6 @@ export default class LongbridgeApp extends View {
                 this.statusBarVisible = !this.statusBarVisible;
                 this.redraw(cx);
               },
-              { detail: "Shortcuts and window state" },
             ),
           )
           .child(
@@ -1805,7 +1804,7 @@ export default class LongbridgeApp extends View {
                 close(cx);
                 window.dispatch_action("workspace::toggle-theme");
               },
-              { detail: "cmd-t" },
+              { detail: chordLabel("cmd-t") },
             ),
           )
           .child(rule(tokens))
@@ -1821,7 +1820,7 @@ export default class LongbridgeApp extends View {
                 close(cx);
                 window.dispatch_action("workspace::toggle-fullscreen");
               },
-              { detail: "cmd-shift-f" },
+              { detail: chordLabel("cmd-shift-f") },
             ),
           )
           .child(
@@ -1849,7 +1848,7 @@ export default class LongbridgeApp extends View {
                 close(cx);
                 this.signOut(cx);
               },
-              { detail: "Clears the saved session", destructive: true },
+              { destructive: true },
             ),
           )
           .child(rule(tokens))
@@ -1870,7 +1869,7 @@ export default class LongbridgeApp extends View {
                 close(cx);
                 exit(0);
               },
-              { detail: MACOS ? "cmd-q" : "alt-f4" },
+              { detail: chordLabel(MACOS ? "cmd-q" : "alt-f4") },
             ),
           ),
       );
