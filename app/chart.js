@@ -309,6 +309,104 @@ export function layoutPriceSeries(
   return geometry;
 }
 
+function intradayClose(candle) {
+  return numeric(candle?.geometry?.close ?? candle?.close);
+}
+
+function sessionStarts(series, points) {
+  if (Array.isArray(series.sessionBoundaries)) {
+    return series.sessionBoundaries
+      .filter(
+        (boundary) =>
+          Number.isInteger(boundary?.index) &&
+          boundary.index >= 0 &&
+          boundary.index < points.length,
+      )
+      .map((boundary) => ({ index: boundary.index, tradeSession: boundary.tradeSession }));
+  }
+  const starts = [];
+  let previous = Symbol("first session");
+  for (let index = 0; index < points.length; index += 1) {
+    if (points[index].tradeSession !== previous) {
+      starts.push({ index, tradeSession: points[index].tradeSession });
+      previous = points[index].tradeSession;
+    }
+  }
+  return starts;
+}
+
+/**
+ * Converts the complete provider-labelled trading day into a continuous line
+ * while retaining its session splits and previous-close reference. Unlike the
+ * five-day renderer, this never derives a session from local wall-clock time.
+ */
+export function layoutIntradaySeries(series, { width, height }) {
+  if (!series || !Array.isArray(series.candles)) throw new TypeError("series must contain candles");
+  if (![width, height].every((value) => Number.isFinite(value) && value >= 0)) {
+    throw new TypeError("chart dimensions must be non-negative numbers");
+  }
+  const source = series.candles;
+  const closes = source.map(intradayClose);
+  if (closes.some((close) => close === null))
+    throw new TypeError("candles must contain finite close geometry");
+  const previousPrice = numeric(series.previousClose?.close ?? series.previousClose);
+  if (source.length === 0) {
+    return Object.freeze({
+      points: Object.freeze([]),
+      sessionSegments: Object.freeze([]),
+      sessionBoundaries: Object.freeze([]),
+      previousClose:
+        previousPrice === null ? null : Object.freeze({ price: previousPrice, y: height / 2 }),
+      min: previousPrice,
+      max: previousPrice,
+      width,
+      height,
+    });
+  }
+
+  let min = closes[0];
+  let max = closes[0];
+  for (let index = 1; index < closes.length; index += 1) {
+    min = Math.min(min, closes[index]);
+    max = Math.max(max, closes[index]);
+  }
+  if (previousPrice !== null) {
+    min = Math.min(min, previousPrice);
+    max = Math.max(max, previousPrice);
+  }
+  const range = max - min;
+  const toY = (value) => (range === 0 ? height / 2 : height - ((value - min) / range) * height);
+  const points = source.map((candle, index) =>
+    Object.freeze({
+      ...candle,
+      close: closes[index],
+      x: source.length === 1 ? width / 2 : (index / (source.length - 1)) * width,
+      y: toY(closes[index]),
+    }),
+  );
+  const starts = sessionStarts(series, points);
+  const sessionBoundaries = starts.map(({ index, tradeSession }) =>
+    Object.freeze({ index, tradeSession, x: points[index].x, timestamp: points[index].timestamp }),
+  );
+  const sessionSegments = starts.map(({ index, tradeSession }, startIndex) => {
+    const end = starts[startIndex + 1]?.index ?? points.length;
+    return Object.freeze({ tradeSession, points: Object.freeze(points.slice(index, end)) });
+  });
+  return Object.freeze({
+    points: Object.freeze(points),
+    sessionSegments: Object.freeze(sessionSegments),
+    sessionBoundaries: Object.freeze(sessionBoundaries),
+    previousClose:
+      previousPrice === null
+        ? null
+        : Object.freeze({ price: previousPrice, y: toY(previousPrice) }),
+    min,
+    max,
+    width,
+    height,
+  });
+}
+
 /**
  * The direction of the charted window: the last drawn close less the first.
  *

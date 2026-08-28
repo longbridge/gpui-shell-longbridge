@@ -2,6 +2,7 @@ import { View } from "gpui";
 import {
   findNearestPricePoint,
   formatMarketTime,
+  layoutIntradaySeries,
   layoutPriceSeries,
   mergeLiveQuote,
   prepareFiveDaySeries,
@@ -24,6 +25,43 @@ const candle = (iso, close, tradeSession = 0) => ({
 });
 
 function runVectors() {
+  // A renderer that concatenates sessions, loses a boundary, or scales without
+  // the previous close must fail these geometry-facing intraday assertions.
+  const intradayGeometry = layoutIntradaySeries(
+    {
+      candles: [
+        { ...candle("2026-08-28T20:00:00Z", 101, 3), geometry: Object.freeze({ close: 101 }) },
+        { ...candle("2026-08-29T13:30:00Z", 102, 1), geometry: Object.freeze({ close: 102 }) },
+        { ...candle("2026-08-29T14:30:00Z", 103, 0), geometry: Object.freeze({ close: 103 }) },
+        { ...candle("2026-08-29T20:00:00Z", 104, 2), geometry: Object.freeze({ close: 104 }) },
+      ],
+      sessionBoundaries: [
+        { index: 0, tradeSession: 3 },
+        { index: 1, tradeSession: 1 },
+        { index: 2, tradeSession: 0 },
+        { index: 3, tradeSession: 2 },
+      ],
+      previousClose: "100",
+    },
+    { width: 300, height: 100 },
+  );
+  check(
+    intradayGeometry.sessionSegments.map((segment) => segment.tradeSession).join(",") === "3,1,0,2",
+    "intraday line geometry keeps a segment for every provider session",
+  );
+  check(
+    intradayGeometry.sessionBoundaries.map((boundary) => boundary.x).join(",") === "0,100,200,300",
+    "intraday session boundaries occupy their chronological plot positions",
+  );
+  check(
+    intradayGeometry.previousClose.price === 100 && intradayGeometry.previousClose.y === 100,
+    "intraday geometry includes a previous-close reference line in the shared range",
+  );
+  check(
+    intradayGeometry.points[0].x === 0 && intradayGeometry.points.at(-1).x === 300,
+    "intraday line spans the complete session timeline",
+  );
+
   const series = prepareFiveDaySeries("700.HK", [
     candle("2026-08-19T02:00:00Z", 3),
     candle("2026-08-17T02:00:00Z", 1),
