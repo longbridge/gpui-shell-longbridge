@@ -2611,7 +2611,6 @@ dependencies = [
 [[package]]
 name = "gpui-base"
 version = "0.5.2"
-source = "git+https://github.com/longbridge/gpui-component.git?branch=shell-keyboard-pointer-actions-window#8c0b50e3dbc84e08eeaf72a0407f793d18f6f3bc"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -2643,7 +2642,6 @@ dependencies = [
 [[package]]
 name = "gpui-fps"
 version = "0.1.0"
-source = "git+https://github.com/longbridge/gpui-component.git?branch=shell-keyboard-pointer-actions-window#8c0b50e3dbc84e08eeaf72a0407f793d18f6f3bc"
 dependencies = [
  "gpui",
  "instant",
@@ -2656,7 +2654,6 @@ dependencies = [
 [[package]]
 name = "gpui-shell"
 version = "0.1.0"
-source = "git+https://github.com/longbridge/gpui-component.git?branch=shell-keyboard-pointer-actions-window#8c0b50e3dbc84e08eeaf72a0407f793d18f6f3bc"
 dependencies = [
  "anyhow",
  "async-channel",

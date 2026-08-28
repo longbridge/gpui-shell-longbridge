@@ -1559,29 +1559,14 @@ export function dockTabBar(tokens, group) {
 }
 
 /**
- * A closed bottom dock keeps this much, so its tab bar stays clickable. Base's
- * own number, and the reason a closed *side* dock instead keeps nothing: there
- * is no tab bar left to click at zero width, and this window reopens its side
- * dock from the title bar.
- */
-const CLOSED_BOTTOM_STRIP = 29;
-
-/**
- * One dock's own box, and everything base would have drawn around its content.
+ * A dock's chrome: the edge you drag it by, and nothing else.
  *
- * This exists because gpui-shell replaces base's `render_dock` whether or not
- * an application asks it to: `ScriptDockSkin::render_dock` always delegates to
- * the chrome, and the chrome's default is `content` -- the content bare, with
- * none of the container base wraps it in. So a side dock arrives with no width,
- * cannot be a column beside the centre, and falls into the flow sized to
- * whatever is inside it. Supplying this is not decoration; it is the only way
- * a dock gets a box at all.
- *
- * Every line is base's `render_dock`, ported: the closed-side-dock short
- * circuit, `flex_none` so the row does not stretch it, the extent along its own
- * axis and `full` across, `overflow_hidden`, and a resize handle -- which is
- * also base's and also lost, so it is drawn here or the edge stops being
- * draggable.
+ * The box the dock occupies is base's -- `DockArea::render_dock` wraps whatever
+ * this returns in the dock's own extent -- so this is free to be chrome, which
+ * is what the hook was always named for. It did not used to be: the extent
+ * lived in base's `DockSkin`, this hook replaced that method whole, and a
+ * script-drawn dock came out with no width at all, taking the row it sat in and
+ * leaving every pane inside shrunk to its content.
  *
  * @param {import("gpui-base").Theme} tokens
  * @param {import("gpui-base").DockRegion} dock
@@ -1589,15 +1574,9 @@ const CLOSED_BOTTOM_STRIP = 29;
  */
 export function dockFrame(tokens, dock, content) {
   const vertical = dock.placement === "bottom";
-  // A closed side dock takes no space at all. Returning an empty element and
-  // not a zero-width box: a box still has borders and a hit area.
-  if (!dock.open && !vertical) return div();
-  const extent = dock.open ? dock.size : CLOSED_BOTTOM_STRIP;
   return h_flex()
-    .flex_none()
+    .size_full()
     .relative()
-    .overflow_hidden()
-    .map((element) => (vertical ? element.w_full().h(extent) : element.h_full().w(extent)))
     .child(content)
     .child(
       // Base clamps every position this reports against the area and the

@@ -5,15 +5,14 @@ edition = "2024"
 publish = false
 
 [dependencies]
-# Tracks the branch carrying the keyboard, pointer, window and dock components
-# this application is written against. It is the default branch plus that work;
-# the default branch alone has the dock but not `Accordion` or `Avatar`, so the
-# window fails to load against it. Back to the default branch once it lands.
-gpui-shell = { git = "https://github.com/longbridge/gpui-component.git", branch = "shell-keyboard-pointer-actions-window" }
+# The local checkout, while the dock fix in it is unpublished: a dock's own box
+# moved out of `DockSkin` and into `DockArea::render_dock`, so a script-drawn
+# dock is a column again. Back to the git branch once that lands.
+gpui-shell = { path = "../gpui-component/crates/shell" }
 # Direct for one line. `set_theme` carries the semantic tokens only, so the
 # color base draws a dock's split handle from is out of the script's reach and
 # the host has to project it -- see the `resizable.handle` write in `main`.
-gpui-base = { git = "https://github.com/longbridge/gpui-component.git", branch = "shell-keyboard-pointer-actions-window" }
+gpui-base = { path = "../gpui-component/crates/base" }
 gpui = { git = "https://github.com/zed-industries/zed", features = ["profiler"] }
 gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
