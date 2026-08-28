@@ -1,5 +1,6 @@
-import { Button, child_view, h_flex, text, v_flex } from "gpui";
 
+import { Button, h_flex, v_flex } from "gpui-base";
+import { holdContext } from "./context.js";
 import LongbridgeApp from "./main.js";
 
 /** @param {string} iso @param {number} close */
@@ -14,7 +15,8 @@ const candle = (iso, close) => ({
 });
 
 export default class RetainedPriceChartProbe extends LongbridgeApp {
-  init() {
+  init(_props, cx) {
+    holdContext(cx);
     this.selectedSymbol = "AAPL.US";
     this.candleCache = new Map([
       [
@@ -25,7 +27,7 @@ export default class RetainedPriceChartProbe extends LongbridgeApp {
     this.chartState = { symbol: this.selectedSymbol, state: "ready" };
     this.chartGeneration = 0;
     this.chartThemeRevision = 0;
-    this.initPriceChartView();
+    this.initPriceChartView(cx);
     this.parentRenders = 0;
   }
 
@@ -48,23 +50,23 @@ export default class RetainedPriceChartProbe extends LongbridgeApp {
               .w(160)
               .h(40)
               .on_click(() => this.publishChartState("loading"))
-              .child(text(`Loading · Parent renders: ${this.parentRenders}`)),
+              .child(`Loading · Parent renders: ${this.parentRenders}`),
           )
           .child(
             Button.new("chart-error")
               .w(160)
               .h(40)
               .on_click(() => this.publishChartState("error"))
-              .child(text("Error")),
+              .child("Error"),
           )
           .child(
             Button.new("chart-ready")
               .w(160)
               .h(40)
               .on_click(() => this.publishChartState("ready"))
-              .child(text("Ready")),
+              .child("Ready"),
           ),
       )
-      .child(child_view(this.priceChart));
+      .child(this.priceChart);
   }
 }

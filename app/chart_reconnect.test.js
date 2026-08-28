@@ -1,9 +1,10 @@
-import { text } from "gpui";
 
 import LongbridgeApp from "./main.js";
+import { holdContext } from "./context.js";
 
 export default class ChartReconnectProbe extends LongbridgeApp {
-  init() {
+  init(_props, cx) {
+    holdContext(cx);
     this.streamGeneration = 4;
     this.chartGeneration = 9;
     this.stream = {
@@ -22,6 +23,6 @@ export default class ChartReconnectProbe extends LongbridgeApp {
   }
 
   render() {
-    return text("ok");
+    return "ok";
   }
 }

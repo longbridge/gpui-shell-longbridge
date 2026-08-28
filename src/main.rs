@@ -1,6 +1,9 @@
 use std::{path::PathBuf, rc::Rc, time::Duration};
 
-use gpui::{AppContext as _, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size};
+use gpui::{
+    AnyElement, AppContext as _, Bounds, Context, IntoElement, Render, SharedString,
+    TitlebarOptions, Window, WindowBounds, WindowOptions, px, size,
+};
 use gpui_shell::{AppAssets, ShellRoot, ShellRuntime, plugin::PluginManager};
 
 const PLUGIN_ID: &str = "com.longbridge.gpui-shell-example";
@@ -59,15 +62,24 @@ fn main() {
 
             let runtime = Rc::clone(&runtime);
             cx.open_window(window_options(cx), move |window, cx| {
-                plugins
-                    .load(&runtime, PLUGIN_ID, |_| true, window, cx)
-                    .expect("failed to load Longbridge application");
-                let view = plugins
-                    .plugin(PLUGIN_ID)
-                    .expect("Longbridge plugin was not retained")
-                    .view()
-                    .clone();
-                let content = view.into();
+                // Not `expect`. This closure runs inside GPUI's window-open
+                // callback, which cannot unwind, so a panic here does not fail
+                // the load -- it aborts the process, and the message scrolls
+                // past in a terminal the user may not even be looking at. A
+                // script that will not load is an ordinary outcome (a typo, a
+                // missing capability, a runtime older than the application),
+                // and gpui-shell publishes `failure_surface` for exactly it:
+                // the window opens and says what happened.
+                let content = match load_application(&mut *plugins, &runtime, window, cx) {
+                    Ok(view) => view,
+                    Err(error) => {
+                        eprintln!("the Longbridge application did not load: {error}");
+                        cx.new(|_| LoadFailure {
+                            message: error.into(),
+                        })
+                        .into()
+                    }
+                };
                 // TODO: hot reload is off while the host cannot have both it
                 // and the manifest's capabilities. `ShellRuntime::watch` reads
                 // the application back off the `ShellRoot`, and only
@@ -81,6 +93,43 @@ fn main() {
             })
             .expect("failed to open Longbridge window");
         });
+}
+
+/// Loads the application and hands back the view to mount, or the reason not to.
+fn load_application(
+    plugins: &mut PluginManager,
+    runtime: &Rc<ShellRuntime>,
+    window: &mut Window,
+    cx: &mut gpui::App,
+) -> Result<gpui::AnyView, String> {
+    plugins
+        .load(runtime, PLUGIN_ID, |_| true, window, cx)
+        .map_err(|error| format!("{error:#}"))?;
+    let plugin = plugins
+        .plugin(PLUGIN_ID)
+        .ok_or_else(|| format!("the manager did not retain `{PLUGIN_ID}` after loading"))?;
+    Ok(plugin.view().clone().into())
+}
+
+/// What the window shows when the application did not load.
+///
+/// The surface itself is gpui-shell's, so this reads the same as every other
+/// load failure that runtime reports and takes its colors from the same
+/// semantic roles.
+struct LoadFailure {
+    message: SharedString,
+}
+
+impl Render for LoadFailure {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        AnyElement::from(gpui_shell::failure_surface(
+            "This application could not be loaded",
+            &self.message,
+            "Fix the reason above and start it again.",
+            window,
+            cx,
+        ))
+    }
 }
 
 fn window_options(cx: &gpui::App) -> WindowOptions {

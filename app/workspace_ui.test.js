@@ -1,4 +1,6 @@
-import { text, v_flex } from "gpui";
+
+import { v_flex } from "gpui-base";
+import { holdContext } from "./context.js";
 import LongbridgeApp from "./main.js";
 
 function quote(index) {
@@ -27,7 +29,8 @@ function quote(index) {
 }
 
 export default class WorkspaceUiProbe extends LongbridgeApp {
-  init() {
+  init(_props, cx) {
+    holdContext(cx);
     // A probe replaces init wholesale, so it owes the view the state a render
     // reaches for unconditionally.
     this.initInteractionState();
@@ -67,7 +70,7 @@ export default class WorkspaceUiProbe extends LongbridgeApp {
     this.chartState = { symbol: this.selectedSymbol, state: "ready" };
     this.chartGeneration = 0;
     this.chartThemeRevision = 0;
-    this.initPriceChartView();
+    this.initPriceChartView(cx);
     this.clock = null;
   }
 
@@ -79,7 +82,7 @@ export default class WorkspaceUiProbe extends LongbridgeApp {
         // A probe-only state read used by the host interaction test. The table
         // itself is still real: a click must travel through its virtual-list
         // wrapper before this value can change.
-        .child(text(`Selected ${this.selectedSymbol}`))
+        .child(`Selected ${this.selectedSymbol}`)
     );
   }
 }

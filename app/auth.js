@@ -2,7 +2,7 @@
 // dynamic client registration: register this application once out-of-band and
 // replace CLIENT_ID with that public identifier before distributing it.
 
-import { sleep, store } from "gpui";
+import { context } from "./context.js";
 
 /**
  * The one, fixed public-client identifier for this application.
@@ -92,20 +92,29 @@ function tokensFromStore(value) {
 
 /** @returns {Tokens | null} */
 export function loadTokens() {
-  return tokensFromStore(store.get(TOKEN_STORE_KEY));
+  const saved = localStorage.getItem(TOKEN_STORE_KEY);
+  if (saved === null) return null;
+  try {
+    return tokensFromStore(JSON.parse(saved));
+  } catch {
+    // A value that will not parse means the same thing as one that parses to
+    // the wrong shape: not signed in. Throwing here would take the window down
+    // at startup over a file the user cannot see.
+    return null;
+  }
 }
 
 /** @param {Tokens} tokens */
 export async function saveTokens(tokens) {
-  store.set(TOKEN_STORE_KEY, tokens);
+  localStorage.setItem(TOKEN_STORE_KEY, JSON.stringify(tokens));
   // Token rotation must be durable before a caller starts using the new access
   // token: otherwise a crash would strand the previous refresh token.
-  await store.flush();
+  await localStorage.flush();
 }
 
 export async function clearTokens() {
-  store.remove(TOKEN_STORE_KEY);
-  await store.flush();
+  localStorage.removeItem(TOKEN_STORE_KEY);
+  await localStorage.flush();
 }
 
 /**
@@ -215,7 +224,8 @@ async function pollDeviceRegion(authorization, clientId, region, fetchImpl, now)
 export async function pollDeviceAuthorization(authorization, dependencies = {}) {
   const clientId = configuredClientId();
   const fetchImpl = dependencies.fetch || fetch;
-  const sleepImpl = dependencies.sleep || sleep;
+  const sleepImpl =
+    dependencies.sleep || (/** @param {number} ms */ (ms) => context().sleep(ms));
   const now = dependencies.now || Date.now;
   const save = dependencies.saveTokens || saveTokens;
   let intervalMs = authorization.intervalMs || DEFAULT_POLL_INTERVAL_MS;

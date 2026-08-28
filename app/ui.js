@@ -1,44 +1,27 @@
 // Compact presentation primitives for the read-only terminal. Every visual
 // decision resolves from the call-scoped semantic theme.
 
-import {
-  Background,
-  Button,
-  Input,
-  Link,
-  PathBuilder,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-  div,
-  h_flex,
-  paint_path,
-  svg,
-  text,
-  v_flex,
-} from "gpui";
+import { Background, PathBuilder, div, svg } from "gpui";
+import { Button, Input, Link, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, h_flex, v_flex } from "gpui-base";
 import { formatCompactNumber, quoteFreshness, tradeStatusLabel } from "./market.js";
 import { foldAllocationSlices } from "./portfolio.js";
 
-/** @param {import("gpui").Theme} tokens @param {string | number} value @param {number} [size] */
+/** @param {import("gpui-base").Theme} tokens @param {string | number} value @param {number} [size] */
 export const label = (tokens, value, size = 12) =>
-  text(value).text_size(size).line_height(1.25).text_color(tokens.foreground);
+  div().text_size(size).line_height(1.25).text_color(tokens.foreground).child(value);
 
-/** @param {import("gpui").Theme} tokens @param {string | number} value @param {number} [size] */
+/** @param {import("gpui-base").Theme} tokens @param {string | number} value @param {number} [size] */
 export const numeric = (tokens, value, size = 12) =>
   label(tokens, value, size).font_family("monospace");
 
-/** @param {import("gpui").Theme} tokens @param {string | number} value */
+/** @param {import("gpui-base").Theme} tokens @param {string | number} value */
 export const muted = (tokens, value) =>
-  text(value).text_size(11).line_height(1.25).text_color(tokens.muted_foreground);
+  div().text_size(11).line_height(1.25).text_color(tokens.muted_foreground).child(value);
 
-/** @param {import("gpui").Theme} tokens */
+/** @param {import("gpui-base").Theme} tokens */
 export const rule = (tokens) => div().w_full().h(1).bg(tokens.border);
 
-/** @param {import("gpui").Theme} tokens */
+/** @param {import("gpui-base").Theme} tokens */
 export const panel = (tokens) =>
   v_flex()
     .bg(tokens.surface)
@@ -48,7 +31,7 @@ export const panel = (tokens) =>
     .overflow_hidden();
 
 /**
- * @param {import("gpui").Theme} tokens
+ * @param {import("gpui-base").Theme} tokens
  * @param {string} id
  * @param {string} caption
  * @param {(event: import("gpui").ClickEvent, cx: import("gpui").Context) => void} onClick
@@ -113,11 +96,11 @@ export function action(tokens, id, caption, onClick, options = {}) {
       }),
     )
     .when(disabled, (element) => element.opacity(0.42))
-    .child(text(caption));
+    .child(caption);
 }
 
 /**
- * @param {import("gpui").Theme} tokens
+ * @param {import("gpui-base").Theme} tokens
  * @param {(event: import("gpui").ClickEvent, cx: import("gpui").Context) => void} onClick
  */
 export function themeButton(tokens, onClick) {
@@ -146,7 +129,7 @@ export function themeButton(tokens, onClick) {
     );
 }
 
-/** @param {import("gpui").Theme} tokens @param {string} id @param {string} caption @param {string} url */
+/** @param {import("gpui-base").Theme} tokens @param {string} id @param {string} caption @param {string} url */
 export function externalLink(tokens, id, caption, url) {
   return Link.new(id)
     .href(url)
@@ -158,10 +141,10 @@ export function externalLink(tokens, id, caption, url) {
     .focus((style) =>
       style.bg(tokens.accent).text_color(tokens.accent_foreground).border_color(tokens.ring),
     )
-    .child(text(caption));
+    .child(caption);
 }
 
-/** @param {import("gpui").Theme} tokens @param {string} value */
+/** @param {import("gpui-base").Theme} tokens @param {string} value */
 export function connectionPill(tokens, value) {
   const active = value === "connected";
   const waiting =
@@ -226,7 +209,7 @@ export const TABLE_HEADER_HEIGHT = 24;
  * A table's header row group. `TableHead` carries a one-based column index
  * because a cell that does not know its column announces itself out of place.
  *
- * @param {import("gpui").Theme} tokens
+ * @param {import("gpui-base").Theme} tokens
  * @param {string} id
  * @param {{ title: string, size: (el: import("gpui").Element) => import("gpui").Element }[]} columns
  */
@@ -273,7 +256,7 @@ const WATCHLIST_COLUMNS = [
   { title: "Session", size: (el) => el.flex_1().justify_end() },
 ];
 
-/** @param {import("gpui").Theme} tokens */
+/** @param {import("gpui-base").Theme} tokens */
 export function watchlistHeader(tokens) {
   return tableHeaderRow(tokens, "watchlist", WATCHLIST_COLUMNS);
 }
@@ -286,7 +269,7 @@ export function watchlistHeader(tokens) {
  * `Button` per row carrying the menu-item role — which is what makes it a menu
  * to a screen reader and not only to a reader of this file.
  *
- * @param {import("gpui").Theme} tokens
+ * @param {import("gpui-base").Theme} tokens
  * @param {string} id
  * @param {string} caption
  * @param {(event: import("gpui").ClickEvent, cx: import("gpui").Context) => void} onClick
@@ -321,7 +304,7 @@ export function menuItem(tokens, id, caption, onClick, options = {}) {
  * The surface a `Popover` opens. `role` separates the two uses: a list of
  * commands announces itself as a menu, an explanatory card as a plain group.
  *
- * @param {import("gpui").Theme} tokens
+ * @param {import("gpui-base").Theme} tokens
  * @param {{ width?: number, menu?: boolean }} [options]
  */
 export function popoverSurface(tokens, options = {}) {
@@ -345,8 +328,8 @@ export function popoverSurface(tokens, options = {}) {
  * lives on the view — `InputState.new()` needs a live host call and belongs in
  * `init`, never in a render.
  *
- * @param {import("gpui").Theme} tokens
- * @param {import("gpui").InputStateHandle} state
+ * @param {import("gpui-base").Theme} tokens
+ * @param {import("gpui-base").InputStateHandle} state
  * @param {number} [width]
  */
 export function filterInput(tokens, state, width = 180) {
@@ -379,7 +362,7 @@ export function filterInput(tokens, state, width = 180) {
  * still reads as open. The border is always there and only changes color, so
  * the ring never moves the icon.
  *
- * @param {import("gpui").Theme} tokens
+ * @param {import("gpui-base").Theme} tokens
  * @param {string} id
  * @param {string} hint
  * @param {boolean} [open]
@@ -425,7 +408,7 @@ export const QUOTE_ROW_HEIGHT = 44;
  * is reported separately as the virtual list's stable instrument key, not this
  * transient layout index.
  *
- * @param {import("gpui").Theme} tokens
+ * @param {import("gpui-base").Theme} tokens
  * @param {LongbridgeQuoteRow} quote
  * @param {boolean} selected
  * @param {number} rowIndex
@@ -535,7 +518,7 @@ function metricRows(tokens, entries) {
     );
 }
 
-/** @param {import("gpui").Theme} tokens @param {LongbridgeQuoteRow} quote @param {number} [now] */
+/** @param {import("gpui-base").Theme} tokens @param {LongbridgeQuoteRow} quote @param {number} [now] */
 export function quoteDetail(tokens, quote, now = Date.now(), pulseOpacity = 1) {
   const tone = quoteTone(tokens, quote.change);
   return v_flex()
@@ -638,7 +621,7 @@ function donutSlice(tokens, slice, index, total, count) {
     const angle = start + ((end - start) * step) / steps;
     points.push([`${50 + Math.cos(angle) * 29}%`, `${50 + Math.sin(angle) * 29}%`]);
   }
-  return paint_path(
+  return window.paint_path(
     PathBuilder.fill().add_polygon(points).build(),
     Background.solid(allocationColor(tokens, slice, index)),
   )
@@ -646,7 +629,7 @@ function donutSlice(tokens, slice, index, total, count) {
     .inset_0();
 }
 
-/** @param {import("gpui").Theme} tokens @param {ReturnType<import("./portfolio.js").allocationInUsd>} group */
+/** @param {import("gpui-base").Theme} tokens @param {ReturnType<import("./portfolio.js").allocationInUsd>} group */
 export function allocationChart(tokens, group) {
   let offset = 0;
   const slices = foldAllocationSlices(group).map((slice) => {
@@ -731,7 +714,7 @@ export function allocationChart(tokens, group) {
     );
 }
 
-/** @param {import("gpui").Theme} tokens @param {{ title: string, value: string }[]} entries */
+/** @param {import("gpui-base").Theme} tokens @param {{ title: string, value: string }[]} entries */
 export function detailGrid(tokens, entries) {
   return v_flex()
     .gap(tokens.spacing.sm)
@@ -752,7 +735,7 @@ function pnlTone(tokens, value) {
 }
 
 /**
- * @param {import("gpui").Theme} tokens
+ * @param {import("gpui-base").Theme} tokens
  * @param {{ netAssets: string, totalCash: string, buyingPower: string, currency: string }} account
  * @param {{ currency: string, todayPnl: string, todayPnlValue: number, totalPnl: string, totalPnlValue: number }[]} summaries
  */
@@ -804,7 +787,7 @@ export function portfolioSummary(tokens, account, summaries) {
     .child(metric("Buying power", `${account.buyingPower} ${account.currency}`));
 }
 
-/** @param {import("gpui").Theme} tokens */
+/** @param {import("gpui-base").Theme} tokens */
 const HOLDINGS_COLUMNS = [
   { title: "Instrument", size: (el) => el.w("26%") },
   { title: "Quantity", size: (el) => el.w("12%").justify_end() },
@@ -827,7 +810,7 @@ export function holdingsHeader(tokens) {
 export const HOLDING_ROW_HEIGHT = 42;
 
 /**
- * @param {import("gpui").Theme} tokens
+ * @param {import("gpui-base").Theme} tokens
  * @param {LongbridgeHoldingRow} holding
  * @param {number} rowIndex
  */
@@ -905,7 +888,7 @@ export function holdingRow(tokens, holding, rowIndex = 0) {
  * to be copied off a screen and typed into a phone is worth the character gaps
  * more than most text is.
  *
- * @param {import("gpui").Theme} tokens
+ * @param {import("gpui-base").Theme} tokens
  * @param {string} code
  */
 export function deviceCodeBox(tokens, code) {
@@ -929,7 +912,7 @@ export function deviceCodeBox(tokens, code) {
  * approve — and the screen says so rather than leaving it to be inferred from
  * the order of the controls.
  *
- * @param {import("gpui").Theme} tokens
+ * @param {import("gpui-base").Theme} tokens
  * @param {number} index
  * @param {string} title
  */
@@ -951,7 +934,7 @@ export function step(tokens, index, title) {
     .child(muted(tokens, title));
 }
 
-/** @param {import("gpui").Theme} tokens @param {string} title @param {string} detail */
+/** @param {import("gpui-base").Theme} tokens @param {string} title @param {string} detail */
 export function emptyPanel(tokens, title, detail) {
   return v_flex()
     .items_center()
@@ -963,7 +946,7 @@ export function emptyPanel(tokens, title, detail) {
     .child(muted(tokens, detail));
 }
 
-/** @param {import("gpui").Theme} tokens @param {string} value */
+/** @param {import("gpui-base").Theme} tokens @param {string} value */
 export function errorMessage(tokens, value) {
   return h_flex()
     .w_full()
@@ -975,12 +958,13 @@ export function errorMessage(tokens, value) {
     .bg(tokens.surface)
     .child(div().w(3).self_stretch().rounded(tokens.radius.full).bg(tokens.destructive))
     .child(
-      text(value)
+      div()
         .flex_1()
         .min_w(0)
         .whitespace_normal()
         .text_size(12)
         .line_height(1.35)
-        .text_color(tokens.foreground),
+        .text_color(tokens.foreground)
+        .child(value),
     );
 }
