@@ -39,9 +39,9 @@ import {
 } from "./auth.js";
 import { get } from "./http.js";
 import {
+  applyQuote,
   filterRows,
   initialQuotes,
-  mergeQuote,
   sortLikeTerminal,
   streamStatusSummary,
   watchlistInstruments,
@@ -390,11 +390,15 @@ export default class LongbridgeApp extends View {
 
   /** @param {unknown} quote */
   receiveQuote(quote) {
-    this.quotes = sortLikeTerminal(
-      this.quotes.map((current) => mergeQuote(current, quote)),
-      this.lastTick,
-    );
-    this.portfolioQuotes = this.portfolioQuotes.map((current) => mergeQuote(current, quote));
+    // Deliberately no re-sort here. `sortLikeTerminal` ranks a row from trade
+    // session counts taken across the whole list, so running it per quote made
+    // the connect burst -- the whole watchlist twice over, snapshot plus
+    // isFirstPush, in one synchronous run -- cost seconds and overrun the
+    // sandbox's task budget, which unwound the stream before it could reach
+    // `connected`. The one-second clock already re-sorts.
+    const receivedAt = Date.now();
+    this.quotes = applyQuote(this.quotes, quote, receivedAt);
+    this.portfolioQuotes = applyQuote(this.portfolioQuotes, quote, receivedAt);
     if (quote && typeof quote === "object" && quote.symbol === this.selectedSymbol) {
       const candles = this.candleCache.get(this.selectedSymbol);
       if (candles) {

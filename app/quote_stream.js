@@ -27,6 +27,9 @@ export const QUOTE_WS_URL = "wss://openapi-quote.longbridge.com/v2?version=1&cod
 
 const DEFAULT_TIMEOUT_MILLIS = 5_000;
 const DEFAULT_HEARTBEAT_MILLIS = 30_000;
+// Generous next to the per-request timeout: a handshake is an OTP fetch plus
+// three round trips plus the snapshot it hands to onQuote.
+const DEFAULT_HANDSHAKE_MILLIS = 20_000;
 const DEFAULT_RETRY_INITIAL_MILLIS = 1_000;
 const DEFAULT_RETRY_MAX_MILLIS = 30_000;
 
@@ -114,6 +117,10 @@ export function createQuoteStream(options) {
     options.heartbeatMillis ?? DEFAULT_HEARTBEAT_MILLIS,
     "heartbeatMillis",
   );
+  const handshakeMillis = requirePositiveInteger(
+    options.handshakeMillis ?? DEFAULT_HANDSHAKE_MILLIS,
+    "handshakeMillis",
+  );
   const retryInitialMillis = requirePositiveInteger(
     options.retryInitialMs ?? DEFAULT_RETRY_INITIAL_MILLIS,
     "retryInitialMs",
@@ -127,6 +134,7 @@ export function createQuoteStream(options) {
   let current = null;
   let retryHandle = null;
   let heartbeatHandle = null;
+  let handshakeHandle = null;
   let reconnectAttempt = 0;
   let startPromise = null;
 
@@ -136,6 +144,37 @@ export function createQuoteStream(options) {
   function clearHeartbeat() {
     cancel(heartbeatHandle);
     heartbeatHandle = null;
+  }
+
+  function clearHandshake() {
+    cancel(handshakeHandle);
+    handshakeHandle = null;
+  }
+
+  /**
+   * Bounds how long a session may stay mid-handshake.
+   *
+   * `connectAndSubscribe` cannot rely on its own catch to clean up after
+   * itself. The sandbox interrupts a script that overruns its execution
+   * budget, and that interrupt is not catchable, so it unwinds past every
+   * `catch` on the way out -- including the one that calls `lost`. A session
+   * cut down that way still looks active: the socket is open, the
+   * subscription is live, pushes keep arriving. Nothing else in this module
+   * can tell that it never reached `connected`, so nothing else will ever
+   * restart it. This deadline is the only thing that will.
+   *
+   * `getSession` is read on expiry rather than captured, because the
+   * handshake is armed before there is a session to hand over.
+   */
+  function armHandshake(getSession) {
+    clearHandshake();
+    handshakeHandle = timers.after(handshakeMillis, () => {
+      handshakeHandle = null;
+      const session = getSession();
+      const error = new Error(`quote stream handshake did not finish in ${handshakeMillis}ms`);
+      if (session && active(session)) lost(session, error);
+      else if (!stopped && !retryHandle) scheduleReconnect(error);
+    });
   }
 
   function rejectPending(session, error) {
@@ -174,6 +213,7 @@ export function createQuoteStream(options) {
     if (!active(session)) return;
     current = null;
     clearHeartbeat();
+    clearHandshake();
     rejectPending(session, error);
     closeSocket(session.socket);
     scheduleReconnect(error);
@@ -279,6 +319,7 @@ export function createQuoteStream(options) {
 
   async function connectAndSubscribe() {
     let session = null;
+    armHandshake(() => session);
     try {
       emitStatus("connecting");
       const socket = await transport.connect(url, { headers: handshakeHeaders });
@@ -331,6 +372,9 @@ export function createQuoteStream(options) {
       reconnectAttempt = 0;
       startHeartbeat(session);
       emitStatus("connected");
+      // Disarmed last, so an interrupt anywhere above still expires into a
+      // reconnect rather than leaving the session stranded.
+      clearHandshake();
     } catch (error) {
       if (session && active(session)) lost(session, error);
       else if (!stopped && !retryHandle) scheduleReconnect(error);
@@ -355,6 +399,7 @@ export function createQuoteStream(options) {
       cancel(retryHandle);
       retryHandle = null;
       clearHeartbeat();
+      clearHandshake();
       const session = current;
       current = null;
       if (session) {
