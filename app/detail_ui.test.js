@@ -56,6 +56,32 @@ export default class DetailUiProbe extends LongbridgeApp {
     this.chartState = { symbol: this.selectedSymbol, state: "ready" };
     this.chartGeneration = 0;
     this.chartThemeRevision = 0;
+    this.depthState = {
+      symbol: this.selectedSymbol,
+      status: "ready",
+      asks: [
+        { position: 1, price: "188.10", volume: 400n, orderNum: 8n },
+        { position: 2, price: "188.20", volume: 300n, orderNum: 5n },
+      ],
+      bids: [
+        { position: 1, price: "188.00", volume: 900n, orderNum: 12n },
+        { position: 2, price: "187.90", volume: 100n, orderNum: 2n },
+      ],
+      error: "",
+    };
+    this.tradesState = {
+      symbol: this.selectedSymbol,
+      status: "ready",
+      trades: Array.from({ length: 21 }, (_entry, index) => ({
+        price: `188.${String(index).padStart(2, "0")}`,
+        volume: BigInt((index + 1) * 100),
+        timestamp: 1_700_000_000n - BigInt(index),
+        tradeType: "T",
+        direction: index % 3 === 0 ? 1 : index % 3 === 1 ? -1 : 0,
+        tradeSession: 0,
+      })),
+      error: "",
+    };
     this.initPriceChartView(cx);
     this.clock = null;
 

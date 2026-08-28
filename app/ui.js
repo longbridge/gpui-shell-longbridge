@@ -23,6 +23,7 @@ import {
   v_flex,
 } from "gpui-base";
 import { formatCompactNumber, quoteFreshness, tradeStatusLabel } from "./market.js";
+import { tradeIdentity, tradeVolumeRatio } from "./market_detail.js";
 import { allocationColor, avatarColor, changeTone, statusColors, valueTone } from "./palette.js";
 import { foldAllocationSlices } from "./portfolio.js";
 
@@ -368,9 +369,21 @@ const WATCHLIST_COLUMNS = [
   { title: "Session", size: (el) => el.flex_1(), align: (el) => el.justify_end() },
 ];
 
-/** @param {import("gpui-base").Theme} tokens */
-export function watchlistHeader(tokens) {
-  return tableHeaderRow(tokens, "watchlist", WATCHLIST_COLUMNS);
+/** @param {import("gpui-base").Theme} tokens @param {boolean} [compact] */
+export function watchlistHeader(tokens, compact = false) {
+  // A narrow dock has room for the object and its current value. The movement,
+  // volume and session lanes are secondary readings; keeping them would force
+  // every number into the same few pixels and make the primary data overlap.
+  return tableHeaderRow(
+    tokens,
+    "watchlist",
+    compact
+      ? [
+          { title: "Instrument", size: (el) => el.w("60%") },
+          { title: "Last", size: (el) => el.flex_1(), align: (el) => el.justify_end() },
+        ]
+      : WATCHLIST_COLUMNS,
+  );
 }
 
 /**
@@ -465,11 +478,7 @@ export function filterInput(tokens, state, width = 180) {
  * @param {import("gpui-base").Theme} tokens
  */
 export function tableToolbar(tokens) {
-  return h_flex()
-    .items_center()
-    .justify_between()
-    .px(tokens.spacing.sm)
-    .py(tokens.spacing.sm);
+  return h_flex().items_center().justify_between().px(tokens.spacing.sm).py(tokens.spacing.sm);
 }
 
 /**
@@ -551,7 +560,7 @@ function interactiveTableRow(tokens, row, selected = false) {
  * @param {number} rowIndex
  * @param {number} [now]
  */
-export function quoteRow(tokens, quote, selected, rowIndex = 0, now = Date.now()) {
+export function quoteRow(tokens, quote, selected, rowIndex = 0, now = Date.now(), compact = false) {
   const tone = changeTone(tokens, quote.change);
   const cell = (column, build) => build(TableCell.new(`quote-${quote.symbol}-${column}`, column));
   return interactiveTableRow(
@@ -575,7 +584,7 @@ export function quoteRow(tokens, quote, selected, rowIndex = 0, now = Date.now()
         element
           .flex()
           .items_center()
-          .w("31%")
+          .w(compact ? "60%" : "31%")
           .gap(tokens.spacing.sm)
           // The badge is an `Avatar` with only its fallback filled: there is no
           // per-market artwork in the application directory, and an image that
@@ -585,45 +594,287 @@ export function quoteRow(tokens, quote, selected, rowIndex = 0, now = Date.now()
             v_flex()
               .min_w(0)
               .gap(tokens.spacing.xxs)
-              .child(label(tokens, quote.code))
-              .child(muted(tokens, quote.name)),
+              .child(label(tokens, quote.code).truncate())
+              .child(muted(tokens, quote.name).truncate()),
           ),
       ),
     )
     .child(
       cell(2, (element) =>
-        element.flex().w("19%").justify_end().child(numeric(tokens, quote.last)),
-      ),
-    )
-    .child(
-      cell(3, (element) =>
         element
           .flex()
-          .flex_col()
-          .w("18%")
-          .items_end()
-          .gap(tokens.spacing.xxs)
-          .child(numeric(tokens, quote.changePercent).text_color(tone))
-          .child(numeric(tokens, quote.change).text_color(tone)),
-      ),
-    )
-    .child(
-      cell(4, (element) =>
-        element
-          .flex()
-          .w("16%")
+          .w(compact ? "40%" : "19%")
+          .min_w(0)
           .justify_end()
-          .child(muted(tokens, formatCompactNumber(quote.volume))),
+          .child(numeric(tokens, quote.last).truncate()),
       ),
     )
-    .child(
-      cell(5, (element) =>
-        element
-          .flex()
-          .flex_1()
-          .justify_end()
-          .child(muted(tokens, tradeStatusLabel(quote))),
+    .when(!compact, (element) =>
+      element.child(
+        cell(3, (element) =>
+          element
+            .flex()
+            .flex_col()
+            .w("18%")
+            .items_end()
+            .gap(tokens.spacing.xxs)
+            .child(numeric(tokens, quote.changePercent).text_color(tone))
+            .child(numeric(tokens, quote.change).text_color(tone)),
+        ),
       ),
+    )
+    .when(!compact, (element) =>
+      element.child(
+        cell(4, (element) =>
+          element
+            .flex()
+            .w("16%")
+            .justify_end()
+            .child(muted(tokens, formatCompactNumber(quote.volume))),
+        ),
+      ),
+    )
+    .when(!compact, (element) =>
+      element.child(
+        cell(5, (element) =>
+          element
+            .flex()
+            .flex_1()
+            .justify_end()
+            .child(muted(tokens, tradeStatusLabel(quote))),
+        ),
+      ),
+    );
+}
+
+function detailStatus(tokens, state, empty) {
+  if (state?.status === "loading") return muted(tokens, "Loading live market data…");
+  if (state?.status === "error")
+    return muted(tokens, state.error || "Live market data is unavailable. Reconnect to try again.");
+  return muted(tokens, empty);
+}
+
+function detailNumber(value) {
+  return value === undefined || value === null ? "—" : formatCompactNumber(value);
+}
+
+function detailTime(value) {
+  const seconds = typeof value === "bigint" ? Number(value) : Number(value);
+  if (!Number.isFinite(seconds) || seconds <= 0) return "--";
+  return new Date(seconds * 1_000).toISOString().slice(11, 19);
+}
+
+function tradeDirection(tokens, direction) {
+  if (direction > 0) return { text: "↑ Up", tone: statusColors(tokens).up };
+  if (direction < 0) return { text: "↓ Down", tone: statusColors(tokens).down };
+  return { text: "• Neutral", tone: tokens.muted_foreground };
+}
+
+function depthRow(tokens, side, level, slot, compact) {
+  const present = Boolean(level);
+  const order =
+    present && level.orderNum !== undefined ? `${detailNumber(level.orderNum)} orders` : "";
+  return h_flex()
+    .id(`order-book-${side}-slot-${slot}`)
+    .items_center()
+    .min_w(0)
+    .h(22)
+    .gap(tokens.spacing.sm)
+    .px(tokens.spacing.sm)
+    .child(
+      muted(tokens, present ? `${side === "ask" ? "Ask" : "Bid"} ${level.position ?? slot}` : "")
+        .w(compact ? "25%" : "20%")
+        .min_w(0)
+        .truncate(),
+    )
+    .child(
+      numeric(tokens, present ? (level.price ?? "—") : "—")
+        .flex_1()
+        .min_w(0)
+        .truncate()
+        .text_right(),
+    )
+    .child(
+      numeric(tokens, present ? detailNumber(level.volume) : "—")
+        .w(compact ? "30%" : "25%")
+        .min_w(0)
+        .truncate()
+        .text_right(),
+    )
+    .when(!compact, (element) =>
+      element.child(muted(tokens, order).w("22%").min_w(0).truncate().text_right()),
+    );
+}
+
+/**
+ * The selected instrument's five-by-five depth book. Slots, rather than
+ * source-array positions, carry identity so a temporarily absent level does
+ * not move the ratio bar or reset a retained row between pushes.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {LongbridgeDepthState} state
+ * @param {{ bid: number, ask: number }} ratio
+ * @param {boolean} [compact]
+ */
+export function orderBookPanel(tokens, state, ratio, compact = false) {
+  const asks = Array.isArray(state?.asks) ? state.asks.slice(0, 5).reverse() : [];
+  const bids = Array.isArray(state?.bids) ? state.bids.slice(0, 5) : [];
+  const bidPercent = Math.round((ratio?.bid ?? 0) * 100);
+  const askPercent = Math.max(0, 100 - bidPercent);
+  const status =
+    state?.status === "ready" ? "Live" : state?.status === "idle" ? "Waiting" : state?.status;
+  return panel(tokens)
+    .id("order-book-panel")
+    .w_full()
+    .child(
+      h_flex()
+        .items_center()
+        .justify_between()
+        .px(tokens.spacing.md)
+        .py(tokens.spacing.sm)
+        .child(label(tokens, "Order Book", 13).font_weight(700))
+        .child(muted(tokens, status || "Waiting")),
+    )
+    .child(rule(tokens))
+    .child(
+      state?.status !== "ready"
+        ? v_flex()
+            .p(tokens.spacing.md)
+            .child(detailStatus(tokens, state, "No order book data"))
+        : v_flex()
+            .py(tokens.spacing.xs)
+            .children(
+              Array.from({ length: 5 }, (_item, index) =>
+                depthRow(tokens, "ask", asks[index], index + 1, compact),
+              ),
+            )
+            .child(
+              v_flex()
+                .gap(tokens.spacing.xs)
+                .px(tokens.spacing.sm)
+                .py(tokens.spacing.xs)
+                .child(
+                  h_flex()
+                    .h(5)
+                    .overflow_hidden()
+                    .bg(tokens.muted)
+                    .child(div().h_full().w(`${bidPercent}%`).bg(statusColors(tokens).up))
+                    .child(div().h_full().w(`${askPercent}%`).bg(statusColors(tokens).down)),
+                )
+                .child(
+                  h_flex()
+                    .justify_between()
+                    .child(muted(tokens, `Bid ${bidPercent}%`))
+                    .child(muted(tokens, `Ask ${askPercent}%`)),
+                ),
+            )
+            .children(
+              Array.from({ length: 5 }, (_item, index) =>
+                depthRow(tokens, "bid", bids[index], index + 1, compact),
+              ),
+            ),
+    );
+}
+
+function tradeRow(tokens, trade, maximum, compact) {
+  const direction = tradeDirection(tokens, trade.direction);
+  const ratio = Math.round(tradeVolumeRatio(trade.volume, maximum) * 100);
+  const identity = tradeIdentity(trade);
+  return h_flex()
+    .id(`time-sales-row-${identity}`)
+    .relative()
+    .items_center()
+    .min_w(0)
+    .h(24)
+    .gap(tokens.spacing.sm)
+    .px(tokens.spacing.sm)
+    .child(
+      muted(tokens, detailTime(trade.timestamp))
+        .w(compact ? "24%" : "22%")
+        .min_w(0)
+        .truncate(),
+    )
+    .child(
+      muted(tokens, direction.text)
+        .w(compact ? "25%" : "24%")
+        .min_w(0)
+        .truncate()
+        .text_color(direction.tone),
+    )
+    .child(
+      numeric(tokens, trade.price ?? "—")
+        .flex_1()
+        .min_w(0)
+        .truncate()
+        .text_right(),
+    )
+    .child(
+      div()
+        .relative()
+        .w(compact ? "28%" : "30%")
+        .min_w(0)
+        .h_full()
+        .overflow_hidden()
+        .child(div().absolute().right(0).top(3).bottom(3).w(`${ratio}%`).bg(tokens.muted))
+        .child(
+          numeric(tokens, detailNumber(trade.volume))
+            .relative()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_end()
+            .truncate(),
+        ),
+    );
+}
+
+/** @param {import("gpui-base").Theme} tokens @param {LongbridgeTradesState} state @param {boolean} [compact] */
+export function timeSalesPanel(tokens, state, compact = false) {
+  const trades = Array.isArray(state?.trades) ? state.trades.slice(0, 20) : [];
+  const maximum = trades.reduce((largest, trade) => {
+    const volume =
+      typeof trade?.volume === "bigint"
+        ? trade.volume < 0n
+          ? -trade.volume
+          : trade.volume
+        : Math.abs(Number(trade?.volume) || 0);
+    return typeof largest === "bigint" || typeof volume === "bigint"
+      ? BigInt(largest) > BigInt(volume)
+        ? largest
+        : volume
+      : Math.max(largest, volume);
+  }, 0);
+  const status =
+    state?.status === "ready"
+      ? `${trades.length} live trades`
+      : state?.status === "idle"
+        ? "Waiting"
+        : state?.status;
+  return panel(tokens)
+    .id("time-sales-panel")
+    .w_full()
+    .child(
+      h_flex()
+        .items_center()
+        .justify_between()
+        .px(tokens.spacing.md)
+        .py(tokens.spacing.sm)
+        .child(label(tokens, "Time & Sales", 13).font_weight(700))
+        .child(muted(tokens, status || "Waiting")),
+    )
+    .child(rule(tokens))
+    .child(
+      state?.status !== "ready"
+        ? v_flex()
+            .p(tokens.spacing.md)
+            .child(detailStatus(tokens, state, "No recent trades"))
+        : trades.length
+          ? v_flex()
+              .py(tokens.spacing.xs)
+              .children(trades.map((trade) => tradeRow(tokens, trade, maximum, compact)))
+          : v_flex()
+              .p(tokens.spacing.md)
+              .child(detailStatus(tokens, state, "No recent trades")),
     );
 }
 
@@ -740,10 +991,11 @@ function donutSlice(tokens, slice, index, total, count) {
     const angle = start + ((end - start) * step) / steps;
     points.push([`${50 + Math.cos(angle) * 29}%`, `${50 + Math.sin(angle) * 29}%`]);
   }
-  return window.paint_path(
-    PathBuilder.fill().add_polygon(points).build(),
-    Background.solid(allocationColor(tokens, slice, index)),
-  )
+  return window
+    .paint_path(
+      PathBuilder.fill().add_polygon(points).build(),
+      Background.solid(allocationColor(tokens, slice, index)),
+    )
     .absolute()
     .inset_0();
 }
@@ -1404,9 +1656,7 @@ export function calendarGrid(tokens, calendar, options) {
                     style.bg(tokens.accent).text_color(tokens.accent_foreground),
                   ),
                 )
-                .when(!future, (element) =>
-                  element.on_click((_event, cx) => onPick(day, cx)),
-                )
+                .when(!future, (element) => element.on_click((_event, cx) => onPick(day, cx)))
                 .child(String(Number(day.slice(8))));
             }),
           ),
@@ -1427,9 +1677,7 @@ export function calendarGrid(tokens, calendar, options) {
  */
 export function kbd(tokens, keystroke, state = {}) {
   const { down = false, held = false } = state;
-  const quietFill = /^#[0-9a-f]{6}$/i.test(tokens.muted)
-    ? `${tokens.muted}80`
-    : tokens.muted;
+  const quietFill = /^#[0-9a-f]{6}$/i.test(tokens.muted) ? `${tokens.muted}80` : tokens.muted;
   return (
     div()
       .flex_none()
@@ -1481,7 +1729,6 @@ export const PANE_INSET = 4;
 
 export const DOCK_BAR_HEIGHT = 30;
 
-
 /** The readable half of `shell:<application>/<panel>`. */
 export function panelTitle(name) {
   const slash = name.lastIndexOf("/");
@@ -1495,51 +1742,53 @@ export function panelTitle(name) {
  */
 export function dockTabBar(tokens, group) {
   const facesLeft = group.tabs.some((tab) => panelTitle(tab.name) === "Stock details");
-  return h_flex()
-    .h(DOCK_BAR_HEIGHT)
-    .w_full()
-    .items_center()
-    // The inset is outside the fill, and the fill is on the child. A tab bar
-    // coloured across its own padding would put `surface` where the gap is
-    // meant to be, and the gap would stop being a gap.
-    .when(facesLeft, (element) => element.pl(PANE_INSET))
-    .when(!facesLeft, (element) => element.pr(PANE_INSET))
-    .bg(tokens.background)
-    .child(
-      h_flex()
-        .size_full()
-        .items_center()
-        .bg(tokens.background)
-        .border_b(1)
-        .border_color(tokens.border)
-        .drop_tab(group)
-        .children(
-          group.tabs
-            .filter((tab) => tab.visible)
-            .map((tab) =>
-              h_flex()
-                .id(`dock-tab-${tab.id}`)
-                .h(DOCK_BAR_HEIGHT)
-                .items_center()
-                .gap(tokens.spacing.xs)
-                .px(tokens.spacing.md)
-                // A tab is a shape, not a word with a line after it. The active
-                // one is drawn on three sides so it joins the pane below rather
-                // than sitting on top of it -- that open bottom edge is what
-                // makes a tab read as a tab. There is no per-side border colour
-                // to paint it out with, so the side is simply not drawn.
-                .border_t(1)
-                .border_l(1)
-                .border_r(1)
-                .border_b(1)
-                .border_color(tokens.border)
-                .bg(tokens.background)
-                .text_size(11)
-                .text_color(tab.active ? tokens.foreground : tokens.muted_foreground)
-                .hover((style) => style.bg(tokens.accent))
-                .select_tab(group, tab.index)
-                .drag_tab(group, tab.index)
-                .child(panelTitle(tab.name))
+  return (
+    h_flex()
+      .h(DOCK_BAR_HEIGHT)
+      .w_full()
+      .items_center()
+      // The inset is outside the fill, and the fill is on the child. A tab bar
+      // coloured across its own padding would put `surface` where the gap is
+      // meant to be, and the gap would stop being a gap.
+      .when(facesLeft, (element) => element.pl(PANE_INSET))
+      .when(!facesLeft, (element) => element.pr(PANE_INSET))
+      .bg(tokens.background)
+      .child(
+        h_flex()
+          .size_full()
+          .items_center()
+          .bg(tokens.background)
+          .border_b(1)
+          .border_color(tokens.border)
+          .drop_tab(group)
+          .children(
+            group.tabs
+              .filter((tab) => tab.visible)
+              .map(
+                (tab) =>
+                  h_flex()
+                    .id(`dock-tab-${tab.id}`)
+                    .h(DOCK_BAR_HEIGHT)
+                    .items_center()
+                    .gap(tokens.spacing.xs)
+                    .px(tokens.spacing.md)
+                    // A tab is a shape, not a word with a line after it. The active
+                    // one is drawn on three sides so it joins the pane below rather
+                    // than sitting on top of it -- that open bottom edge is what
+                    // makes a tab read as a tab. There is no per-side border colour
+                    // to paint it out with, so the side is simply not drawn.
+                    .border_t(1)
+                    .border_l(1)
+                    .border_r(1)
+                    .border_b(1)
+                    .border_color(tokens.border)
+                    .bg(tokens.background)
+                    .text_size(11)
+                    .text_color(tab.active ? tokens.foreground : tokens.muted_foreground)
+                    .hover((style) => style.bg(tokens.accent))
+                    .select_tab(group, tab.index)
+                    .drag_tab(group, tab.index)
+                    .child(panelTitle(tab.name)),
                 // No close control, and not conditionally: this application has
                 // two panes and no way to reopen one, so closing a pane is a
                 // one-way door it should never hold open. `tab.closable` cannot
@@ -1547,9 +1796,10 @@ export function dockTabBar(tokens, group) {
                 // survive a restart, because `register_panel` has nowhere to
                 // carry them and `PanelScript::closable` is asked again on every
                 // load. So the control is simply not drawn.
-            ),
-        ),
-    );
+              ),
+          ),
+      )
+  );
 }
 
 /**

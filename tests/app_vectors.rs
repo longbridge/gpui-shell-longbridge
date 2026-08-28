@@ -186,7 +186,10 @@ fn non_omarchy_application_keeps_manual_theme_switching(cx: &mut TestAppContext)
     let main_path = fixture.root.join("main.js");
     let main = fs::read_to_string(&main_path)
         .expect("copied main.js")
-        .replace("const fallback = themes[window.appearance()];", "const fallback = themes.dark;")
+        .replace(
+            "const fallback = themes[window.appearance()];",
+            "const fallback = themes.dark;",
+        )
         .replace(
             "this.syncSystemTheme(cx);",
             "this.syncSystemTheme(cx);\n      window.dispatch_action(\"workspace::toggle-theme\");",
@@ -520,6 +523,27 @@ fn watchlist_row_renders_scannable_market_columns(cx: &mut TestAppContext) {
     assert!(!closed.contains(":selected[Bool(true)]"), "{closed}");
     assert!(open.contains(":selected[Bool(true)]"), "{open}");
 
+    let compact = rendered
+        .split_once(r#"Table "probe-watchlist-compact""#)
+        .map(|(_, compact)| compact)
+        .expect("compact watchlist table");
+    for expected in ["INSTRUMENT", "LAST", "AAPL", "188.00"] {
+        assert!(
+            compact.contains(expected),
+            "missing compact {expected}:\n{compact}"
+        );
+    }
+    for hidden in ["CHANGE", "VOLUME", "SESSION", "+4.44%", "8.59B", "Trading"] {
+        assert!(
+            !compact.contains(hidden),
+            "compact row must hide {hidden}:\n{compact}"
+        );
+    }
+    assert!(
+        compact.contains(".truncate") && compact.contains(".min_w[Number(0.0)]"),
+        "compact lanes must shrink and truncate rather than overlap:\n{compact}"
+    );
+
     // And focus must not paint like open. A Popover hands the keyboard back to
     // its trigger when it dismisses, so a focus style that fills the control
     // the way `open` does leaves a closed menu looking open.
@@ -571,7 +595,12 @@ fn authenticated_workspace_materializes_a_scrollable_watchlist(cx: &mut TestAppC
     // default hands back the content with none of the box base wraps a dock in.
     // Without a handler a side dock has no width, stops being a column and
     // falls into the flow below the centre.
-    for handler in [":tab_bar(fn)", ":empty_group(fn)", ":drop_indicator(fn)", ":dock(fn)"] {
+    for handler in [
+        ":tab_bar(fn)",
+        ":empty_group(fn)",
+        ":drop_indicator(fn)",
+        ":dock(fn)",
+    ] {
         assert!(
             area.contains(handler),
             "the dock draws its own {handler}: {area}"
@@ -1080,7 +1109,10 @@ fn stock_details_keep_the_chart_visible_beside_collapsible_metadata(cx: &mut Tes
         rendered.contains("Accordion \"stock-detail-sections\""),
         "{rendered}"
     );
-    assert!(rendered.contains("AccordionHeader :aria_level[Number(3.0)]"), "{rendered}");
+    assert!(
+        rendered.contains("AccordionHeader :aria_level[Number(3.0)]"),
+        "{rendered}"
+    );
     assert!(
         rendered.contains("AccordionTrigger \"detail-quote-trigger\" :on_change(fn)"),
         "{rendered}"
@@ -1097,7 +1129,10 @@ fn stock_details_keep_the_chart_visible_beside_collapsible_metadata(cx: &mut Tes
 
     // The third section is shut, and says so on the item rather than on each
     // half of it: the item owns `open` and passes it down.
-    assert!(rendered.contains("text \"About this instrument\""), "{rendered}");
+    assert!(
+        rendered.contains("text \"About this instrument\""),
+        "{rendered}"
+    );
     assert!(
         rendered.contains("AccordionItem :open[Bool(false)]"),
         "the shut section must carry its state on the item:\n{rendered}"
@@ -1125,6 +1160,55 @@ fn stock_details_keep_the_chart_visible_beside_collapsible_metadata(cx: &mut Tes
 
     // The retained chart child is still a child, and still not rebuilt here.
     assert!(rendered.contains("child_view #"), "{rendered}");
+
+    // Live market detail follows the chart in the one Stock Details scroll.
+    // These assertions are intentionally written before the panel exists: the
+    // fixture contains two levels and 21 trades, so a correct UI must reverse
+    // asks, retain the best prices beside the ratio, and cap the rendered
+    // tape at 20 rows.
+    assert!(rendered.contains("Order Book"), "{rendered}");
+    assert!(rendered.contains("Time & Sales"), "{rendered}");
+    assert!(
+        rendered.find("Order Book") > rendered.find("child_view #"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.find("Time & Sales") > rendered.find("Order Book"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("188.20") && rendered.contains("188.10"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("Bid 59%") && rendered.contains("Ask 41%"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("↑") && rendered.contains("↓") && rendered.contains("•"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("8 orders") && rendered.contains("12 orders"),
+        "{rendered}"
+    );
+    assert_eq!(
+        rendered.matches("time-sales-row-").count(),
+        20,
+        "{rendered}"
+    );
+    assert_eq!(
+        rendered.matches(":overflow_y_scrollbar").count(),
+        1,
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("order-book-ask-slot-1")
+            && rendered.contains("order-book-bid-slot-5")
+            && rendered.contains("time-sales-row-")
+            && rendered.contains(".truncate"),
+        "market-detail rows keep stable slots and shrink instead of overlapping:\n{rendered}"
+    );
 }
 
 #[gpui::test]
@@ -1301,7 +1385,8 @@ fn the_window_readout_follows_the_window_it_is_measuring(cx: &mut TestAppContext
 
     let narrow = redraw(&mut context, 700., "ctrl-alt-u");
     assert!(
-        narrow.contains("700\u{d7}800 \u{b7} 16px/rem \u{b7} light \u{b7} background \u{b7} narrow"),
+        narrow
+            .contains("700\u{d7}800 \u{b7} 16px/rem \u{b7} light \u{b7} background \u{b7} narrow"),
         "the readout must follow the window:\n{narrow}"
     );
 }
@@ -1438,7 +1523,14 @@ fn the_diagnostics_popover_answers_every_window_measurement(cx: &mut TestAppCont
     // legal from `render`, which is the half of the window API a script can
     // reach from there.
     for reading in [
-        "Viewport", "Bounds", "Rem size", "Line height", "Pointer", "Appearance", "Active", "State",
+        "Viewport",
+        "Bounds",
+        "Rem size",
+        "Line height",
+        "Pointer",
+        "Appearance",
+        "Active",
+        "State",
     ] {
         assert!(
             rendered.contains(&format!("text \"{reading}\"")),
@@ -1554,5 +1646,8 @@ fn an_avatar_draws_its_image_when_it_has_one_and_its_fallback_otherwise(cx: &mut
         "the image slot must carry the application-relative path:\n{rendered}"
     );
     assert!(rendered.contains("AvatarFallback"), "{rendered}");
-    assert!(rendered.contains("text \"LB\"") && rendered.contains("text \"US\""), "{rendered}");
+    assert!(
+        rendered.contains("text \"LB\"") && rendered.contains("text \"US\""),
+        "{rendered}"
+    );
 }
