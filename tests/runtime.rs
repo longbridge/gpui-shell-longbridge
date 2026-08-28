@@ -14,6 +14,9 @@ fn app_dir() -> PathBuf {
 #[gpui::test]
 fn logged_out_application_loads_through_the_public_shell_runtime(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
+    cx.update(|cx| {
+        gpui_base::Theme::global_mut(cx).appearance = gpui_base::ThemeAppearance::Dark;
+    });
     let root = app_dir();
     let manifest = gpui_shell::plugin::PluginManifest::read(&root).expect("plugin manifest");
     gpui_shell::set_capabilities(manifest.capabilities(&root, &std::env::temp_dir()));
@@ -42,6 +45,13 @@ fn logged_out_application_loads_through_the_public_shell_runtime(cx: &mut TestAp
     });
 
     context.run_until_parked();
+    context.update(|_, cx| {
+        assert_eq!(
+            gpui_base::Theme::global(cx).appearance,
+            gpui_base::ThemeAppearance::Light,
+            "without the native Omarchy reader, the isolated runtime uses its fallback palette"
+        );
+    });
     let draw_view = view.clone();
     context.draw(
         gpui::Point::default(),

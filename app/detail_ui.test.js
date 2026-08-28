@@ -1,5 +1,5 @@
 // The stock-detail pane, drawn from the base components PR #2847 bound in:
-// the accordion's five parts, the avatar's fallback slot, and a month grid
+// the accordion parts around the always-mounted chart, the avatar's fallback slot, and a month grid
 // read off a retained `CalendarState`.
 
 import { v_flex } from "gpui-base";
@@ -61,7 +61,7 @@ export default class DetailUiProbe extends LongbridgeApp {
 
     // The two states the sections have to be able to be in at once, and the
     // month the picker is parked on so the grid is the same one every run.
-    this.detailSections = { quote: true, chart: true, about: false };
+    this.detailSections = { quote: true, about: false };
     this.chartEndDate = "2026-08-14";
     this.chartCalendar.set_value(this.chartEndDate);
     while (this.chartCalendar.year() > 2026 || this.chartCalendar.month() > 8) {

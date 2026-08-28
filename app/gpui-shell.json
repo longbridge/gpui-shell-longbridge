@@ -1,7 +1,7 @@
 {
   "id": "com.longbridge.gpui-shell-example",
   "name": "Longbridge gpui-shell-example",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "shell-version": "0.1.0",
   "entry": "main.js",
   "capabilities": {

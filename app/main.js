@@ -43,6 +43,9 @@ import { createQuoteStream } from "./quote_stream.js";
 import { mergeLiveQuote, prepareFiveDaySeries } from "./chart.js";
 import { allocationInUsd, normalizeUsdRates, portfolioPresentation } from "./portfolio.js";
 import PriceChartView, { PRICE_CHART_LAYOUT } from "./price_chart_view.js";
+import { loadFpsVisible, saveFpsVisible } from "./fps_preference.js";
+import { omarchyBaseColors, omarchyMarketColors, omarchyTheme } from "./system_theme.js";
+import { setOmarchyAvatarColors, setOmarchyMarketColors } from "./palette.js";
 import { DetailPanel, WatchlistPanel, holdWorkspaceApp } from "./workspace.js";
 import {
   accordionGroup,
@@ -71,7 +74,6 @@ import {
   menuTrigger,
   calendarGrid,
   muted,
-  pager,
   panel,
   popoverSurface,
   sessionAvatar,
@@ -80,11 +82,22 @@ import {
   quoteRow,
   QUOTE_ROW_HEIGHT,
   rule,
+  tableToolbar,
   themeButton,
   watchlistHeader,
 } from "./ui.js";
 
 let themes = null;
+
+async function currentOmarchyColors() {
+  if (platform !== "linux") return "";
+  try {
+    const { current_colors } = await import("omarchy-theme");
+    return current_colors();
+  } catch (_) {
+    return "";
+  }
+}
 
 // How many Holdings rows the panel shows before the page scrolls instead of
 // the panel growing. Any ceiling would do; this one keeps the summary and the
@@ -144,37 +157,7 @@ const MACOS = platform === "macos";
 // 54px, so they end near 69. This is not that number plus a hair: a control
 // sitting a few pixels off the last light reads as a fourth one. The gap is
 // wide enough to be a gap.
-const TITLE_BAR_LEADING = MACOS ? 96 : 12;
-
-/**
- * The one font family the whole interface is drawn in.
- *
- * Omarchy's information hierarchy is monospaced, and its fallback chain is
- * `"JetBrains Mono", "JetBrainsMono Nerd Font", ui-monospace, monospace`. None
- * of that chain can be written here: `font_family` reaches GPUI's
- * `Font::family`, which is a *single* installed family name and not a CSS list.
- * A comma-separated value is looked up verbatim, matches nothing, and falls
- * through to GPUI's own fallback stack -- the platform's **proportional** UI
- * face. The generic names miss for the same reason: neither `monospace` nor
- * `ui-monospace` is a family CoreText will match.
- *
- * So the chain is not resolved here at all; it is removed. `src/main.rs`
- * bundles JetBrains Mono into the binary and registers it with the text system
- * before the first frame, which is what makes this one name resolve on every
- * machine -- including the ones with no JetBrains Mono installed, which is most
- * of them. A script cannot ask what is installed, and this is why it does not
- * have to. The name has to match the family in those files.
- *
- * Worth knowing what that means about what came before: `ui.js`'s `numeric()`
- * asked for `"monospace"`, so the figures in this application -- prices,
- * quantities, percentages, the whole reason a terminal is monospaced -- were
- * almost certainly never drawn in a mono face at all. A vector asserting
- * `.font_family[Str("monospace")]` could not have caught it either: it read the
- * string that was declared, not the face that got drawn. Bundling the typeface
- * fixes that as a side effect, which is why `numeric()` no longer names a
- * family and no element below the root does.
- */
-const MONOSPACE = "JetBrains Mono";
+const TITLE_BAR_LEADING = MACOS ? 96 : 8;
 
 /** The pages the title bar switches between. */
 const PAGES = Object.freeze([
@@ -202,7 +185,6 @@ function motion(element, property) {
 const NARROW_VIEWPORT = 900;
 
 /** How many holdings one page of the Holdings panel shows. */
-const HOLDINGS_PAGE_SIZE = 8;
 
 /**
  * The application keymap.
@@ -210,17 +192,19 @@ const HOLDINGS_PAGE_SIZE = 8;
  * Chords are bound to *actions*, not to handlers: the keymap says which chord
  * means `workspace::reconnect`, `on_action` says what that does, and the
  * session menu dispatches the same name through `window.dispatch_action`
- * without pretending to be a keyboard. `cmd` is the platform modifier on every
- * platform, including this one.
+ * without pretending to be a keyboard. Application commands use `ctrl` on
+ * Linux and the conventional `cmd` modifier on macOS.
  *
  * @type {readonly import("gpui").KeyBinding[]}
  */
+const PRIMARY_MODIFIER = MACOS ? "cmd" : "ctrl";
+
 export const KEY_BINDINGS = Object.freeze([
-  { keystroke: "cmd-1", action: "workspace::watchlist", context: "Workspace" },
-  { keystroke: "cmd-2", action: "workspace::portfolio", context: "Workspace" },
-  { keystroke: "cmd-r", action: "workspace::reconnect", context: "Workspace" },
-  { keystroke: "cmd-t", action: "workspace::toggle-theme", context: "Workspace" },
-  { keystroke: "cmd-shift-f", action: "workspace::toggle-fullscreen", context: "Workspace" },
+  { keystroke: `${PRIMARY_MODIFIER}-1`, action: "workspace::watchlist", context: "Workspace" },
+  { keystroke: `${PRIMARY_MODIFIER}-2`, action: "workspace::portfolio", context: "Workspace" },
+  { keystroke: `${PRIMARY_MODIFIER}-r`, action: "workspace::reconnect", context: "Workspace" },
+  { keystroke: `${PRIMARY_MODIFIER}-t`, action: "workspace::toggle-theme", context: "Workspace" },
+  { keystroke: `${PRIMARY_MODIFIER}-shift-f`, action: "workspace::toggle-fullscreen", context: "Workspace" },
   { keystroke: "alt-down", action: "watchlist::next", context: "Workspace" },
   { keystroke: "alt-up", action: "watchlist::previous", context: "Workspace" },
   { keystroke: "escape", action: "workspace::dismiss", context: "Workspace" },
@@ -229,16 +213,13 @@ export const KEY_BINDINGS = Object.freeze([
 /**
  * How a chord is written for a reader, as opposed to how it is bound.
  *
- * A keystroke is `"cmd-shift-f"` everywhere it is *declared* -- that spelling
- * is the keymap's, it is the same string on every platform, and it is what a
- * comparison is written against. It is not what a person reads. The display
+ * A keystroke such as `"ctrl-shift-f"` is the keymap's declaration, not what a
+ * person reads. The display
  * form is one grammar: modifiers in a fixed order, spaces around every `+`, and
  * one name per key rather than whatever the binding happened to abbreviate.
  *
- * Fixed order rather than the order the binding was written in, so `cmd-shift-f`
- * and a hypothetical `shift-cmd-f` would read the same. Deliberately Cmd and not
- * `Super`: `Super` is Hyprland's modifier and this is a macOS window, where the
- * platform modifier is Cmd and the runtime spells it `cmd` on every platform.
+ * Fixed order rather than the order the binding was written in, so
+ * `ctrl-shift-f` and a hypothetical `shift-ctrl-f` read the same.
  */
 const MODIFIER_ORDER = Object.freeze(["cmd", "ctrl", "shift", "alt"]);
 const MODIFIER_NAMES = Object.freeze({ cmd: "Cmd", ctrl: "Ctrl", shift: "Shift", alt: "Alt" });
@@ -257,7 +238,7 @@ const KEY_NAMES = Object.freeze({
   delete: "Delete",
 });
 
-/** @param {string} keystroke A keymap chord, e.g. `"cmd-shift-f"`. */
+/** @param {string} keystroke A keymap chord, e.g. `"ctrl-shift-f"`. */
 export function chordLabel(keystroke) {
   const parts = String(keystroke).split("-");
   const key = parts.pop() ?? "";
@@ -273,7 +254,7 @@ export function chordLabel(keystroke) {
  * What each bound action does, in the words the footer rail shows.
  *
  * Keyed by action rather than by chord, because the chord is the keymap's to
- * decide and this is only the caption beside it: rebinding `cmd-r` changes what
+ * decide and this is only the caption beside it: rebinding `ctrl-r` changes what
  * the rail draws without touching this table, and adding a caption for an
  * action nothing binds adds nothing to the rail at all.
  */
@@ -366,9 +347,20 @@ export default class LongbridgeApp extends View {
   /** @param {import("gpui-shell").Props | undefined} _props @param {import("gpui").AsyncContext} cx */
   init(_props, cx) {
     holdContext(cx);
+    this.followsSystemTheme = false;
+    this.omarchyThemeSource = "";
+    this.themeSyncPending = false;
     cx.spawn(async (cx) => {
-      themes = JSON.parse(await readFile("theme.json", "utf8"));
-      set_theme(themes.dark);
+      const themeSource = await readFile("theme.json", "utf8");
+      themes = JSON.parse(themeSource);
+      const omarchySource = await currentOmarchyColors();
+      const fallback = themes[window.appearance()];
+      const systemTheme = omarchyTheme(omarchySource, fallback);
+      setOmarchyAvatarColors(omarchyBaseColors(omarchySource));
+      setOmarchyMarketColors(omarchyMarketColors(omarchySource));
+      this.followsSystemTheme = systemTheme !== null;
+      this.omarchyThemeSource = systemTheme ? omarchySource : "";
+      set_theme(systemTheme ?? fallback);
       this.chartThemeRevision += 1;
       this.syncPriceChartView();
       this.redraw(cx);
@@ -409,6 +401,7 @@ export default class LongbridgeApp extends View {
     // application and for reading a bug report, and neither is worth four
     // lines of a market terminal once you know them.
     this.statusBarVisible = false;
+    this.fpsVisible = loadFpsVisible();
     this.candleCache = new Map();
     this.chartState = { symbol: null, state: "idle" };
     this.chartGeneration = 0;
@@ -419,11 +412,36 @@ export default class LongbridgeApp extends View {
     this.initPriceChartView(cx);
     this.initWorkspaceDock(cx);
     this.clock = cx.timer.every(1_000, (cx) => {
+      this.syncSystemTheme(cx);
       this.lastTick = Date.now();
       this.quotes = sortLikeTerminal(this.quotes, this.lastTick);
       this.redraw(cx);
     });
     if (this.hasStoredTokens) this.resume(cx);
+  }
+
+  /** @param {import("gpui").Context} cx */
+  syncSystemTheme(cx) {
+    if (!themes || this.themeSyncPending || platform !== "linux") return;
+    this.themeSyncPending = true;
+    cx.spawn(async (cx) => {
+      try {
+        const source = await currentOmarchyColors();
+        if (!source || source === this.omarchyThemeSource) return;
+        const theme = omarchyTheme(source, themes[window.appearance()]);
+        if (!theme) return;
+        setOmarchyAvatarColors(omarchyBaseColors(source));
+        setOmarchyMarketColors(omarchyMarketColors(source));
+        this.followsSystemTheme = true;
+        this.omarchyThemeSource = source;
+        set_theme(theme);
+        this.chartThemeRevision += 1;
+        this.syncPriceChartView();
+        this.redraw(cx);
+      } finally {
+        this.themeSyncPending = false;
+      }
+    });
   }
 
   /**
@@ -762,9 +780,7 @@ export default class LongbridgeApp extends View {
     this.userMenuOpen = false;
     this.allocationHelpOpen = false;
     /** Which stock-detail sections are expanded. */
-    this.detailSections = { quote: true, chart: true, about: false };
-    /** The one-based page the Holdings panel is showing. */
-    this.holdingsPage = 1;
+    this.detailSections = { quote: true, about: false };
     this.watchlistQuery = "";
     this.holdingsQuery = "";
     this.watchlistFilter = InputState.new({ placeholder: "Filter watchlist" });
@@ -775,8 +791,6 @@ export default class LongbridgeApp extends View {
     this.holdingsFilter = InputState.new({ placeholder: "Filter holdings" });
     this.holdingsFilter.on("change", (_event, cx) => {
       this.holdingsQuery = this.holdingsFilter.value();
-      // A narrower list can be shorter than the page someone is standing on.
-      this.holdingsPage = 1;
       this.redraw(cx);
     });
   }
@@ -1110,11 +1124,20 @@ export default class LongbridgeApp extends View {
 
   /** @param {"light" | "dark"} mode @param {import("gpui").Context} cx */
   chooseTheme(mode, cx) {
+    if (this.followsSystemTheme) return;
     if (themes) {
       set_theme(themes[mode]);
       this.chartThemeRevision += 1;
       this.syncPriceChartView();
     }
+    this.redraw(cx);
+  }
+
+  /** @param {import("gpui").Context} cx */
+  toggleFps(cx) {
+    this.fpsVisible = !this.fpsVisible;
+    const visible = this.fpsVisible;
+    cx.spawn(async () => saveFpsVisible(visible));
     this.redraw(cx);
   }
 
@@ -1166,8 +1189,10 @@ export default class LongbridgeApp extends View {
       .on_action("workspace::watchlist", (_event, cx) => this.showPage("watchlist", cx))
       .on_action("workspace::portfolio", (_event, cx) => this.showPage("portfolio", cx))
       .on_action("workspace::reconnect", (_event, cx) => this.resume(cx))
-      .on_action("workspace::toggle-theme", (_event, cx) =>
-        this.chooseTheme(cx.theme().appearance === "dark" ? "light" : "dark", cx),
+      .when(!this.followsSystemTheme, (workspace) =>
+        workspace.on_action("workspace::toggle-theme", (_event, cx) =>
+          this.chooseTheme(cx.theme().appearance === "dark" ? "light" : "dark", cx),
+        ),
       )
       .on_action("workspace::toggle-fullscreen", () => window.toggle_fullscreen())
       .on_action("watchlist::next", (_event, cx) => this.stepSelection(1, cx))
@@ -1236,7 +1261,7 @@ export default class LongbridgeApp extends View {
   /**
    * Every chord the workspace sees, for the footer's readout.
    *
-   * `keystroke` is the whole chord already unparsed — `"cmd-shift-f"` — which
+   * `keystroke` is the whole chord already unparsed — `"ctrl-shift-f"` — which
    * is the form a comparison is written against, and it is spelled the same on
    * every platform.
    *
@@ -1287,10 +1312,6 @@ export default class LongbridgeApp extends View {
     )
       .relative()
       .size_full()
-      // Once, at the root. Every text style in GPUI cascades, so this is the
-      // family the whole tree inherits and no element below states one of its
-      // own -- see `MONOSPACE` for why it is a single name and not a chain.
-      .font_family(MONOSPACE)
       .child(
         v_flex()
           .w_full()
@@ -1317,7 +1338,9 @@ export default class LongbridgeApp extends View {
                   .flex_1()
                   .min_h(0)
                   .child(this.hasStoredTokens ? this.workspace(tokens) : this.loginGate(tokens))
-                  .child(fps_monitor().anchor("bottom_left")),
+                  .when(this.fpsVisible, (element) =>
+                    element.child(fps_monitor().anchor("bottom_left")),
+                  ),
               )
               .when(this.statusBarVisible, (element) => element.child(this.footer(tokens))),
           ),
@@ -1350,7 +1373,7 @@ export default class LongbridgeApp extends View {
       // needs for its traffic lights is the *left track's* padding, below: as
       // padding here it inset the content box on one side only, and the middle
       // came to rest 42 pixels right of centre.
-      .px(tokens.spacing.md)
+      .px(tokens.spacing.sm)
       .bg(tokens.surface)
       .border_b(1)
       .border_color(tokens.border)
@@ -1361,7 +1384,7 @@ export default class LongbridgeApp extends View {
           // The traffic lights are drawn over this corner by the system, so
           // the mark starts after them. On a platform without them this is the
           // ordinary gap.
-          .pl(TITLE_BAR_LEADING - tokens.spacing.md)
+          .pl(TITLE_BAR_LEADING - tokens.spacing.sm)
           // The mark and the name are one lockup, so they sit on a shared
           // baseline. Not `items_center`, which leaves the name floating above
           // the mark's foot, and not `items_end` either: that aligns the *line
@@ -1401,9 +1424,11 @@ export default class LongbridgeApp extends View {
               detailToggle(tokens, this.isDetailOpen(), (_event, cx) => this.toggleDetail(cx)),
             ),
           )
-          .child(
-            themeButton(tokens, (_event, cx) =>
-              this.chooseTheme(tokens.appearance === "dark" ? "light" : "dark", cx),
+          .when(!this.followsSystemTheme, (element) =>
+            element.child(
+              themeButton(tokens, (_event, cx) =>
+                this.chooseTheme(tokens.appearance === "dark" ? "light" : "dark", cx),
+              ),
             ),
           )
           // The menu belongs to the session, not to the Watchlist: it signs out
@@ -1419,8 +1444,8 @@ export default class LongbridgeApp extends View {
    * Two tabs styled individually read as decoration -- a pair of quiet chips
    * with nothing saying they are alternatives -- and a selection has to be a
    * persistent state, not a hover. So the pair sits in one track: a recessed
-   * well in `muted`, with the current page filled in `background` and the
-   * others showing the well through.
+   * background, with the current page distinguished by its foreground and
+   * outline rather than a raised strip of panel colour.
    *
    * What carries the state is fill and foreground only. No border, which boxes
    * each segment and undoes the track, and no shadow, which reads as grime
@@ -1445,7 +1470,9 @@ export default class LongbridgeApp extends View {
       .px(tokens.spacing.xs)
       .py(3)
       .rounded(tokens.radius.md)
-      .bg(tokens.muted)
+      .bg(tokens.background)
+      .border(1)
+      .border_color(tokens.border)
       .children(
         PAGES.map((item) => {
           const selected = item.key === this.page;
@@ -1459,14 +1486,14 @@ export default class LongbridgeApp extends View {
               .h(24)
               .px(tokens.spacing.md)
               .rounded(tokens.radius.sm)
-              // An unselected segment is the well showing through, so it is
-              // filled with the well's own colour rather than left unset: the
-              // component brings a fill of its own, and this is what makes it
-              // not show.
-              .bg(selected ? tokens.background : tokens.muted)
+              // Reserve the state border in both states so selection never
+              // changes the tab's geometry.
+              .border(1)
+              .border_color(selected ? tokens.ring : tokens.background)
+              .bg(selected ? tokens.accent : tokens.background)
               .text_size(12)
               .font_weight(700)
-              .text_color(selected ? tokens.foreground : tokens.muted_foreground),
+              .text_color(selected ? tokens.accent_foreground : tokens.muted_foreground),
             "opacity",
           )
             .hover((style) => style.text_color(tokens.foreground))
@@ -1523,28 +1550,26 @@ export default class LongbridgeApp extends View {
   }
 
   /**
-   * A workspace pane's outer box: the panel inside it, and this pane's half of
-   * the gap between the two of them, on the side it faces.
-   *
-   * The inset is here rather than on the panel because a panel draws its own
-   * border and fill, so padding written on it would put the gap *inside* that
-   * border and separate nothing. It is here rather than on the dock, too: a
-   * dock's frame is chrome around the pane, and what needs to move is the pane.
+   * A workspace pane's outer box. Only the side facing the other pane is
+   * inset: together they form an 8px center gap without changing the window's
+   * own 8px outer margin.
    *
    * @param {import("gpui-base").Theme} tokens
    * @param {"left" | "right"} facing Which side the other pane is on.
    */
-  pane(tokens) {
-    // The same inset the tab bar takes, on both sides, so a pane's body lines
-    // up with its own tab rather than sitting narrower inside it. Two adjacent
-    // regions therefore show twice this of canvas between them.
-    //
+  pane(tokens, facing) {
     // `flex_1().min_h(0)`, not `size_full()`. A percentage height only resolves
     // against a parent whose own height is already definite; where it is not,
     // `height: 100%` collapses to auto and every `flex_1` child inside falls
     // back to its content height -- the pane floating at the top of an empty
     // region. Growing into the parent's main axis asks for no such resolution.
-    return v_flex().flex_1().min_h(0).w_full().px(PANE_INSET).bg(tokens.background);
+    return v_flex()
+      .flex_1()
+      .min_h(0)
+      .w_full()
+      .bg(tokens.background)
+      .when(facing === "left", (element) => element.pl(PANE_INSET))
+      .when(facing === "right", (element) => element.pr(PANE_INSET));
   }
 
 
@@ -1656,7 +1681,7 @@ export default class LongbridgeApp extends View {
   watchlist(tokens) {
     const status = streamStatusSummary({ state: this.status.state, delay: this.status.delay });
     const rows = filterRows(this.quotes, this.watchlistQuery, ["code", "name", "symbol"]);
-    return this.pane(tokens).child(
+    return this.pane(tokens, "right").child(
       panel(tokens)
         .id("watchlist-pane")
         // No top edge: the tab bar above this pane already draws the line, and
@@ -1669,11 +1694,7 @@ export default class LongbridgeApp extends View {
         // panel's whole body, and there is no wrapper left to carry this.
         .on_mouse_down("right", (_event, cx) => this.copySelectedSymbol(cx))
         .child(
-          h_flex()
-            .items_center()
-            .justify_between()
-            .px(tokens.spacing.md)
-            .py(tokens.spacing.sm)
+          tableToolbar(tokens)
             // No title here. The tab above this row already says "Watchlist",
             // and a pane that names itself twice is two headers wearing one
             // pane. What is left is what the tab cannot carry: the filter and
@@ -1793,7 +1814,7 @@ export default class LongbridgeApp extends View {
         popoverSurface(tokens, { menu: true })
           .child(
             // The menu does what the chord does, by name. Neither knows about
-            // the other: `cmd-r` is bound to this action in the keymap, the
+            // the other: the reconnect chord is bound to this action in the keymap, the
             // root answers it, and this dispatches it down the same focus path
             // rather than calling the handler behind the keymap's back.
             menuItem(
@@ -1804,7 +1825,7 @@ export default class LongbridgeApp extends View {
                 close(cx);
                 window.dispatch_action("workspace::reconnect");
               },
-              { detail: chordLabel("cmd-r") },
+              { detail: chordLabel(`${PRIMARY_MODIFIER}-r`) },
             ),
           )
           .child(
@@ -1822,6 +1843,17 @@ export default class LongbridgeApp extends View {
                 close(cx);
                 this.statusBarVisible = !this.statusBarVisible;
                 this.redraw(cx);
+              },
+            ),
+          )
+          .child(
+            menuItem(
+              tokens,
+              "user-menu-fps",
+              this.fpsVisible ? "Hide FPS" : "Show FPS",
+              (_event, cx) => {
+                close(cx);
+                this.toggleFps(cx);
               },
             ),
           )
@@ -1851,19 +1883,22 @@ export default class LongbridgeApp extends View {
             ),
           )
           .child(rule(tokens))
-          .child(
-            menuItem(
-              tokens,
-              "user-menu-theme",
-              tokens.appearance === "dark" ? "Light theme" : "Dark theme",
-              (_event, cx) => {
-                close(cx);
-                window.dispatch_action("workspace::toggle-theme");
-              },
-              { detail: chordLabel("cmd-t") },
-            ),
+          .when(!this.followsSystemTheme, (element) =>
+            element
+              .child(
+                menuItem(
+                  tokens,
+                  "user-menu-theme",
+                  tokens.appearance === "dark" ? "Light theme" : "Dark theme",
+                  (_event, cx) => {
+                    close(cx);
+                    window.dispatch_action("workspace::toggle-theme");
+                  },
+                  { detail: chordLabel(`${PRIMARY_MODIFIER}-t`) },
+                ),
+              )
+              .child(rule(tokens)),
           )
-          .child(rule(tokens))
           // The window's own controls. They are `Window` methods over there
           // and `window` methods here, so this is the platform's zoom and the
           // platform's fullscreen rather than a size the script picked.
@@ -1876,7 +1911,7 @@ export default class LongbridgeApp extends View {
                 close(cx);
                 window.dispatch_action("workspace::toggle-fullscreen");
               },
-              { detail: chordLabel("cmd-shift-f") },
+              { detail: chordLabel(`${PRIMARY_MODIFIER}-shift-f`) },
             ),
           )
           .child(
@@ -1966,7 +2001,7 @@ export default class LongbridgeApp extends View {
   stockDetail(tokens) {
     const quote =
       this.quotes.find((entry) => entry.symbol === this.selectedSymbol) ?? this.quotes[0];
-    return this.pane(tokens).child(
+    return this.pane(tokens, "left").child(
       panel(tokens)
         .id("stock-detail-pane")
         // No top edge: the tab bar above this pane already draws the line, and
@@ -2036,18 +2071,8 @@ export default class LongbridgeApp extends View {
           body: quoteDetail(tokens, quote, this.lastTick, this.quotePulse ?? 1),
         }),
       )
-      .child(
-        accordionSection(tokens, {
-          id: "detail-chart",
-          title: "Price chart",
-          detail: this.chartEndDate ? `to ${this.chartEndDate}` : "5 days",
-          level: 3,
-          open: this.detailSections.chart,
-          keepMounted: true,
-          onToggle: toggle("chart"),
-          body: this.chartSection(tokens),
-        }),
-      )
+      .child(rule(tokens))
+      .child(this.chartSection(tokens))
       .child(
         accordionSection(tokens, {
           id: "detail-about",
@@ -2087,7 +2112,9 @@ export default class LongbridgeApp extends View {
     const end = this.chartEndDate ?? today;
     return v_flex()
       .relative()
-      .px(tokens.spacing.lg)
+      // Match the Stock Details section inset: the date controls, chart
+      // heading, plot and date axis form one content column with Quote above.
+      .px(tokens.spacing.md)
       .py(tokens.spacing.md)
       .gap(tokens.spacing.sm)
       .child(
@@ -2221,16 +2248,6 @@ export default class LongbridgeApp extends View {
       : null;
 
     const holdingRows = filterRows(presentation.holdings, this.holdingsQuery, ["symbol", "name"]);
-    // The panel shows one page of holdings rather than a capped window onto
-    // all of them. `pagination_items` decides which page numbers are drawn and
-    // where the runs collapse -- the one part of a pager a script cannot work
-    // out for itself -- and the page is clamped here because a filter can make
-    // the list shorter than the page someone is standing on.
-    const holdingsPages = Math.max(1, Math.ceil(holdingRows.length / HOLDINGS_PAGE_SIZE));
-    const holdingsPage = Math.min(Math.max(1, this.holdingsPage), holdingsPages);
-    const pageStart = (holdingsPage - 1) * HOLDINGS_PAGE_SIZE;
-    const pagedHoldings = holdingRows.slice(pageStart, pageStart + HOLDINGS_PAGE_SIZE);
-
     // The page does not scroll; Holdings does. The two cards above it are as
     // tall as their content and the table takes the rest, which is what stops
     // the window growing a scrollbar of its own.
@@ -2339,12 +2356,8 @@ export default class LongbridgeApp extends View {
           .flex_1()
           .min_h(0)
           .child(
-            h_flex()
-              .items_center()
-              .justify_between()
+            tableToolbar(tokens)
               .flex_none()
-              .px(tokens.spacing.md)
-              .py(tokens.spacing.sm)
               // The count sits with the title, not across the row from it. It
               // says how much of *this* is here, so it reads as part of the
               // heading; opposite the filter it read as a second control.
@@ -2370,10 +2383,10 @@ export default class LongbridgeApp extends View {
               tokens,
               "holdings",
               "Holdings",
-              pagedHoldings,
+              holdingRows,
               HOLDING_ROW_HEIGHT,
               holdingsHeader(tokens),
-              (holding, index) => holdingRow(tokens, holding, pageStart + index),
+              (holding, index) => holdingRow(tokens, holding, index),
               null,
               this.holdingsQuery
                 ? emptyPanel(tokens, "No matches", "No holding matches that filter.")
@@ -2388,24 +2401,10 @@ export default class LongbridgeApp extends View {
               // claim -- so it takes the leftover height of a page that no
               // longer scrolls, rather than being sized from a row count and
               // letting the page scroll past it.
-              .flex_1()
-              .min_h(0),
-          )
-          .when(holdingsPages > 1, (element) =>
-            element.child(
-              v_flex()
-                .py(tokens.spacing.sm)
-                .border_t(1)
-                .border_color(tokens.border)
-                .child(
-                  pager(tokens, "holdings-pages", holdingsPage, holdingsPages, (page, cx) => {
-                    this.holdingsPage = page;
-                    this.redraw(cx);
-                  }),
-                ),
-            ),
-          ),
-      );
+                .flex_1()
+                .min_h(0),
+            )
+        );
   }
 
   /**
@@ -2591,7 +2590,6 @@ export default class LongbridgeApp extends View {
         h_flex()
           .items_center()
           .justify_between()
-          .px(tokens.spacing.sm)
           .child(muted(tokens, "Read only · Trading disabled"))
           .child(this.windowReadout(tokens))
           .child(
@@ -2636,6 +2634,8 @@ export default class LongbridgeApp extends View {
         case "workspace::portfolio":
         case "workspace::reconnect":
           return this.hasStoredTokens;
+        case "workspace::toggle-theme":
+          return !this.followsSystemTheme;
         case "watchlist::next":
         case "watchlist::previous":
           return this.hasStoredTokens && this.page === "watchlist";
@@ -2656,7 +2656,6 @@ export default class LongbridgeApp extends View {
       // edge of a narrow window would be a hint nobody has.
       .flex_wrap()
       .gap(tokens.spacing.md)
-      .px(tokens.spacing.sm)
       .children(
         hints.map((binding) =>
           h_flex()

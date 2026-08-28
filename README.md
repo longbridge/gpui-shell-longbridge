@@ -1,10 +1,16 @@
-# Longbridge Lite
+# Longbridge Lite — Special for Omarchy
 
-An architecture example showing how a JavaScript application can run as a
-native GPUI desktop program through [GPUI Shell](https://longbridge.github.io/gpui-component/shell/).
-Longbridge market data is the real-world integration used to exercise the runtime; the repository is
-primarily a demonstration of host/application boundaries, not a full trading
-terminal.
+Longbridge Lite is a read-only Longbridge desktop client made especially for
+[Omarchy](https://omarchy.org/). It follows Omarchy's current system theme,
+uses the system font, and adopts Omarchy-native spacing and keyboard
+conventions. It is also an architecture example showing how a JavaScript
+application can run as a native GPUI desktop program through
+[GPUI Shell](https://longbridge.github.io/gpui-component/shell/).
+
+The active palette is read from Omarchy's materialized theme state at
+`~/.local/state/omarchy/current/theme/colors.toml`. Switching the Omarchy theme
+updates Longbridge Lite automatically; the application does not inspect
+`/etc/os-release` or bundle its own font.
 
 ## Install
 
@@ -17,7 +23,7 @@ curl -fsSL https://github.com/longbridge/longbridge-lite/raw/refs/heads/main/ins
 Install a specific version, or uninstall while preserving user data:
 
 ```sh
-curl -fsSL https://github.com/longbridge/longbridge-lite/raw/refs/heads/main/install.sh | sh -s -- --version 0.1.0
+curl -fsSL https://github.com/longbridge/longbridge-lite/raw/refs/heads/main/install.sh | sh -s -- --version 0.2.0
 curl -fsSL https://github.com/longbridge/longbridge-lite/raw/refs/heads/main/install.sh | sh -s -- --uninstall
 ```
 
@@ -44,7 +50,7 @@ irm https://github.com/longbridge/longbridge-lite/raw/refs/heads/main/install.ps
 
 The PowerShell installer uses `%LOCALAPPDATA%\longbridge-lite`, creates a Start
 Menu shortcut, and adds its `bin` directory to the user PATH. To select a
-version or uninstall, invoke the downloaded script with `-Version 0.1.0` or
+version or uninstall, invoke the downloaded script with `-Version 0.2.0` or
 `-Uninstall`. Portable `.tar.gz` and `.zip` packages and `SHA256SUMS` are also
 available on each GitHub Release.
 
@@ -174,15 +180,15 @@ the binding solves, it is what solves it.
 | `window.viewport_size`                                       | Stacks the two panes in a short window, which a resizable group cannot do by wrapping |
 | Every other `Window` read and command                        | The diagnostics popover in the footer's right corner                                  |
 
-The keymap is eight chords, and `cmd` is the platform modifier on every
-platform:
+The keymap is eight chords. Linux uses `ctrl` for application commands; macOS
+uses the corresponding `cmd` chords:
 
 | Chord                 | Action                                                             |
 | --------------------- | ------------------------------------------------------------------ |
-| `cmd-1` / `cmd-2`     | `workspace::watchlist` / `workspace::portfolio`                    |
-| `cmd-r`               | `workspace::reconnect`                                             |
-| `cmd-t`               | `workspace::toggle-theme`                                          |
-| `cmd-shift-f`         | `workspace::toggle-fullscreen`                                     |
+| `ctrl-1` / `ctrl-2`   | `workspace::watchlist` / `workspace::portfolio`                    |
+| `ctrl-r`              | `workspace::reconnect`                                             |
+| `ctrl-t`              | `workspace::toggle-theme`                                          |
+| `ctrl-shift-f`        | `workspace::toggle-fullscreen`                                     |
 | `alt-up` / `alt-down` | `watchlist::previous` / `watchlist::next`                          |
 | `escape`              | `workspace::dismiss`, handed back when there is nothing to dismiss |
 

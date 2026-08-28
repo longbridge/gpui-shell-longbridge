@@ -1,9 +1,9 @@
 use std::{
-    time::Duration,
     fs,
     ops::Deref as _,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
+    time::Duration,
 };
 
 use gpui::{IntoElement as _, TestAppContext, VisualTestContext};
@@ -90,6 +90,143 @@ fn load_test_view(
 }
 
 #[gpui::test]
+fn omarchy_application_follows_system_appearance(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("main.js");
+    let main_path = fixture.root.join("main.js");
+    let main = fs::read_to_string(&main_path)
+        .expect("copied main.js")
+        .replace(
+            "this.syncSystemTheme(cx);",
+            "this.statusBarVisible = true;\n      this.syncSystemTheme(cx);",
+        )
+        .replace(
+            "let themes = null;",
+            r##"let fixtureThemes = [
+  'mode = "light"\nbackground = "#eeeeee"\nforeground = "#111111"',
+  'mode = "dark"\nbackground = "#111111"\nforeground = "#eeeeee"',
+];
+function nextFixtureTheme() {
+  return fixtureThemes.shift() ?? fixtureThemes[1];
+}
+let themes = null;"##,
+        )
+        .replace(
+            "const { current_colors } = await import(\"omarchy-theme\");\n    return current_colors();",
+            "return nextFixtureTheme();",
+        );
+    fs::write(main_path, main).expect("install changing appearance fixture");
+    let manifest =
+        gpui_shell::plugin::PluginManifest::read(&fixture.root).expect("fixture manifest");
+    gpui_shell::set_capabilities(manifest.capabilities(&fixture.root, &std::env::temp_dir()));
+    gpui_shell::set_storage_path(fixture.root.join("storage.json"));
+
+    let fixture_root = fixture.root.clone();
+    let window = cx.add_window(move |window, cx| {
+        WorkspaceRoot(
+            runtime
+                .try_load(&fixture_root, window, cx)
+                .expect("load Omarchy application fixture"),
+        )
+    });
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    context.run_until_parked();
+    context.update(|_, cx| {
+        assert_eq!(
+            gpui_base::Theme::global(cx).appearance,
+            gpui_base::ThemeAppearance::Light
+        );
+    });
+
+    context.executor().advance_clock(Duration::from_secs(1));
+    context.run_until_parked();
+    context.update(|_, cx| {
+        assert_eq!(
+            gpui_base::Theme::global(cx).appearance,
+            gpui_base::ThemeAppearance::Dark,
+            "the Omarchy clock must apply a changed system appearance"
+        );
+    });
+
+    let view = window
+        .root(&mut context)
+        .expect("Omarchy application root")
+        .read_with(&context, |root, cx| {
+            root.0
+                .read(cx)
+                .content()
+                .clone()
+                .downcast::<gpui_shell::ScriptView>()
+                .expect("Omarchy script view")
+        });
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    let rendered = context.update(|_, cx| {
+        view.read(cx)
+            .snapshot()
+            .map(gpui_shell::RenderSnapshot::debug_tree)
+            .unwrap_or_default()
+    });
+    assert!(
+        !rendered.contains("theme-toggle"),
+        "manual theme controls must not be advertised while following Omarchy:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("text \"Cmd + T\""),
+        "the Omarchy shortcut rail must not advertise manual theme switching:\n{rendered}"
+    );
+}
+
+#[gpui::test]
+fn non_omarchy_application_keeps_manual_theme_switching(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("main.js");
+    let main_path = fixture.root.join("main.js");
+    let main = fs::read_to_string(&main_path)
+        .expect("copied main.js")
+        .replace("const fallback = themes[window.appearance()];", "const fallback = themes.dark;")
+        .replace(
+            "this.syncSystemTheme(cx);",
+            "this.syncSystemTheme(cx);\n      window.dispatch_action(\"workspace::toggle-theme\");",
+        );
+    fs::write(main_path, main).expect("install manual theme action fixture");
+    let manifest =
+        gpui_shell::plugin::PluginManifest::read(&fixture.root).expect("fixture manifest");
+    gpui_shell::set_capabilities(manifest.capabilities(&fixture.root, &std::env::temp_dir()));
+    gpui_shell::set_storage_path(fixture.root.join("storage.json"));
+
+    let fixture_root = fixture.root.clone();
+    let window = cx.add_window(move |window, cx| {
+        WorkspaceRoot(
+            runtime
+                .try_load(&fixture_root, window, cx)
+                .expect("load non-Omarchy application fixture"),
+        )
+    });
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    context.run_until_parked();
+    context.update(|_, cx| {
+        assert_eq!(
+            gpui_base::Theme::global(cx).appearance,
+            gpui_base::ThemeAppearance::Dark
+        );
+    });
+
+    context.executor().advance_clock(Duration::from_secs(1));
+    context.run_until_parked();
+    context.update(|_, cx| {
+        assert_eq!(
+            gpui_base::Theme::global(cx).appearance,
+            gpui_base::ThemeAppearance::Light,
+            "non-Omarchy systems must retain the manual theme shortcut"
+        );
+    });
+}
+
+#[gpui::test]
 fn quote_stream_vectors_run_against_this_application(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -119,6 +256,33 @@ fn auth_and_http_vectors_run_against_this_application(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
     let fixture = ApplicationFixture::new("auth_http.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let (_root, view) = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+
+    context.run_until_parked();
+    let draw_view = view.clone();
+    context.draw(
+        gpui::Point::default(),
+        gpui::size(gpui::px(400.), gpui::px(300.)),
+        move |_, _| draw_view.into_any_element(),
+    );
+    let rendered = context.update(|_, cx| {
+        view.read(cx)
+            .snapshot()
+            .map(gpui_shell::RenderSnapshot::debug_tree)
+            .unwrap_or_default()
+    });
+    assert!(rendered.contains("text \"ok\""), "{rendered}");
+}
+
+#[gpui::test]
+fn fps_visibility_preference_defaults_off_and_round_trips(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    grant_app_capabilities();
+    let fixture = ApplicationFixture::new("fps_preference.test.js");
+    gpui_shell::set_storage_path(fixture.root.join("fps-preference-store.json"));
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
     let window = cx.add_window(|_, _| Empty);
     let mut context = VisualTestContext::from_window(*window.deref(), cx);
     let (_root, view) = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
@@ -681,7 +845,7 @@ fn clicking_a_watchlist_row_selects_that_instruments_details(cx: &mut TestAppCon
 }
 
 #[gpui::test]
-fn allocation_donut_folds_past_the_palette_and_uses_no_other_colours(cx: &mut TestAppContext) {
+fn allocation_donut_folds_past_the_available_theme_palette(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
     let fixture = ApplicationFixture::new("allocation_ui.test.js");
@@ -718,17 +882,8 @@ fn allocation_donut_folds_past_the_palette_and_uses_no_other_colours(cx: &mut Te
         "folded holdings leave the legend:\n{rendered}"
     );
 
-    // The five hues in ranked order, and nothing outside them. The remainder
-    // takes the muted-foreground token rather than a sixth hue.
-    for hue in ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4"] {
-        assert!(rendered.contains(hue), "missing {hue}:\n{rendered}");
-    }
-    for retired in ["#16a34a", "#2563eb", "#d97706", "#7c3aed", "#0891b2"] {
-        assert!(
-            !rendered.contains(retired),
-            "retired allocation colour {retired} is still drawn:\n{rendered}"
-        );
-    }
+    // Color origin is covered by palette.test.js; this host-level vector owns
+    // chart geometry and folding, not a particular installed Omarchy theme.
 }
 
 #[gpui::test]
@@ -848,7 +1003,7 @@ impl gpui::Render for WorkspaceRoot {
 }
 
 #[gpui::test]
-fn stock_details_are_an_accordion_over_a_calendar_backed_chart(cx: &mut TestAppContext) {
+fn stock_details_keep_the_chart_visible_beside_collapsible_metadata(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     grant_app_capabilities();
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -870,8 +1025,7 @@ fn stock_details_are_an_accordion_over_a_calendar_backed_chart(cx: &mut TestAppC
             .unwrap_or_default()
     });
 
-    // All five accordion parts, with the item owning `open` and passing it
-    // down rather than each half being told separately.
+    // Quote and About remain semantic accordion sections.
     assert!(
         rendered.contains("Accordion \"stock-detail-sections\""),
         "{rendered}"
@@ -882,13 +1036,10 @@ fn stock_details_are_an_accordion_over_a_calendar_backed_chart(cx: &mut TestAppC
         "{rendered}"
     );
 
-    // The chart's panel stays mounted while the quote's does not: the chart
-    // holds a retained child view, and a panel that left the tree on every
-    // collapse would tear that child down.
-    assert!(
-        rendered.contains("AccordionPanel :keep_mounted[Bool(true)]"),
-        "the chart panel must survive a collapse:\n{rendered}"
-    );
+    // The chart is permanent content, not a disclosure with a title row.
+    assert!(!rendered.contains("detail-chart-trigger"), "{rendered}");
+    assert!(!rendered.contains("text \"Price chart\""), "{rendered}");
+    assert!(rendered.contains("price-chart-wheel"), "{rendered}");
     assert!(
         rendered.contains("AccordionPanel :keep_mounted[Bool(false)]"),
         "{rendered}"
@@ -927,7 +1078,7 @@ fn stock_details_are_an_accordion_over_a_calendar_backed_chart(cx: &mut TestAppC
 }
 
 #[gpui::test]
-fn holdings_pages_collapse_into_the_layout_base_calculates(cx: &mut TestAppContext) {
+fn holdings_scroll_as_one_virtualized_collection_without_pagination(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     grant_app_capabilities();
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -949,51 +1100,10 @@ fn holdings_pages_collapse_into_the_layout_base_calculates(cx: &mut TestAppConte
             .unwrap_or_default()
     });
 
-    // Eighty positions at eight to a page is ten pages, and the probe is on
-    // page five. `pagination_items` keeps the first, the last and a window
-    // around the current one, and collapses the two broken runs.
+    assert!(!rendered.contains("Pagination"), "{rendered}");
     assert!(
-        rendered.contains("Pagination \"holdings-pages\""),
-        "{rendered}"
-    );
-    assert!(
-        rendered.contains(":accessibility_label[Str(\"Page 5 of 10\")]"),
-        "{rendered}"
-    );
-    for page in ["1", "3", "4", "5", "6", "7", "10"] {
-        assert!(
-            rendered.contains(&format!("Button \"holdings-pages-page-{page}\"")),
-            "page {page} must be drawn:\n{rendered}"
-        );
-    }
-    let current = rendered
-        .lines()
-        .find(|line| line.contains("Button \"holdings-pages-page-5\""))
-        .expect("the current page button");
-    assert!(
-        current.contains(":selected[Bool(true)]"),
-        "the current page must be the selected button: {current}"
-    );
-    for page in ["2", "8", "9"] {
-        assert!(
-            !rendered.contains(&format!("Button \"holdings-pages-page-{page}\"")),
-            "page {page} must fall inside a gap:\n{rendered}"
-        );
-    }
-    // An ellipsis names the pages it stands for, so it is a jump rather than
-    // inert type.
-    assert!(
-        rendered.contains(":accessibility_label[Str(\"Pages 2 to 2\")]")
-            && rendered.contains(":tooltip[Str(\"Jump to page 8\")]"),
-        "an ellipsis must name the pages it stands for:\n{rendered}"
-    );
-
-    // The table is handed one page, not the whole list. The rows themselves are
-    // not in this tree — a virtual list builds them during layout for the range
-    // on screen — so what says the page took effect is the count it declares.
-    assert!(
-        rendered.contains("v_virtual_list \"holdings-rows\" \u{00d7}8"),
-        "the table must be given exactly one page of rows:\n{rendered}"
+        rendered.contains("v_virtual_list \"holdings-rows\" \u{00d7}80"),
+        "the table must own all holdings in one virtualized collection:\n{rendered}"
     );
 }
 
@@ -1042,42 +1152,24 @@ fn a_bound_chord_reaches_the_action_that_switches_page(cx: &mut TestAppContext) 
         "the root must declare the context the keymap is written against:\n{before}"
     );
 
-    // This probe is the one that renders the real application root, so it is
-    // where the interface's typeface is provable: one monospaced family, set
-    // once, inherited by every label and every figure below it. The value is
-    // deliberately not pinned -- which family the platform can actually
-    // resolve is `main.js`'s business, and it changes as the bundled face is
-    // registered. What must hold is that exactly one element states a family:
-    // `numeric()` used to state `monospace` per figure, which would now
-    // override the registered face rather than add to it, leaving those
-    // elements the only text in the window drawn differently.
-    let root = before
-        .lines()
-        .find(|line| line.contains("div :id[Str(\"workspace-root\")]"))
-        .expect("workspace root");
     assert!(
-        root.contains(".font_family["),
-        "the window's family is set once, at the root: {root}"
-    );
-    assert_eq!(
-        before.matches(".font_family[").count(),
-        1,
-        "no element below the root may restate the family it inherits:\n{before}"
+        !before.contains(".font_family["),
+        "the application must inherit the platform font without an override:\n{before}"
     );
 
-    context.simulate_keystrokes("cmd-2");
+    context.simulate_keystrokes("ctrl-2");
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));
     let after = tree(&mut context);
     assert!(
         after.contains("workspace-page"),
-        "cmd-2 must reach `workspace::portfolio`:\n{after}"
+        "ctrl-2 must reach `workspace::portfolio`:\n{after}"
     );
     // A chord the keymap claims becomes an action and is not also delivered as
     // a key press, so the footer's readout stays empty for it. An unbound one
     // reaches `on_key_down`, and arrives already unparsed as the whole chord —
     // spelled `cmd` on every platform, this one included.
-    assert!(!after.contains("text \"cmd-2\""), "{after}");
+    assert!(!after.contains("text \"ctrl-2\""), "{after}");
     context.simulate_keystrokes("ctrl-alt-y");
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));
@@ -1092,13 +1184,13 @@ fn a_bound_chord_reaches_the_action_that_switches_page(cx: &mut TestAppContext) 
         "an unbound chord must reach on_key_down:\n{typed}"
     );
 
-    context.simulate_keystrokes("cmd-1");
+    context.simulate_keystrokes("ctrl-1");
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));
     let back = tree(&mut context);
     assert!(
         back.contains("watchlist-pane"),
-        "cmd-1 must reach `workspace::watchlist`:\n{back}"
+        "ctrl-1 must reach `workspace::watchlist`:\n{back}"
     );
 }
 

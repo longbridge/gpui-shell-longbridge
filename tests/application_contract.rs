@@ -7,6 +7,31 @@ fn app_dir() -> PathBuf {
 }
 
 #[test]
+fn application_uses_the_system_font_instead_of_bundling_one() {
+    let root = app_dir();
+    let host = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("main.rs"),
+    )
+    .expect("host main.rs");
+    let script = fs::read_to_string(root.join("main.js")).expect("application main.js");
+
+    assert!(
+        !root.join("assets/fonts").exists(),
+        "font assets must not ship with the app"
+    );
+    assert!(
+        !host.contains("include_bytes!") && !host.contains("add_fonts("),
+        "the host must not embed or register an application font"
+    );
+    assert!(
+        !script.contains(".font_family("),
+        "the application must inherit the system font"
+    );
+}
+
+#[test]
 fn manifest_grants_longbridge_network_access() {
     let root = app_dir();
     let manifest = gpui_shell::plugin::PluginManifest::read(&root).expect("plugin manifest");
@@ -16,6 +41,38 @@ fn manifest_grants_longbridge_network_access() {
     assert!(capabilities.may_reach("openapi-quote.longbridge.com"));
     assert!(capabilities.may_request("https", "openapi.longbridge.com", None, "POST", "/any/path"));
     assert!(!capabilities.may_run("longbridge"));
+    assert!(
+        !fs::read_to_string(root.join("gpui-shell.json"))
+            .expect("manifest source")
+            .contains("/etc"),
+        "Omarchy colors replace the old operating-system identity probe"
+    );
+}
+
+#[test]
+fn host_reads_only_the_materialized_omarchy_palette() {
+    let host = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("main.rs"),
+    )
+    .expect("host main.rs");
+    assert!(host.contains(".local/state/omarchy/current/theme/colors.toml"));
+    assert!(host.contains("HostModule::new(\"omarchy-theme\")"));
+    assert!(host.contains("gpui-shell/plugins"), "existing login storage must remain stable");
+}
+
+#[test]
+fn debug_builds_watch_application_sources() {
+    let host = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("main.rs"),
+    )
+    .expect("host main.rs");
+    assert!(host.contains("#[cfg(debug_assertions)]"));
+    assert!(host.contains("runtime.watch(&root, window, cx)"));
+    assert!(host.contains("watcher.forget()"));
 }
 
 #[test]

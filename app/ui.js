@@ -13,7 +13,6 @@ import {
   Button,
   Input,
   Link,
-  Pagination,
   Table,
   TableBody,
   TableCell,
@@ -21,11 +20,10 @@ import {
   TableHeader,
   TableRow,
   h_flex,
-  pagination_items,
   v_flex,
 } from "gpui-base";
 import { formatCompactNumber, quoteFreshness, tradeStatusLabel } from "./market.js";
-import { allocationColor, changeTone, statusColors, valueTone } from "./palette.js";
+import { allocationColor, avatarColor, changeTone, statusColors, valueTone } from "./palette.js";
 import { foldAllocationSlices } from "./portfolio.js";
 
 /**
@@ -335,7 +333,7 @@ function tableHeaderRow(tokens, id, columns) {
       .h(TABLE_HEADER_HEIGHT)
       .gap(tokens.spacing.sm)
       .px(tokens.spacing.sm)
-      .bg(tokens.muted)
+      .bg(tokens.background)
       .border_b(1)
       .border_color(tokens.border)
       .children(
@@ -347,12 +345,14 @@ function tableHeaderRow(tokens, id, columns) {
               // TableHead keeps the column's table semantics, while its
               // full-size div is the shell-owned tooltip trigger.
               .child(
-                div()
-                  .size_full()
-                  .flex()
-                  .items_center()
-                  .tooltip(COLUMN_HINTS[column.title] ?? column.title)
-                  .child(smallCaps(tokens, column.title)),
+                (column.align ?? ((element) => element))(
+                  div()
+                    .size_full()
+                    .flex()
+                    .items_center()
+                    .tooltip(COLUMN_HINTS[column.title] ?? column.title)
+                    .child(smallCaps(tokens, column.title)),
+                ),
               ),
           ),
         ),
@@ -362,10 +362,10 @@ function tableHeaderRow(tokens, id, columns) {
 
 const WATCHLIST_COLUMNS = [
   { title: "Instrument", size: (el) => el.w("31%") },
-  { title: "Last", size: (el) => el.w("19%").justify_end() },
-  { title: "Change", size: (el) => el.w("18%").justify_end() },
-  { title: "Volume", size: (el) => el.w("16%").justify_end() },
-  { title: "Session", size: (el) => el.flex_1().justify_end() },
+  { title: "Last", size: (el) => el.w("19%"), align: (el) => el.justify_end() },
+  { title: "Change", size: (el) => el.w("18%"), align: (el) => el.justify_end() },
+  { title: "Volume", size: (el) => el.w("16%"), align: (el) => el.justify_end() },
+  { title: "Session", size: (el) => el.flex_1(), align: (el) => el.justify_end() },
 ];
 
 /** @param {import("gpui-base").Theme} tokens */
@@ -456,6 +456,20 @@ export function filterInput(tokens, state, width = 180) {
     .text_size(11)
     .text_color(tokens.foreground)
     .focus((style) => style.border_color(tokens.ring));
+}
+
+/**
+ * Controls attached to a table use the same inline inset as its header and
+ * rows, so the filter, first heading and first cell share one content edge.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ */
+export function tableToolbar(tokens) {
+  return h_flex()
+    .items_center()
+    .justify_between()
+    .px(tokens.spacing.sm)
+    .py(tokens.spacing.sm);
 }
 
 /**
@@ -875,10 +889,10 @@ export function portfolioSummary(tokens, account, summaries) {
 /** @param {import("gpui-base").Theme} tokens */
 const HOLDINGS_COLUMNS = [
   { title: "Instrument", size: (el) => el.w("26%") },
-  { title: "Quantity", size: (el) => el.w("12%").justify_end() },
-  { title: "Last / Cost", size: (el) => el.w("20%").justify_end() },
-  { title: "Today's P/L", size: (el) => el.w("20%").justify_end() },
-  { title: "Total P/L", size: (el) => el.flex_1().justify_end() },
+  { title: "Quantity", size: (el) => el.w("12%"), align: (el) => el.justify_end() },
+  { title: "Last / Cost", size: (el) => el.w("20%"), align: (el) => el.justify_end() },
+  { title: "Today's P/L", size: (el) => el.w("20%"), align: (el) => el.justify_end() },
+  { title: "Total P/L", size: (el) => el.flex_1(), align: (el) => el.justify_end() },
 ];
 
 export function holdingsHeader(tokens) {
@@ -1090,13 +1104,18 @@ export function marketAvatar(tokens, code, size = 26) {
   const bare = String(code || "").replace(/^\.+/, "");
   const letter = bare.match(/[A-Za-z]/)?.[0] ?? bare[0] ?? "-";
   const initials = letter.toUpperCase();
+  const fill = avatarColor(tokens, initials, 0.14);
+  const border = avatarColor(tokens, initials, 0.3);
+  const tone = avatarColor(tokens, initials, 0.6);
   return Avatar.new()
     .flex_none()
     .w(size)
     .h(size)
     .rounded(tokens.radius.sm)
     .overflow_hidden()
-    .bg(tokens.muted)
+    .border(1)
+    .border_color(border)
+    .bg(fill)
     .fallback(
       AvatarFallback.new()
         .size_full()
@@ -1106,7 +1125,7 @@ export function marketAvatar(tokens, code, size = 26) {
         .text_size(12)
         .line_height(1)
         .font_weight(700)
-        .text_color(tokens.muted_foreground)
+        .text_color(tone)
         .child(initials),
     );
 }
@@ -1220,13 +1239,13 @@ export function accordionSection(tokens, options) {
               .child(
                 h_flex()
                   .items_center()
-                  .gap(tokens.spacing.sm)
+                  .gap(tokens.spacing.xs)
                   .child(
                     div()
-                      .w(10)
-                      .text_size(10)
+                      .w(14)
+                      .text_size(14)
                       .line_height(1)
-                      .text_color(tokens.muted_foreground)
+                      .text_color(tokens.foreground)
                       .child(open ? "▾" : "▸"),
                   )
                   .child(label(tokens, title)),
@@ -1251,71 +1270,6 @@ export function accordionSection(tokens, options) {
  */
 export function accordionGroup(id) {
   return Accordion.new(id).flex().flex_col().w_full();
-}
-
-/**
- * A page control for a list that is longer than its panel.
- *
- * The buttons are the script's; what base contributes is the layout —
- * `pagination_items` decides which numbers are shown and where the runs
- * collapse. An ellipsis names the range it stands for, so it is drawn as a
- * jump to the middle of that range rather than as inert type.
- *
- * @param {import("gpui-base").Theme} tokens
- * @param {string} id
- * @param {number} page One-based.
- * @param {number} pages
- * @param {(page: number, cx: import("gpui").Context) => void} onSelect
- */
-export function pager(tokens, id, page, pages, onSelect) {
-  const entries = pagination_items(page, pages);
-  const cell = (key) =>
-    Button.new(`${id}-${key}`)
-      .flex()
-      .items_center()
-      .justify_center()
-      .min_w(24)
-      .h(24)
-      .px(tokens.spacing.xs)
-      .rounded(tokens.radius.sm)
-      .border(1)
-      .text_size(11)
-      .line_height(1);
-  return Pagination.new(id)
-    .accessibility_label(`Page ${page} of ${pages}`)
-    .flex()
-    .items_center()
-    .justify_center()
-    .gap(tokens.spacing.xs)
-    .children(
-      entries.map((entry) => {
-        if (entry.ellipsis) {
-          const [first, last] = entry.ellipsis;
-          const middle = first + Math.floor((last - first) / 2);
-          return cell(`gap-${first}-${last}`)
-            .accessibility_label(`Pages ${first} to ${last}`)
-            .tooltip(`Jump to page ${middle}`)
-            .border_color(tokens.surface)
-            .bg(tokens.surface)
-            .text_color(tokens.muted_foreground)
-            .hover((style) => style.bg(tokens.accent).text_color(tokens.accent_foreground))
-            .on_click((_event, cx) => onSelect(middle, cx))
-            .child("…");
-        }
-        const current = entry.page === page;
-        return cell(`page-${entry.page}`)
-          .selected(current)
-          .accessibility_label(`Page ${entry.page}`)
-          .border_color(current ? tokens.ring : tokens.border)
-          .bg(current ? tokens.secondary : tokens.surface)
-          .text_color(current ? tokens.foreground : tokens.muted_foreground)
-          .font_weight(current ? 700 : 400)
-          .hover((style) => style.bg(tokens.accent).text_color(tokens.accent_foreground))
-          .focus((style) => style.border_color(tokens.ring))
-          .on_click((_event, cx) => onSelect(entry.page, cx))
-          .child(String(entry.page));
-      }),
-    );
 }
 
 /** The weekday headings the grid's columns line up under. */
@@ -1513,6 +1467,7 @@ export function panelTitle(name) {
  * @param {import("gpui-base").DockGroup} group
  */
 export function dockTabBar(tokens, group) {
+  const facesLeft = group.tabs.some((tab) => panelTitle(tab.name) === "Stock details");
   return h_flex()
     .h(DOCK_BAR_HEIGHT)
     .w_full()
@@ -1520,13 +1475,14 @@ export function dockTabBar(tokens, group) {
     // The inset is outside the fill, and the fill is on the child. A tab bar
     // coloured across its own padding would put `surface` where the gap is
     // meant to be, and the gap would stop being a gap.
-    .px(PANE_INSET)
+    .when(facesLeft, (element) => element.pl(PANE_INSET))
+    .when(!facesLeft, (element) => element.pr(PANE_INSET))
     .bg(tokens.background)
     .child(
       h_flex()
         .size_full()
         .items_center()
-        .bg(tokens.surface)
+        .bg(tokens.background)
         .border_b(1)
         .border_color(tokens.border)
         .drop_tab(group)
@@ -1548,9 +1504,9 @@ export function dockTabBar(tokens, group) {
                 .border_t(1)
                 .border_l(1)
                 .border_r(1)
-                .when(!tab.active, (element) => element.border_b(1))
+                .border_b(1)
                 .border_color(tokens.border)
-                .bg(tab.active ? tokens.surface : tokens.muted)
+                .bg(tokens.background)
                 .text_size(11)
                 .text_color(tab.active ? tokens.foreground : tokens.muted_foreground)
                 .hover((style) => style.bg(tokens.accent))

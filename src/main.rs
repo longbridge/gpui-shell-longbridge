@@ -1,11 +1,10 @@
 use std::{path::PathBuf, rc::Rc, time::Duration};
 
 use gpui::{
-    AnyElement, App, AppContext as _, Bounds, Context, IntoElement, KeyBinding, Menu, MenuItem,
-    Render, SharedString, TitlebarOptions, Window, WindowBounds, WindowOptions, actions, point, px,
-    size, transparent_black,
+    App, Bounds, KeyBinding, Menu, MenuItem, TitlebarOptions, WindowBounds, WindowOptions, actions,
+    point, px, size, transparent_black,
 };
-use gpui_shell::{AppAssets, ShellRoot, ShellRuntime, plugin::PluginManager};
+use gpui_shell::{AppAssets, HostModule, HostValue, ShellRuntime, plugin::PluginManifest};
 
 const PLUGIN_ID: &str = "com.longbridge.gpui-shell-example";
 
@@ -29,23 +28,6 @@ actions!(
     ]
 );
 
-/// The interface's one font family, bundled rather than looked up.
-///
-/// The whole application is monospaced, and a family the machine may not have
-/// is not a family the script can ask for: GPUI resolves `font_family` to a
-/// *single* installed family name, and when it misses it falls through to its
-/// own fallback stack, which is the platform's **proportional** UI face. There
-/// is no CSS-style chain and no way for a script to ask what is installed, so
-/// "JetBrains Mono" is only safe to name once the process has put it there.
-///
-/// `include_bytes!` rather than a read from the asset directory, so a missing
-/// file is a build error instead of an interface that silently comes up in
-/// Helvetica. `app/main.js` names this family, and the two have to agree.
-const FONTS: [&[u8]; 2] = [
-    include_bytes!("../app/assets/fonts/JetBrainsMono-Regular.ttf"),
-    include_bytes!("../app/assets/fonts/JetBrainsMono-Bold.ttf"),
-];
-
 fn main() {
     let app_root = application_dir().unwrap_or_else(|error| {
         eprintln!("Longbridge Lite cannot find its application resources: {error}");
@@ -68,14 +50,14 @@ fn main() {
         .with_assets(assets)
         .run(move |cx| {
             gpui_shell::init(cx);
-            // Before the first frame: the family has to be resolvable by the
-            // time anything asks for it. `add_fonts` registers into the text
-            // system's own memory source, which is the source consulted ahead
-            // of the installed ones, so this wins over a differently-versioned
-            // JetBrains Mono the machine happens to have.
-            cx.text_system()
-                .add_fonts(FONTS.iter().map(|font| std::borrow::Cow::Borrowed(*font)).collect())
-                .expect("the bundled JetBrains Mono did not load");
+            gpui_shell::set_bundle_id(PLUGIN_ID).expect("failed to configure application identity");
+            // Keep the PluginManager-era location so an upgrade does not make
+            // an existing OAuth session look as though it disappeared.
+            let data_dir = plugin_data_dir().expect("failed to locate application storage");
+            gpui_shell::set_storage_path(data_dir.join("store.json"));
+            let manifest = PluginManifest::read(&app_root).expect("failed to read application manifest");
+            gpui_shell::set_capabilities(manifest.capabilities(&app_root, &data_dir));
+            install_omarchy_theme_reader().expect("failed to install Omarchy theme reader");
             install_quit(cx);
             // The seam between Watchlist and Stock details reads as a gap, not
             // as a line. The two panes are a dock's center and its right dock,
@@ -125,52 +107,51 @@ fn main() {
                 })
                 .detach();
             }
-            let mut plugins = PluginManager::new(vec![app_root.clone()]);
-            plugins.discover();
-            // The manager owns the loaded plugin, and dropping it shuts that
-            // plugin down: every retained entity released, every task of its
-            // cancelled. It used to be moved into the window closure, so the
-            // application was unloaded the moment the window was built -- which
-            // stayed invisible for exactly as long as nothing in the script
-            // held retained state or ran a task past startup. The filters hold
-            // `InputState` and the palette arrives on a task, so both broke at
-            // once. It lives as long as the process now, because so does the
-            // one application it loaded.
-            let plugins: &'static mut PluginManager = Box::leak(Box::new(plugins));
-
             let runtime = Rc::clone(&runtime);
             cx.open_window(window_options(cx), move |window, cx| {
-                // Not `expect`. This closure runs inside GPUI's window-open
-                // callback, which cannot unwind, so a panic here does not fail
-                // the load -- it aborts the process, and the message scrolls
-                // past in a terminal the user may not even be looking at. A
-                // script that will not load is an ordinary outcome (a typo, a
-                // missing capability, a runtime older than the application),
-                // and gpui-shell publishes `failure_surface` for exactly it:
-                // the window opens and says what happened.
-                let content = match load_application(&mut *plugins, &runtime, window, cx) {
-                    Ok(view) => view,
-                    Err(error) => {
-                        eprintln!("the Longbridge application did not load: {error}");
-                        cx.new(|_| LoadFailure {
-                            message: error.into(),
-                        })
-                        .into()
-                    }
-                };
-                // TODO: hot reload is off while the host cannot have both it
-                // and the manifest's capabilities. `ShellRuntime::watch` reads
-                // the application back off the `ShellRoot`, and only
-                // `ShellRoot::with_application` fills that in -- which is
-                // `pub(crate)`, reachable from a host only through
-                // `ShellRuntime::load`. That path documents itself as always
-                // using the policy the host installed rather than the
-                // manifest's, and this application needs the manifest's: its
-                // fs and network grants are declared there.
-                cx.new(|cx| ShellRoot::new(content, window, cx))
+                let root = runtime.load(&app_root, window, cx);
+                #[cfg(debug_assertions)]
+                match runtime.watch(&root, window, cx) {
+                    Ok(watcher) => watcher.forget(),
+                    Err(error) => eprintln!("failed to watch application sources: {error:#}"),
+                }
+                root
             })
             .expect("failed to open Longbridge window");
         });
+}
+
+/// Exposes exactly one host-owned file instead of granting script code access
+/// to the user's home directory. Omarchy atomically replaces this file when a
+/// theme changes, so every call resolves the current path again.
+fn install_omarchy_theme_reader() -> Result<(), gpui_shell::HostError> {
+    let colors = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|home| home.join(".local/state/omarchy/current/theme/colors.toml"));
+    gpui_shell::export_module(
+        HostModule::new("omarchy-theme")
+            .declarations("export function current_colors(): string;")
+            .function("current_colors", move |_| {
+                let source = colors
+                    .as_ref()
+                    .and_then(|path| std::fs::read_to_string(path).ok())
+                    .unwrap_or_default();
+                Ok(HostValue::from(source))
+            }),
+    )
+}
+
+fn plugin_data_dir() -> Result<PathBuf, String> {
+    let data_home = std::env::var_os("XDG_DATA_HOME")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .map(|home| home.join(".local/share"))
+        })
+        .ok_or_else(|| "neither XDG_DATA_HOME nor HOME is set".to_owned())?;
+    Ok(data_home.join("gpui-shell/plugins").join(PLUGIN_ID))
 }
 
 /// Finds the script application in an installed bundle or the source tree.
@@ -215,42 +196,6 @@ fn is_application_dir(path: &std::path::Path) -> bool {
 }
 
 /// Loads the application and hands back the view to mount, or the reason not to.
-fn load_application(
-    plugins: &mut PluginManager,
-    runtime: &Rc<ShellRuntime>,
-    window: &mut Window,
-    cx: &mut gpui::App,
-) -> Result<gpui::AnyView, String> {
-    plugins
-        .load(runtime, PLUGIN_ID, |_| true, window, cx)
-        .map_err(|error| format!("{error:#}"))?;
-    let plugin = plugins
-        .plugin(PLUGIN_ID)
-        .ok_or_else(|| format!("the manager did not retain `{PLUGIN_ID}` after loading"))?;
-    Ok(plugin.view().clone().into())
-}
-
-/// What the window shows when the application did not load.
-///
-/// The surface itself is gpui-shell's, so this reads the same as every other
-/// load failure that runtime reports and takes its colors from the same
-/// semantic roles.
-struct LoadFailure {
-    message: SharedString,
-}
-
-impl Render for LoadFailure {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        AnyElement::from(gpui_shell::failure_surface(
-            "This application could not be loaded",
-            &self.message,
-            "Fix the reason above and start it again.",
-            window,
-            cx,
-        ))
-    }
-}
-
 fn window_options(cx: &gpui::App) -> WindowOptions {
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::centered(

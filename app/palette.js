@@ -12,22 +12,35 @@
 // rising price in the same colour as its buttons has said two different things
 // with one mark.
 
-/** Tokyo Night's ANSI row, and Flexoki Light's, both stepped to clear 4.5:1
- * against every surface this application draws on (canvas, panel and well). */
-const STATUS = Object.freeze({
-  dark: Object.freeze({
-    up: "#9ece6a",
-    down: "#f7768e",
-    warning: "#e0af68",
-    info: "#7dcfff",
-  }),
-  light: Object.freeze({
-    up: "#536907",
-    down: "#942822",
-    warning: "#664d01",
-    info: "#1c6c66",
-  }),
-});
+let omarchyAvatarColors = [];
+let omarchyMarketColors = {};
+
+export function setOmarchyAvatarColors(colors) {
+  omarchyAvatarColors = colors.slice(0, 6);
+}
+
+export function setOmarchyMarketColors(colors) {
+  omarchyMarketColors = { ...colors };
+}
+
+export function avatarColor(tokens, initial, strength = 0.55) {
+  const colors = omarchyAvatarColors.length
+    ? omarchyAvatarColors
+    : [tokens.primary, tokens.destructive, tokens.ring];
+  const letter = String(initial || "-").toUpperCase().charCodeAt(0);
+  const base = colors[(letter - 65 + colors.length * 26) % colors.length];
+  const match = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(base);
+  const background = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(tokens.background);
+  if (!match || !background) return base;
+  const channel = (index) =>
+    Math.round(
+      Number.parseInt(background[index], 16) * (1 - strength) +
+        Number.parseInt(match[index], 16) * strength,
+    )
+      .toString(16)
+      .padStart(2, "0");
+  return `#${channel(1)}${channel(2)}${channel(3)}`;
+}
 
 /**
  * Direction and feed-health colours for the current mode.
@@ -35,7 +48,12 @@ const STATUS = Object.freeze({
  * @param {import("gpui-base").Theme} tokens
  */
 export function statusColors(tokens) {
-  return STATUS[tokens.is_dark ? "dark" : "light"];
+  return {
+    up: omarchyMarketColors.up ?? tokens.primary,
+    down: omarchyMarketColors.down ?? tokens.destructive,
+    warning: omarchyMarketColors.warning ?? tokens.muted_foreground,
+    info: omarchyMarketColors.info ?? tokens.ring,
+  };
 }
 
 /**
@@ -65,33 +83,6 @@ export function valueTone(tokens, value) {
   return tokens.foreground;
 }
 
-// Five categorical hues for the allocation ring, assigned in a fixed order and
-// never cycled -- a sixth holding folds into "Other" rather than borrowing a
-// hue that already means something else (see `foldAllocationSlices`).
-//
-// These deliberately do NOT come from the theme's ANSI row, which is the one
-// place this application departs from Omarchy's "charts use theme colours"
-// guidance. Two reasons, and the design system's own priority order --
-// accessibility over product behaviour over brand -- settles it:
-//
-//   * red and green are spoken for. They mean down and up everywhere else in
-//     this window, and a wedge painted green next to a price painted green has
-//     borrowed a meaning it does not have.
-//   * the remaining ANSI colours do not separate. Simulated over protanopia,
-//     deuteranopia and tritanopia, the best five-hue set drawn from Tokyo
-//     Night's row scores dE 13.4 and from Flexoki Light's only dE 3.0, against
-//     dE 4.2 / 8.5 for the purpose-built steps below. Light would get much
-//     worse, which is the mode that was already the tighter of the two.
-//
-// Each mode is stepped for its own surface rather than flipped from the other.
-// Some light steps sit under 3:1 against the paper surface, which is why the
-// legend beside the ring always carries the name, the value and the
-// percentage: identity here is never colour alone.
-const ALLOCATION = Object.freeze({
-  light: Object.freeze(["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4"]),
-  dark: Object.freeze(["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181"]),
-});
-
 /**
  * A wedge's colour. "Other" is a remainder, not an identity, so it stays grey.
  *
@@ -101,6 +92,8 @@ const ALLOCATION = Object.freeze({
  */
 export function allocationColor(tokens, slice, index) {
   if (slice.other) return tokens.muted_foreground;
-  const hues = ALLOCATION[tokens.is_dark ? "dark" : "light"];
+  const hues = omarchyAvatarColors.length
+    ? omarchyAvatarColors
+    : [tokens.primary, tokens.ring, tokens.destructive, tokens.muted_foreground];
   return hues[Math.min(index, hues.length - 1)];
 }

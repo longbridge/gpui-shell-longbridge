@@ -1,5 +1,5 @@
-// The Holdings panel with more positions than one page holds, so the pager
-// base lays out -- `pagination_items` -- has gaps to collapse.
+// The Holdings panel with enough positions to prove that its virtual list owns
+// scrolling without a second pagination state.
 
 import { v_flex } from "gpui-base";
 import LongbridgeApp from "./main.js";
@@ -35,7 +35,7 @@ function priced(index) {
   };
 }
 
-export default class HoldingsPagerProbe extends LongbridgeApp {
+export default class HoldingsScrollProbe extends LongbridgeApp {
   init(_props, cx) {
     this.initInteractionState();
     this.initChartCalendar(cx);
@@ -47,14 +47,11 @@ export default class HoldingsPagerProbe extends LongbridgeApp {
       risk_level: "1",
     };
     this.fxRates = new Map([["USD", 1]]);
-    // Eighty positions at eight to a page is ten pages: enough for the layout
-    // to keep the first, the last and a window around the current one, and to
-    // collapse what is left into two gaps.
+    // Enough positions that only a virtualized visible range is materialized.
     this.holdings = Array.from({ length: 80 }, (_, index) => holding(index));
     this.portfolioQuotes = Array.from({ length: 80 }, (_, index) => priced(index));
     this.quotes = [];
     this.page = "portfolio";
-    this.holdingsPage = 5;
     this.hasStoredTokens = true;
     this.status = { state: "connected" };
     this.authorization = null;
