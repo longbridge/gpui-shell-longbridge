@@ -53,6 +53,7 @@ import {
   emptyPanel,
   kbd,
   detailToggle,
+  PANE_INSET,
   dockDropHint,
   dockTabBar,
   errorMessage,
@@ -94,15 +95,6 @@ const WORKSPACE_LAYOUT_KEY = "workspace.layout";
 const WORKSPACE_LAYOUT_VERSION = 2;
 /** The detail dock's starting width; after that the user's drag decides. */
 const DETAIL_DOCK_WIDTH = 460;
-/**
- * What the two panes give each other, in pixels, split between them.
- *
- * `background` is deeper than `surface`, so eight pixels of it between two
- * panels reads as canvas showing through rather than as a seam inside one
- * panel. Each pane gives half on the side it faces, which leaves the
- * workspace's outer edges where they were.
- */
-const PANE_GAP = 4;
 
 const HOLDINGS_VIEWPORT_ROWS = 10;
 const EMPTY_CANDLES = Object.freeze([]);
@@ -158,6 +150,48 @@ const TITLE_BAR_LEADING = MACOS ? 96 : 12;
  * family and no element below the root does.
  */
 const MONOSPACE = "JetBrains Mono";
+
+/** Every panel a saved layout mentions, by the name it was registered under. */
+function layoutPanels(node, found = []) {
+  if (!node || typeof node !== "object") return found;
+  const name = typeof node.panel_name === "string" ? node.panel_name : "";
+  const slash = name.lastIndexOf("/");
+  if (slash !== -1) found.push(name.slice(slash + 1));
+  for (const child of node.children ?? []) layoutPanels(child, found);
+  return found;
+}
+
+/**
+ * Whether a saved layout still describes this workspace.
+ *
+ * A dump is the user's arrangement, and almost every arrangement is theirs to
+ * keep -- but not one that has lost a pane. A layout naming fewer panels than
+ * this window has restores a dock holding an empty group, which draws an
+ * invitation to drop a pane into it and offers no way to get the missing one
+ * back; the title bar's collapse control then folds that emptiness away and
+ * brings it back. Panels are not closable any more, so nothing can reach that
+ * state from here again, but a dump written before they stopped being closable
+ * still can -- and discarding it costs the user a layout they can redo in two
+ * drags, where keeping it costs them a pane they cannot.
+ *
+ * Extra panels are fine and deliberately not checked: a dump that mentions
+ * something this build no longer registers is base's to carry forward, which
+ * is how uninstalling and reinstalling an application keeps its place.
+ *
+ * @param {any} layout
+ */
+function usableLayout(layout) {
+  const found = new Set([
+    ...layoutPanels(layout?.center),
+    ...["left_dock", "right_dock", "bottom_dock"].flatMap((dock) =>
+      layoutPanels(layout?.[dock]?.panel),
+    ),
+  ]);
+  return WORKSPACE_PANELS.every((name) => found.has(name));
+}
+
+/** The panes this workspace is made of, by their registered names. */
+const WORKSPACE_PANELS = Object.freeze(["watchlist", "detail"]);
 
 /** The pages the title bar switches between. */
 const PAGES = Object.freeze([
@@ -526,10 +560,21 @@ export default class LongbridgeApp extends View {
     // put away. The watchlist is the list this window is for; the details are
     // what it is showing about one row of it, and that is the half worth
     // folding out of the way.
-    this.workspaceDock.add_panel(this.watchlistPanel, { name: "watchlist", placement: "center" });
+    // `closable: false` on both, and it is not only a matter of taste. A dock
+    // whose last panel is closed keeps the dock and loses the panel, so the
+    // window came back with an empty group offering to have a pane dropped in
+    // it and no way to put the closed one back -- there is no "reopen" for a
+    // panel this application never offers to close. Two panes that are always
+    // both there cannot reach that state.
+    this.workspaceDock.add_panel(this.watchlistPanel, {
+      name: "watchlist",
+      placement: "center",
+      closable: false,
+    });
     this.workspaceDock.add_panel(this.detailPanel, {
       name: "detail",
       placement: "right",
+      closable: false,
       size: DETAIL_DOCK_WIDTH,
     });
 
@@ -549,7 +594,7 @@ export default class LongbridgeApp extends View {
       // would otherwise come straight back and take the collapse control off
       // the pane that now has it.
       const layout = saved ? JSON.parse(saved) : null;
-      if (layout && layout.version === WORKSPACE_LAYOUT_VERSION) {
+      if (layout && layout.version === WORKSPACE_LAYOUT_VERSION && usableLayout(layout)) {
         this.workspaceDock.load(layout);
         this.workspaceRestored = true;
       }
@@ -1329,17 +1374,19 @@ export default class LongbridgeApp extends View {
    * @param {import("gpui-base").Theme} tokens
    * @param {"left" | "right"} facing Which side the other pane is on.
    */
-  pane(tokens, facing) {
+  pane(tokens) {
+    // The same inset the tab bar takes, on both sides, so a pane's body lines
+    // up with its own tab rather than sitting narrower inside it. Two adjacent
+    // regions therefore show twice this of canvas between them.
+    //
     // `flex_1().min_h(0)`, not `size_full()`. A percentage height only resolves
     // against a parent whose own height is already definite; where it is not,
-    // `height: 100%` collapses to auto, and every `flex_1` child inside then
-    // has no free space to grow into and falls back to its content height --
-    // which is the pane floating at the top of an empty region. Growing into
-    // the parent's main axis asks for no such resolution, and the cross axis is
-    // already stretch.
-    const box = v_flex().flex_1().min_h(0).w_full().bg(tokens.background);
-    return facing === "right" ? box.pr(PANE_GAP) : box.pl(PANE_GAP);
+    // `height: 100%` collapses to auto and every `flex_1` child inside falls
+    // back to its content height -- the pane floating at the top of an empty
+    // region. Growing into the parent's main axis asks for no such resolution.
+    return v_flex().flex_1().min_h(0).w_full().px(PANE_INSET).bg(tokens.background);
   }
+
 
   /** @param {import("gpui-base").Theme} tokens */
   loginGate(tokens) {
@@ -1409,7 +1456,7 @@ export default class LongbridgeApp extends View {
   watchlist(tokens) {
     const status = streamStatusSummary({ state: this.status.state, delay: this.status.delay });
     const rows = filterRows(this.quotes, this.watchlistQuery, ["code", "name", "symbol"]);
-    return this.pane(tokens, "right").child(
+    return this.pane(tokens).child(
       panel(tokens)
         .id("watchlist-pane")
         .flex_1()
@@ -1695,7 +1742,7 @@ export default class LongbridgeApp extends View {
   stockDetail(tokens) {
     const quote =
       this.quotes.find((entry) => entry.symbol === this.selectedSymbol) ?? this.quotes[0];
-    return this.pane(tokens, "left").child(
+    return this.pane(tokens).child(
       panel(tokens)
         .id("stock-detail-pane")
         .flex_1()

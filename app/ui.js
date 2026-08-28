@@ -1474,6 +1474,18 @@ export function kbd(tokens, keystroke, state = {}) {
 // it, carry no script value at all, and base does the work.
 
 /** The height of a dock's title strip, and of the tab bar beside it. */
+/**
+ * What a pane holds back on each side, so the canvas shows between two of them.
+ *
+ * It has to be applied to the tab bar *and* to the pane body, and by the same
+ * amount, because they are siblings inside the region base gives a dock: an
+ * inset body under a full-width tab bar is a pane narrower than its own tab,
+ * which reads as a misalignment rather than as a gap. Neither can be inset per
+ * side -- a `DockGroup` does not know which dock it is in -- so both are inset
+ * on both sides, and two adjacent regions come to twice this.
+ */
+export const PANE_INSET = 4;
+
 export const DOCK_BAR_HEIGHT = 30;
 
 
@@ -1493,41 +1505,54 @@ export function dockTabBar(tokens, group) {
     .h(DOCK_BAR_HEIGHT)
     .w_full()
     .items_center()
-    .bg(tokens.surface)
-    .border_b(1)
-    .border_color(tokens.border)
-    .drop_tab(group)
-    .children(
-      group.tabs
-        .filter((tab) => tab.visible)
-        .map((tab) =>
-          h_flex()
-            .id(`dock-tab-${tab.id}`)
-            .h(DOCK_BAR_HEIGHT)
-            .items_center()
-            .gap(tokens.spacing.xs)
-            .px(tokens.spacing.md)
-            .border_r(1)
-            .border_color(tokens.border)
-            .bg(tab.active ? tokens.background : tokens.surface)
-            .text_size(11)
-            .text_color(tab.active ? tokens.foreground : tokens.muted_foreground)
-            .hover((style) => style.bg(tokens.accent))
-            .select_tab(group, tab.index)
-            .drag_tab(group, tab.index)
-            .child(panelTitle(tab.name))
-            .when(tab.closable, (element) =>
-              element.child(
-                div()
-                  .id(`dock-tab-close-${tab.id}`)
-                  .px(tokens.spacing.xxs)
-                  .rounded(tokens.radius.sm)
-                  .text_color(tokens.muted_foreground)
-                  .hover((style) => style.bg(tokens.accent))
-                  .close_panel(group, tab.id)
-                  .accessibility_label(`Close ${panelTitle(tab.name)}`)
-                  .child("×"),
-              ),
+    // The inset is outside the fill, and the fill is on the child. A tab bar
+    // coloured across its own padding would put `surface` where the gap is
+    // meant to be, and the gap would stop being a gap.
+    .px(PANE_INSET)
+    .bg(tokens.background)
+    .child(
+      h_flex()
+        .size_full()
+        .items_center()
+        .bg(tokens.surface)
+        .border_b(1)
+        .border_color(tokens.border)
+        .drop_tab(group)
+        .children(
+          group.tabs
+            .filter((tab) => tab.visible)
+            .map((tab) =>
+              h_flex()
+                .id(`dock-tab-${tab.id}`)
+                .h(DOCK_BAR_HEIGHT)
+                .items_center()
+                .gap(tokens.spacing.xs)
+                .px(tokens.spacing.md)
+                .border_r(1)
+                .border_color(tokens.border)
+                .bg(tab.active ? tokens.background : tokens.surface)
+                .text_size(11)
+                .text_color(tab.active ? tokens.foreground : tokens.muted_foreground)
+                .hover((style) => style.bg(tokens.accent))
+                .select_tab(group, tab.index)
+                .drag_tab(group, tab.index)
+                .child(panelTitle(tab.name))
+                // No close control: neither pane is closable, so this never
+                // draws. It stays because a dock this application grows a third,
+                // closable pane in should not need the tab bar rewritten.
+                .when(tab.closable, (element) =>
+                  element.child(
+                    div()
+                      .id(`dock-tab-close-${tab.id}`)
+                      .px(tokens.spacing.xxs)
+                      .rounded(tokens.radius.sm)
+                      .text_color(tokens.muted_foreground)
+                      .hover((style) => style.bg(tokens.accent))
+                      .close_panel(group, tab.id)
+                      .accessibility_label(`Close ${panelTitle(tab.name)}`)
+                      .child("\u00d7"),
+                  ),
+                ),
             ),
         ),
     );
