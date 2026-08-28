@@ -39,7 +39,7 @@ Only run this for a package downloaded from the official
 On Windows x86_64, run in PowerShell:
 
 ```powershell
-irm https://github.com/longbridge/longbridge-lite/releases/latest/download/install.ps1 | iex
+irm https://github.com/longbridge/longbridge-lite/raw/refs/heads/main/install.ps1 | iex
 ```
 
 The PowerShell installer uses `%LOCALAPPDATA%\longbridge-lite`, creates a Start
