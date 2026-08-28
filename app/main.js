@@ -601,6 +601,38 @@ export default class LongbridgeApp extends View {
     if (this.activeChartMode() === "5D") this.candleCache?.delete(this.selectedSymbol);
   }
 
+  chartRequestFor(symbol, mode, endDate = this.chartIdentityEndDate()) {
+    const selected = CHART_MODES[mode];
+    if (!selected) throw new TypeError(`unknown chart mode ${mode}`);
+    // An omitted end date is the explicit "current market day" boundary. Any
+    // date the user selected, including today, must go through dated history so
+    // a command-18 response cannot be cached under a historical identity.
+    if (mode === "intraday" && endDate === CHART_LATEST_END) {
+      return {
+        kind: "intraday",
+        params: { symbol, tradeSession: TRADE_SESSION.ALL },
+        marketDay: null,
+      };
+    }
+    const requestEnd = endDate === CHART_LATEST_END ? calendarDay(new Date()) : endDate;
+    const days = mode === "intraday" ? 0 : mode === "5D" ? 14 : CANDLE_WINDOW_DAYS[mode];
+    const startDay = days === 0 ? requestEnd : shiftDay(requestEnd, -days);
+    const compact = (day) => day.replaceAll("-", "");
+    return {
+      kind: "candlesticks",
+      params: {
+        symbol,
+        period: CHART_PERIODS[selected.period],
+        startDate: compact(startDay),
+        endDate: compact(requestEnd),
+        tradeSession: mode === "intraday" ? TRADE_SESSION.ALL : TRADE_SESSION.NORMAL,
+      },
+      // A selected date is a request boundary supplied by the user. It is the
+      // only fallback used when the provider's historical candle omits a date.
+      marketDay: endDate === CHART_LATEST_END ? null : endDate,
+    };
+  }
+
   /**
    * Creates the retained chart entity from lifecycle code, never from render.
    *
@@ -1264,16 +1296,12 @@ export default class LongbridgeApp extends View {
     this.redraw(cx);
     this.publishChart(cx);
     if (!stream || this.hasCachedChartSeries(symbol)) return;
-    // The window ends on the day the picker chose, and on today when it has
-    // chosen nothing. Fourteen calendar days back is enough to contain five
-    // trading sessions across a holiday.
-    const end = this.chartEndDate ? new Date(`${this.chartEndDate}T12:00:00`) : new Date();
-    const compact = (date) => date.toISOString().slice(0, 10).replaceAll("-", "");
+    const request = this.chartRequestFor(symbol, mode);
     cx.spawn(async (cx) => {
       try {
         let candles;
-        if (mode === "intraday") {
-          const response = await stream.queryIntraday({ symbol, tradeSession: TRADE_SESSION.ALL });
+        if (request.kind === "intraday") {
+          const response = await stream.queryIntraday(request.params);
           candles = response.lines.map((line) => ({
             ...line,
             open: line.price,
@@ -1282,18 +1310,10 @@ export default class LongbridgeApp extends View {
             close: line.price,
           }));
         } else {
-          const days = mode === "5D" ? 14 : CANDLE_WINDOW_DAYS[mode];
-          const start = new Date(end.getTime() - days * 86_400_000);
-          const response = await stream.queryCandlesticks({
-            symbol,
-            period: CHART_PERIODS[CHART_MODES[mode].period],
-            startDate: compact(start),
-            endDate: compact(end),
-            tradeSession: TRADE_SESSION.NORMAL,
-          });
+          const response = await stream.queryCandlesticks(request.params);
           candles = response.candlesticks;
         }
-        if (!this.publishChartResponse(symbol, identity, generation, candles)) return;
+        if (!this.publishChartResponse(symbol, identity, generation, candles, request.marketDay)) return;
       } catch (_) {
         if (!this.acceptsChartResponse(symbol, identity, generation)) return;
         this.chartState = {
@@ -1315,15 +1335,27 @@ export default class LongbridgeApp extends View {
     );
   }
 
-  normalizeChartCandles(mode, candles) {
-    const source = Array.isArray(candles) ? candles : EMPTY_CANDLES;
+  normalizeChartCandles(mode, candles, requestMarketDay = null) {
+    const source = (Array.isArray(candles) ? candles : EMPTY_CANDLES).map((candle) => {
+      if (
+        !requestMarketDay ||
+        typeof candle?.marketDay === "string" ||
+        typeof candle?.tradingDate === "string"
+      ) {
+        return candle;
+      }
+      return { ...candle, marketDay: requestMarketDay };
+    });
     if (mode === "intraday") return prepareIntradaySeries(source).candles;
     return prepareCandleSeries(source).candles;
   }
 
-  publishChartResponse(symbol, identity, generation, candles) {
+  publishChartResponse(symbol, identity, generation, candles, requestMarketDay = null) {
     if (!this.acceptsChartResponse(symbol, identity, generation)) return false;
-    this.cacheChartSeries(identity, this.normalizeChartCandles(this.activeChartMode(), candles));
+    this.cacheChartSeries(
+      identity,
+      this.normalizeChartCandles(this.activeChartMode(), candles, requestMarketDay),
+    );
     this.chartState = { symbol, state: "ready" };
     return true;
   }
@@ -2499,7 +2531,6 @@ export default class LongbridgeApp extends View {
     // registered is where the reload is written. Setting what it already holds
     // would be a host call and an event with nothing behind them.
     if (this.chartCalendar.value() !== day) this.chartCalendar.set_value(day);
-    this.invalidateCurrentChartCache();
     this.loadSelectedChart(cx);
     this.redraw(cx);
   }

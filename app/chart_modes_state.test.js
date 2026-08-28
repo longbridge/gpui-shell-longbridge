@@ -3,6 +3,7 @@
 import { View } from "gpui";
 import { holdContext } from "./context.js";
 import { chartRequestIdentity } from "./chart_modes.js";
+import { PERIOD, TRADE_SESSION } from "./protocol.js";
 import LongbridgeApp from "./main.js";
 
 function check(condition, message) {
@@ -57,6 +58,85 @@ export default class ChartModeStateProbe extends LongbridgeApp {
     const minuteIdentity = chartRequestIdentity("AAPL.US", "1m", "latest");
     this.cacheChartSeries(defaultIdentity, [candle(1_700_000_000)]);
     this.cacheChartSeries(minuteIdentity, [candle(1_700_000_060)]);
+
+    const intradayNow = this.chartRequestFor("AAPL.US", "intraday", "latest");
+    check(
+      intradayNow.kind === "intraday" && intradayNow.params.tradeSession === TRADE_SESSION.ALL,
+      "only the current Intraday boundary uses command-18 full-session data",
+    );
+    const intradayHistory = this.chartRequestFor("AAPL.US", "intraday", "2026-08-28");
+    check(
+      intradayHistory.kind === "candlesticks" &&
+        intradayHistory.params.period === PERIOD.ONE_MINUTE &&
+        intradayHistory.params.startDate === "20260828" &&
+        intradayHistory.params.endDate === "20260828" &&
+        intradayHistory.params.tradeSession === TRADE_SESSION.ALL,
+      "a selected historical Intraday day uses a date-bounded full-session minute request",
+    );
+    for (const [mode, period] of [
+      ["5D", PERIOD.ONE_MINUTE],
+      ["1m", PERIOD.ONE_MINUTE],
+      ["5m", PERIOD.FIVE_MINUTE],
+      ["15m", PERIOD.FIFTEEN_MINUTE],
+      ["1D", PERIOD.DAY],
+    ]) {
+      const request = this.chartRequestFor("AAPL.US", mode, "2026-08-28");
+      check(
+        request.kind === "candlesticks" &&
+          request.params.period === period &&
+          request.params.tradeSession === TRADE_SESSION.NORMAL,
+        `${mode} chooses its regular-session candlestick period`,
+      );
+    }
+
+    this.chartMode = "1m";
+    this.chartEndDate = null;
+    this.chartCalendar = { value: () => null, set_value: () => {} };
+    const pickedIdentity = chartRequestIdentity("AAPL.US", "1m", "2026-08-28");
+    this.cacheChartSeries(pickedIdentity, [candle(1_700_000_000)]);
+    this.setChartEnd("2026-08-28", cx);
+    check(
+      this.chartCache.has(pickedIdentity),
+      "choosing a date preserves a completed cache entry for that new identity",
+    );
+    this.chartEndDate = null;
+
+    this.chartMode = "1D";
+    this.chartEndDate = "2026-08-29";
+    const dailyIdentity = this.currentChartIdentity();
+    const dailyGeneration = ++this.chartGeneration;
+    check(
+      this.publishChartResponse(
+        "AAPL.US",
+        dailyIdentity,
+        dailyGeneration,
+        [{ ...candle(1_700_000_000), marketDay: undefined }],
+        "2026-08-29",
+      ),
+      "a selected-day daily response publishes",
+    );
+    check(
+      this.chartCache.get(dailyIdentity)[0].marketDay === "2026-08-29",
+      "a dated response retains its authoritative request market day",
+    );
+    this.receiveQuote(
+      {
+        symbol: "AAPL.US",
+        timestamp: 1_700_000_030n,
+        lastDone: "104",
+        volume: 11n,
+        tradeSession: 0,
+        marketDay: "2026-08-29",
+      },
+      cx,
+    );
+    const dailyMerged = this.chartCache.get(dailyIdentity)[0];
+    check(
+      dailyMerged.close === "104" && dailyMerged.high === "104" && dailyMerged.volume === 11n,
+      "a provider-labelled daily Quote updates the active daily OHLCV bucket",
+    );
+    this.chartEndDate = null;
+    this.chartMode = "5D";
 
     let requests = 0;
     this.stream = {
@@ -152,6 +232,15 @@ export default class ChartModeStateProbe extends LongbridgeApp {
     check(
       !this.chartCache.has(uncachedIdentity),
       "a live push cannot create an uncached loading series",
+    );
+
+    this.chartCache = new Map();
+    for (let index = 0; index <= 16; index += 1) {
+      this.cacheChartSeries(`cache-${index}`, [candle(1_700_000_000 + index)]);
+    }
+    check(
+      this.chartCache.size === 16 && !this.chartCache.has("cache-0") && this.chartCache.has("cache-16"),
+      "the bounded session cache evicts its least-recently-used identity",
     );
   }
 
