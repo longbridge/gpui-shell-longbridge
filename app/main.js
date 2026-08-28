@@ -99,6 +99,14 @@ const WORKSPACE_LAYOUT_VERSION = 2;
 const DETAIL_DOCK_WIDTH = 460;
 
 const HOLDINGS_VIEWPORT_ROWS = 10;
+/**
+ * How long the steps before the stream exists may take before the window says
+ * so. Generous: it covers a token refresh, the watchlist read and the account
+ * read, on a slow connection. What it is really for is the case that never
+ * finishes at all -- see `armConnectDeadline`.
+ */
+const CONNECT_DEADLINE_MS = 30_000;
+
 const EMPTY_CANDLES = Object.freeze([]);
 
 /**
@@ -764,6 +772,47 @@ export default class LongbridgeApp extends View {
     });
   }
 
+  /**
+   * Bounds how long the connect sequence may sit in a transient state.
+   *
+   * `connect` cannot rely on its own `catch`. The sandbox interrupts a script
+   * that overruns its execution budget, and that interrupt is not catchable --
+   * it unwinds past every `catch` on the way out, `resume`'s included. A
+   * sequence cut down that way leaves `status` at whatever step it had reached
+   * and nothing else in this view can tell: the header says "Loading
+   * watchlist" and goes on saying it for as long as the window is open, which
+   * is what a stalled start looks like from the outside.
+   *
+   * `quote_stream.js` bounds its own handshake for exactly this reason. This is
+   * the same guard one layer out, over the steps before the stream exists.
+   *
+   * @param {import("gpui").Context} cx
+   * @param {number} generation
+   */
+  armConnectDeadline(cx, generation) {
+    this.clearConnectDeadline();
+    this.connectDeadline = cx.timer.after(CONNECT_DEADLINE_MS, (cx) => {
+      this.connectDeadline = null;
+      // A later attempt owns the state now, and a stream that reached
+      // `connected` needs no rescue.
+      if (generation !== this.streamGeneration) return;
+      if (this.status.state === "connected") return;
+      // Named from the step it was on, because "it stopped at Loading
+      // watchlist" and "it stopped at Loading snapshot" send you to different
+      // places.
+      const stalled = streamStatusSummary(this.status);
+      this.status = { state: "error" };
+      this.error =
+        `Connecting stopped at "${stalled}" after ` +
+        `${Math.round(CONNECT_DEADLINE_MS / 1000)}s. Retry, or sign in again.`;
+      this.redraw(cx);
+    });
+  }
+
+  clearConnectDeadline() {
+    this.connectDeadline = null;
+  }
+
   /** @param {import("gpui").Context} cx */
   resume(cx) {
     this.status = { state: "restoring_token" };
@@ -774,6 +823,7 @@ export default class LongbridgeApp extends View {
       try {
         await this.connect(await accessToken(), cx);
       } catch (error) {
+        this.clearConnectDeadline();
         this.status = { state: "error" };
         this.error = error instanceof Error ? error.message : String(error);
         this.redraw(cx);
@@ -832,6 +882,7 @@ export default class LongbridgeApp extends View {
     if (previous) await previous.stop();
     if (generation !== this.streamGeneration) return;
     this.status = { state: "loading_watchlist" };
+    this.armConnectDeadline(cx, generation);
     this.redraw(cx);
 
     const instruments = watchlistInstruments(await get("/v1/watchlist/groups"));
@@ -845,6 +896,7 @@ export default class LongbridgeApp extends View {
     // reads are a separate, slower boundary and must not leave navigation in a
     // misleading global Connecting state.
     this.status = { state: "connected" };
+    this.clearConnectDeadline();
     this.redraw(cx);
     await this.refreshPortfolio();
     if (generation !== this.streamGeneration) return;
@@ -1255,8 +1307,12 @@ export default class LongbridgeApp extends View {
       .w_full()
       .items_center()
       .gap(tokens.spacing.md)
-      .pl(TITLE_BAR_LEADING)
-      .pr(tokens.spacing.md)
+      // Symmetric, so the page switch between the two tracks is centred on the
+      // window rather than on a box that has been pushed right. The room macOS
+      // needs for its traffic lights is the *left track's* padding, below: as
+      // padding here it inset the content box on one side only, and the middle
+      // came to rest 42 pixels right of centre.
+      .px(tokens.spacing.md)
       .bg(tokens.surface)
       .border_b(1)
       .border_color(tokens.border)
@@ -1264,6 +1320,10 @@ export default class LongbridgeApp extends View {
         h_flex()
           .flex_1()
           .min_w(0)
+          // The traffic lights are drawn over this corner by the system, so
+          // the mark starts after them. On a platform without them this is the
+          // ordinary gap.
+          .pl(TITLE_BAR_LEADING - tokens.spacing.md)
           // The mark and the name are one lockup, so they sit on a shared
           // baseline. Not `items_center`, which leaves the name floating above
           // the mark's foot, and not `items_end` either: that aligns the *line

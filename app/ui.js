@@ -547,7 +547,7 @@ export function quoteRow(tokens, quote, selected, rowIndex = 0, now = Date.now()
           // The badge is an `Avatar` with only its fallback filled: there is no
           // per-market artwork in the application directory, and an image that
           // never resolves is the case the fallback exists for.
-          .child(marketAvatar(tokens, quote.market))
+          .child(marketAvatar(tokens, quote.code || quote.symbol))
           .child(
             v_flex()
               .min_w(0)
@@ -1076,8 +1076,20 @@ export function errorMessage(tokens, value) {
  * @param {string} market
  * @param {number} [size]
  */
-export function marketAvatar(tokens, market, size = 26) {
-  const initials = (market || "--").slice(0, 2).toUpperCase();
+export function marketAvatar(tokens, code, size = 26) {
+  // One letter, from the ticker rather than from the market.
+  //
+  // Every row of a market's block carried the same two letters, so the column
+  // was a stripe that said what the Session column already says. The ticker's
+  // own initial differs row to row, which is what makes it a mark you can find
+  // a row by rather than a label repeated down the page.
+  //
+  // A leading `.` is an index -- `.SPX.US` -- and a leading digit is a Hong
+  // Kong or A-share board number; neither is a letter to lead with, so the
+  // first character that is one wins, and a code with none keeps its first.
+  const bare = String(code || "").replace(/^\.+/, "");
+  const letter = bare.match(/[A-Za-z]/)?.[0] ?? bare[0] ?? "-";
+  const initials = letter.toUpperCase();
   return Avatar.new()
     .flex_none()
     .w(size)
@@ -1091,7 +1103,7 @@ export function marketAvatar(tokens, market, size = 26) {
         .flex()
         .items_center()
         .justify_center()
-        .text_size(10)
+        .text_size(12)
         .line_height(1)
         .font_weight(700)
         .text_color(tokens.muted_foreground)
