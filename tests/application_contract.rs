@@ -83,11 +83,13 @@ fn application_exposes_api_backed_read_only_views() {
     assert!(!main.contains(".text_color(\"") && !ui.contains(".text_color(\""));
     assert!(!main.contains("rgb(") && !ui.contains("rgb("));
     // Each page owns its scrolling now, and each does it the way its content
-    // needs: Portfolio is one scrolling column, Watchlist virtualizes its rows
-    // and pairs a Scrollbar with them by name. Neither paints a window bar.
+    // needs. Neither scrolls as a page: both put the scroll inside the table
+    // that has more rows than room, which is the virtualized one, so the window
+    // never grows a bar around a whole column and no page nests one scroll
+    // inside another. Neither paints a window bar either.
     assert!(
-        main.contains(".overflow_y_scroll()"),
-        "the portfolio column must remain vertically scrollable"
+        !main.contains(".overflow_y_scroll()"),
+        "no page may scroll as a whole; the table inside it does"
     );
     // Both lists go through one virtualized table, so the list and the bar are
     // named from the same id and cannot drift apart.

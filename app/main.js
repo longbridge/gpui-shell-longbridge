@@ -1548,7 +1548,7 @@ export default class LongbridgeApp extends View {
       // and its default chrome hands back the content bare -- no width, so a
       // side dock stops being a column and drops into the flow below the
       // centre. See the note on `dockFrame`.
-      .dock((dock, cx) => dockFrame(cx.theme(), dock, dock_content().flex_1().min_h(0)));
+      .dock((dock, cx) => dockFrame(cx.theme(), dock, dock_content().flex_1().min_h(0).w_full()));
   }
 
   /** @param {import("gpui-base").Theme} tokens */
@@ -1558,6 +1558,10 @@ export default class LongbridgeApp extends View {
     return this.pane(tokens).child(
       panel(tokens)
         .id("watchlist-pane")
+        // No top edge: the tab bar above this pane already draws the line, and
+        // two of them at the same seam is a doubled border rather than a
+        // stronger one.
+        .border_t(0)
         .flex_1()
         .min_h(0)
         // On the pane rather than on whatever holds it: the pane is now a dock
@@ -1863,6 +1867,10 @@ export default class LongbridgeApp extends View {
     return this.pane(tokens).child(
       panel(tokens)
         .id("stock-detail-pane")
+        // No top edge: the tab bar above this pane already draws the line, and
+        // two of them at the same seam is a doubled border rather than a
+        // stronger one.
+        .border_t(0)
         .flex_1()
         .min_h(0)
         .child(
@@ -2121,12 +2129,18 @@ export default class LongbridgeApp extends View {
     const pageStart = (holdingsPage - 1) * HOLDINGS_PAGE_SIZE;
     const pagedHoldings = holdingRows.slice(pageStart, pageStart + HOLDINGS_PAGE_SIZE);
 
-    // One scrolling column, and every panel in it sized by its own content.
-    // Nothing here is `flex_1`: a panel that took the leftover height would be
-    // squeezed to nothing in a short window, and its inner scroll — a second
-    // scroll inside this one — is where Holdings used to disappear.
+    // The page does not scroll; Holdings does. The two cards above it are as
+    // tall as their content and the table takes the rest, which is what stops
+    // the window growing a scrollbar of its own.
+    //
+    // That leaves exactly one scroll on this page, and it is the virtualized
+    // one -- the table only builds the rows it is showing, so the taller the
+    // window the more it draws and the less it pages. A scrolling *page* put a
+    // second scroll outside that one, and a table with its own scroll inside a
+    // scrolling column is how Holdings used to end up unreachable.
     return v_flex()
-      .overflow_y_scroll()
+      .flex_1()
+      .min_h(0)
       .gap(tokens.spacing.md)
       // The summary and the ring share a row, four parts to six. They answer
       // the same question -- what is in this account -- from two directions,
@@ -2216,11 +2230,13 @@ export default class LongbridgeApp extends View {
       )
       .child(
         panel(tokens)
-          .flex_none()
+          .flex_1()
+          .min_h(0)
           .child(
             h_flex()
               .items_center()
               .justify_between()
+              .flex_none()
               .px(tokens.spacing.md)
               .py(tokens.spacing.sm)
               // The count sits with the title, not across the row from it. It
@@ -2263,13 +2279,11 @@ export default class LongbridgeApp extends View {
             )
               // A definite height is what makes virtualization possible at all,
               // and this page is a scrolling column with no leftover height to
-              // claim. So the body is as tall as its rows up to a ceiling, and
-              // the page scrolls past the panel once it hits it.
-              .h(
-                TABLE_HEADER_HEIGHT +
-                  Math.min(pagedHoldings.length, HOLDINGS_VIEWPORT_ROWS) * HOLDING_ROW_HEIGHT,
-              )
-              .when(pagedHoldings.length === 0, (element) => element.h_auto()),
+              // claim -- so it takes the leftover height of a page that no
+              // longer scrolls, rather than being sized from a row count and
+              // letting the page scroll past it.
+              .flex_1()
+              .min_h(0),
           )
           .when(holdingsPages > 1, (element) =>
             element.child(

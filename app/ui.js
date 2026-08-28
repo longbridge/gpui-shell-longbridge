@@ -1545,22 +1545,13 @@ export function dockTabBar(tokens, group) {
                 .select_tab(group, tab.index)
                 .drag_tab(group, tab.index)
                 .child(panelTitle(tab.name))
-                // No close control: neither pane is closable, so this never
-                // draws. It stays because a dock this application grows a third,
-                // closable pane in should not need the tab bar rewritten.
-                .when(tab.closable, (element) =>
-                  element.child(
-                    div()
-                      .id(`dock-tab-close-${tab.id}`)
-                      .px(tokens.spacing.xxs)
-                      .rounded(tokens.radius.sm)
-                      .text_color(tokens.muted_foreground)
-                      .hover((style) => style.bg(tokens.accent))
-                      .close_panel(group, tab.id)
-                      .accessibility_label(`Close ${panelTitle(tab.name)}`)
-                      .child("\u00d7"),
-                  ),
-                ),
+                // No close control, and not conditionally: this application has
+                // two panes and no way to reopen one, so closing a pane is a
+                // one-way door it should never hold open. `tab.closable` cannot
+                // be trusted to say so either -- `add_panel`'s options do not
+                // survive a restart, because `register_panel` has nowhere to
+                // carry them and `PanelScript::closable` is asked again on every
+                // load. So the control is simply not drawn.
             ),
         ),
     );
@@ -1582,7 +1573,14 @@ export function dockTabBar(tokens, group) {
  */
 export function dockFrame(tokens, dock, content) {
   const vertical = dock.placement === "bottom";
-  return h_flex()
+  // A column, and the content grows down it.
+  //
+  // This was a row, and a dock drew nothing at all: `flex_1` grows the main
+  // axis, so in a row it took the width and left the height to stretch --
+  // which `min_h(0)` then allowed to collapse, because a tab group's panel is
+  // positioned absolutely and contributes no height of its own. The dock had
+  // its full width and nothing in it, not even a tab bar.
+  return v_flex()
     .size_full()
     .relative()
     .child(content)

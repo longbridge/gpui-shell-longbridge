@@ -784,12 +784,15 @@ fn portfolio_renders_pnl_summary_and_position_columns(cx: &mut TestAppContext) {
     assert!(rendered.contains("Table \"allocation-USD\""), "{rendered}");
     assert!(rendered.contains("path fill"), "{rendered}");
 
-    // One scroll for the whole column, and no panel claiming the leftover
-    // height: a short window scrolls to Holdings rather than crushing it.
+    // The page itself does not scroll. Holdings takes the leftover height and
+    // scrolls inside its own virtualized list, so the window never grows a
+    // scrollbar around the whole column -- and a page that scrolled would put a
+    // second scroll outside the table's, which is how Holdings used to end up
+    // unreachable.
     assert_eq!(
         rendered.matches(":overflow_y_scroll[]").count(),
-        1,
-        "expected exactly one scroll container:\n{rendered}"
+        0,
+        "the portfolio page must not scroll as a whole:\n{rendered}"
     );
     assert!(
         !rendered.contains(":overflow_y_scrollbar"),
