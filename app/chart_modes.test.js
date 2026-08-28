@@ -91,6 +91,60 @@ function runVectors() {
   );
   check(oneMinute[0].close === "100", "live merging does not mutate cached candles");
 
+  const normalizedLive = prepareCandleSeries([
+    candle("2026-08-29T14:30:00Z", 100, 0, "2026-08-29", 4n),
+  ]).candles;
+  const normalizedMerged = mergeLiveChartQuote(
+    "AAPL.US",
+    "1m",
+    normalizedLive,
+    quote("2026-08-29T14:30:45Z", 103, "2026-08-29", 0, 9n),
+  );
+  check(
+    Object.isFrozen(normalizedMerged[0].geometry) &&
+      normalizedMerged[0].geometry.open === 100 &&
+      normalizedMerged[0].geometry.high === 103 &&
+      normalizedMerged[0].geometry.low === 100 &&
+      normalizedMerged[0].geometry.close === 103,
+    "merging a prepared series replaces stale frozen OHLC geometry",
+  );
+  const normalizedAppended = mergeLiveChartQuote(
+    "AAPL.US",
+    "1m",
+    prepareCandleSeries([]).candles,
+    quote("2026-08-29T14:31:00Z", 104, "2026-08-29", 0, 10n),
+  );
+  check(
+    Object.isFrozen(normalizedAppended[0].geometry) && normalizedAppended[0].geometry.close === 104,
+    "appended live candles carry frozen geometry",
+  );
+  const exactHigh = "9007199254740992.00";
+  const exactHigherQuote = "9007199254740992.01";
+  const precise = prepareCandleSeries([
+    { ...candle("2026-08-29T14:30:00Z", exactHigh, 0, "2026-08-29"), high: exactHigh },
+  ]).candles;
+  const preciseMerged = mergeLiveChartQuote(
+    "AAPL.US",
+    "1m",
+    precise,
+    quote("2026-08-29T14:30:45Z", exactHigherQuote, "2026-08-29", 0),
+  );
+  check(
+    preciseMerged[0].high === exactHigherQuote,
+    "live merging compares provider decimal strings without IEEE-754 precision loss",
+  );
+  const exactLowerQuote = "9007199254740991.99";
+  const preciseRangeMerged = mergeLiveChartQuote(
+    "AAPL.US",
+    "1m",
+    preciseMerged,
+    quote("2026-08-29T14:30:50Z", exactLowerQuote, "2026-08-29", 0),
+  );
+  check(
+    preciseRangeMerged[0].low === exactLowerQuote,
+    "live merging keeps an exact decimal low beyond IEEE-754 precision",
+  );
+
   const fiveMinute = [candle("2026-08-29T14:30:00Z", 100, 0, "2026-08-29", 1n)];
   const fiveMinuteMerged = mergeLiveChartQuote("AAPL.US", "5m", fiveMinute, quote("2026-08-29T14:34:59Z", 96, "2026-08-29", 0, 7n));
   check(

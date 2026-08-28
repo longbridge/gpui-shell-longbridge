@@ -40,16 +40,22 @@ function marketDay(value) {
       : null;
 }
 
-function normalizeCandle(candle) {
-  if (!candle || typeof candle !== "object" || timestampSeconds(candle.timestamp) === null) return null;
+function geometryFor(candle) {
   const open = numeric(candle.open);
   const high = numeric(candle.high);
   const low = numeric(candle.low);
   const close = numeric(candle.close);
   if (open === null || high === null || low === null || close === null) return null;
+  return Object.freeze({ open, high, low, close });
+}
+
+function normalizeCandle(candle) {
+  if (!candle || typeof candle !== "object" || timestampSeconds(candle.timestamp) === null) return null;
+  const geometry = geometryFor(candle);
+  if (geometry === null) return null;
   return Object.freeze({
     ...candle,
-    geometry: Object.freeze({ open, high, low, close }),
+    geometry,
   });
 }
 
@@ -115,28 +121,55 @@ function bucket(timestamp, period) {
   return Math.floor(timestamp / period) * period;
 }
 
-function isNewerDecimal(left, right) {
-  return numeric(left) > numeric(right);
+function decimalParts(value) {
+  const matched = /^([+-]?)(\d+)(?:\.(\d*))?(?:e([+-]?\d+))?$/i.exec(String(value).trim());
+  if (!matched) return null;
+  const exponent = Number(matched[4] ?? 0);
+  if (!Number.isSafeInteger(exponent)) return null;
+  const digits = `${matched[2]}${matched[3] ?? ""}`.replace(/^0+/, "");
+  if (digits.length === 0) return { sign: 0, digits: "0", magnitude: 0 };
+  return {
+    sign: matched[1] === "-" ? -1 : 1,
+    digits,
+    magnitude: digits.length - ((matched[3] ?? "").length - exponent),
+  };
 }
 
-function isOlderDecimal(left, right) {
-  return numeric(left) < numeric(right);
+/** Compares decimal strings exactly, including values outside IEEE-754 precision. */
+function compareDecimals(left, right) {
+  const leftParts = decimalParts(left);
+  const rightParts = decimalParts(right);
+  if (leftParts === null || rightParts === null) return null;
+  if (leftParts.sign !== rightParts.sign) return leftParts.sign - rightParts.sign;
+  if (leftParts.sign === 0) return 0;
+  if (leftParts.magnitude !== rightParts.magnitude) {
+    return (leftParts.magnitude - rightParts.magnitude) * leftParts.sign;
+  }
+  const width = Math.max(leftParts.digits.length, rightParts.digits.length);
+  for (let index = 0; index < width; index += 1) {
+    const leftDigit = leftParts.digits.charCodeAt(index) || 48;
+    const rightDigit = rightParts.digits.charCodeAt(index) || 48;
+    if (leftDigit !== rightDigit) return (leftDigit - rightDigit) * leftParts.sign;
+  }
+  return 0;
 }
 
 function mergeCandle(candle, quote) {
   const price = String(quote.lastDone);
-  return {
+  const highComparison = compareDecimals(price, candle.high);
+  const lowComparison = compareDecimals(price, candle.low);
+  return normalizeCandle({
     ...candle,
     close: price,
-    high: isNewerDecimal(price, candle.high) ? price : candle.high,
-    low: isOlderDecimal(price, candle.low) ? price : candle.low,
+    high: highComparison !== null && highComparison > 0 ? price : candle.high,
+    low: lowComparison !== null && lowComparison < 0 ? price : candle.low,
     volume: quote.volume ?? candle.volume,
-  };
+  });
 }
 
 function appendCandle(quote, timestamp) {
   const price = String(quote.lastDone);
-  return {
+  return normalizeCandle({
     timestamp: typeof quote.timestamp === "bigint" ? BigInt(timestamp) : timestamp,
     open: price,
     high: price,
@@ -145,7 +178,7 @@ function appendCandle(quote, timestamp) {
     volume: quote.volume ?? 0n,
     tradeSession: quote.tradeSession,
     ...(marketDay(quote) === null ? {} : { marketDay: marketDay(quote) }),
-  };
+  });
 }
 
 /**
