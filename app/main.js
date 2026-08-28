@@ -158,6 +158,11 @@ const CHART_PERIODS = Object.freeze({
   "1D": PERIOD.DAY,
 });
 
+function providerDayBucket(value) {
+  const seconds = typeof value === "bigint" ? Number(value) : value;
+  return Number.isSafeInteger(seconds) ? Math.floor(seconds / 86_400) : null;
+}
+
 function emptyDepthState(symbol = null) {
   return {
     symbol,
@@ -563,8 +568,14 @@ export default class LongbridgeApp extends View {
   cachedChartSeries(symbol = this.selectedSymbol) {
     const identity = this.currentChartIdentity(symbol);
     if (!identity) return EMPTY_CANDLES;
-    const cached = this.chartCache?.get(identity);
-    if (cached) return cached;
+    if (this.chartCache?.has(identity)) {
+      const cached = this.chartCache.get(identity);
+      // Map insertion order is the LRU order. A completed response and a cache
+      // hit both become most-recently used without rebuilding its series.
+      this.chartCache.delete(identity);
+      this.chartCache.set(identity, cached);
+      return cached;
+    }
     // Older retained-child fixtures seed the pre-mode cache directly. Keeping
     // this read-only compatibility path lets the state migration land before
     // the retained UI changes, without allowing it to mask a new mode cache.
@@ -611,7 +622,6 @@ export default class LongbridgeApp extends View {
       return {
         kind: "intraday",
         params: { symbol, tradeSession: TRADE_SESSION.ALL },
-        marketDay: null,
       };
     }
     const requestEnd = endDate === CHART_LATEST_END ? calendarDay(new Date()) : endDate;
@@ -627,9 +637,6 @@ export default class LongbridgeApp extends View {
         endDate: compact(requestEnd),
         tradeSession: mode === "intraday" ? TRADE_SESSION.ALL : TRADE_SESSION.NORMAL,
       },
-      // A selected date is a request boundary supplied by the user. It is the
-      // only fallback used when the provider's historical candle omits a date.
-      marketDay: endDate === CHART_LATEST_END ? null : endDate,
     };
   }
 
@@ -1258,7 +1265,10 @@ export default class LongbridgeApp extends View {
       const identity = this.currentChartIdentity();
       const candles = this.cachedChartSeries();
       if (this.hasCachedChartSeries() && candles) {
-        const merged = mergeLiveChartQuote(this.selectedSymbol, this.activeChartMode(), candles, quote);
+        const activeQuote = this.quoteForActiveChart(candles, quote);
+        const merged = activeQuote
+          ? mergeLiveChartQuote(this.selectedSymbol, this.activeChartMode(), candles, activeQuote)
+          : candles;
         if (merged !== candles) {
           if (identity) this.cacheChartSeries(identity, merged);
           // Not published here. A live merge answers with a new series for
@@ -1288,14 +1298,16 @@ export default class LongbridgeApp extends View {
     }
     const mode = this.activeChartMode();
     const identity = this.currentChartIdentity(symbol);
+    const cached = this.hasCachedChartSeries(symbol);
+    if (cached) this.cachedChartSeries(symbol);
     const generation = ++this.chartGeneration;
     this.chartState = {
       symbol,
-      state: this.hasCachedChartSeries(symbol) ? "ready" : "loading",
+      state: cached ? "ready" : "loading",
     };
     this.redraw(cx);
     this.publishChart(cx);
-    if (!stream || this.hasCachedChartSeries(symbol)) return;
+    if (!stream || cached) return;
     const request = this.chartRequestFor(symbol, mode);
     cx.spawn(async (cx) => {
       try {
@@ -1313,7 +1325,7 @@ export default class LongbridgeApp extends View {
           const response = await stream.queryCandlesticks(request.params);
           candles = response.candlesticks;
         }
-        if (!this.publishChartResponse(symbol, identity, generation, candles, request.marketDay)) return;
+        if (!this.publishChartResponse(symbol, identity, generation, candles)) return;
       } catch (_) {
         if (!this.acceptsChartResponse(symbol, identity, generation)) return;
         this.chartState = {
@@ -1335,29 +1347,35 @@ export default class LongbridgeApp extends View {
     );
   }
 
-  normalizeChartCandles(mode, candles, requestMarketDay = null) {
-    const source = (Array.isArray(candles) ? candles : EMPTY_CANDLES).map((candle) => {
-      if (
-        !requestMarketDay ||
-        typeof candle?.marketDay === "string" ||
-        typeof candle?.tradingDate === "string"
-      ) {
-        return candle;
-      }
-      return { ...candle, marketDay: requestMarketDay };
-    });
+  normalizeChartCandles(mode, candles) {
+    const source = Array.isArray(candles) ? candles : EMPTY_CANDLES;
     if (mode === "intraday") return prepareIntradaySeries(source).candles;
     return prepareCandleSeries(source).candles;
   }
 
-  publishChartResponse(symbol, identity, generation, candles, requestMarketDay = null) {
+  publishChartResponse(symbol, identity, generation, candles) {
     if (!this.acceptsChartResponse(symbol, identity, generation)) return false;
     this.cacheChartSeries(
       identity,
-      this.normalizeChartCandles(this.activeChartMode(), candles, requestMarketDay),
+      this.normalizeChartCandles(this.activeChartMode(), candles),
     );
     this.chartState = { symbol, state: "ready" };
     return true;
+  }
+
+  quoteForActiveChart(candles, quote) {
+    if (this.activeChartMode() !== "1D" || quote?.tradeSession !== TRADE_SESSION.NORMAL) return quote;
+    const last = candles.at(-1);
+    if (!last) return null;
+    const lastMarketDay =
+      typeof last.marketDay === "string" ? last.marketDay : typeof last.tradingDate === "string" ? last.tradingDate : null;
+    const quoteMarketDay =
+      typeof quote.marketDay === "string" ? quote.marketDay : typeof quote.tradingDate === "string" ? quote.tradingDate : null;
+    if (lastMarketDay && quoteMarketDay) return lastMarketDay === quoteMarketDay ? quote : null;
+    const lastBucket = providerDayBucket(last.timestamp);
+    const quoteBucket = providerDayBucket(quote.timestamp);
+    if (lastBucket === null || quoteBucket === null || lastBucket !== quoteBucket) return null;
+    return { ...quote, dailyBucket: quoteBucket };
   }
 
   /**

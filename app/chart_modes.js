@@ -40,6 +40,12 @@ function marketDay(value) {
       : null;
 }
 
+function dailyBucket(value) {
+  if (Number.isSafeInteger(value?.dailyBucket)) return value.dailyBucket;
+  const timestamp = timestampSeconds(value?.timestamp);
+  return timestamp === null ? null : Math.floor(timestamp / 86_400);
+}
+
 function geometryFor(candle) {
   const open = numeric(candle.open);
   const high = numeric(candle.high);
@@ -198,8 +204,15 @@ export function mergeLiveChartQuote(symbol, mode, candles, quote) {
   if (selected.period === "1D") {
     const activeDay = marketDay(quote);
     const lastDay = marketDay(last);
-    if (activeDay === null || lastDay === null || activeDay < lastDay) return candles;
-    if (activeDay === lastDay) return [...candles.slice(0, -1), mergeCandle(last, quote)];
+    if (activeDay !== null && lastDay !== null) {
+      if (activeDay < lastDay) return candles;
+      if (activeDay === lastDay) return [...candles.slice(0, -1), mergeCandle(last, quote)];
+      return [...candles, appendCandle(quote, quoteTimestamp)];
+    }
+    const activeBucket = dailyBucket(quote);
+    const lastBucket = dailyBucket(last);
+    if (activeBucket === null || lastBucket === null || activeBucket < lastBucket) return candles;
+    if (activeBucket === lastBucket) return [...candles.slice(0, -1), mergeCandle(last, quote)];
     return [...candles, appendCandle(quote, quoteTimestamp)];
   }
 

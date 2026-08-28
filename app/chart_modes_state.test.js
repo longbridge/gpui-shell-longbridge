@@ -103,21 +103,25 @@ export default class ChartModeStateProbe extends LongbridgeApp {
 
     this.chartMode = "1D";
     this.chartEndDate = "2026-08-29";
+    check(
+      this.normalizeChartCandles(
+        "1D",
+        [{ ...candle(1_700_000_000), marketDay: undefined }],
+        "2026-08-29",
+      )[0].marketDay === undefined,
+      "a historical request boundary never rewrites each candle's provider market-day identity",
+    );
     const dailyIdentity = this.currentChartIdentity();
     const dailyGeneration = ++this.chartGeneration;
     check(
-      this.publishChartResponse(
-        "AAPL.US",
-        dailyIdentity,
-        dailyGeneration,
-        [{ ...candle(1_700_000_000), marketDay: undefined }],
-        "2026-08-29",
-      ),
+      this.publishChartResponse("AAPL.US", dailyIdentity, dailyGeneration, [
+        { ...candle(1_700_000_000), marketDay: undefined },
+      ]),
       "a selected-day daily response publishes",
     );
     check(
-      this.chartCache.get(dailyIdentity)[0].marketDay === "2026-08-29",
-      "a dated response retains its authoritative request market day",
+      this.chartCache.get(dailyIdentity)[0].marketDay === undefined,
+      "the decoded daily candle remains free of an invented request-date label",
     );
     this.receiveQuote(
       {
@@ -126,14 +130,27 @@ export default class ChartModeStateProbe extends LongbridgeApp {
         lastDone: "104",
         volume: 11n,
         tradeSession: 0,
-        marketDay: "2026-08-29",
       },
       cx,
     );
     const dailyMerged = this.chartCache.get(dailyIdentity)[0];
     check(
       dailyMerged.close === "104" && dailyMerged.high === "104" && dailyMerged.volume === 11n,
-      "a provider-labelled daily Quote updates the active daily OHLCV bucket",
+      "a real decoded Quote shape updates only its matching provider daily bucket",
+    );
+    this.receiveQuote(
+      {
+        symbol: "AAPL.US",
+        timestamp: 1_700_086_400n,
+        lastDone: "999",
+        volume: 99n,
+        tradeSession: 0,
+      },
+      cx,
+    );
+    check(
+      this.chartCache.get(dailyIdentity)[0].close === "104",
+      "an ambiguous newer provider day cannot overwrite the active daily candle",
     );
     this.chartEndDate = null;
     this.chartMode = "5D";
@@ -235,12 +252,22 @@ export default class ChartModeStateProbe extends LongbridgeApp {
     );
 
     this.chartCache = new Map();
-    for (let index = 0; index <= 16; index += 1) {
-      this.cacheChartSeries(`cache-${index}`, [candle(1_700_000_000 + index)]);
+    this.chartMode = "1m";
+    for (let index = 0; index < 16; index += 1) {
+      this.cacheChartSeries(chartRequestIdentity(`CACHE${index}.US`, "1m", "latest"), [
+        candle(1_700_000_000 + index),
+      ]);
     }
+    this.cachedChartSeries("CACHE0.US");
+    this.cacheChartSeries(chartRequestIdentity("CACHE16.US", "1m", "latest"), [
+      candle(1_700_000_016),
+    ]);
     check(
-      this.chartCache.size === 16 && !this.chartCache.has("cache-0") && this.chartCache.has("cache-16"),
-      "the bounded session cache evicts its least-recently-used identity",
+      this.chartCache.size === 16 &&
+        this.chartCache.has(chartRequestIdentity("CACHE0.US", "1m", "latest")) &&
+        !this.chartCache.has(chartRequestIdentity("CACHE1.US", "1m", "latest")) &&
+        this.chartCache.has(chartRequestIdentity("CACHE16.US", "1m", "latest")),
+      "a cache read promotes its identity before the least-recently-used entry is evicted",
     );
   }
 
