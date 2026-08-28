@@ -107,6 +107,18 @@ const HOLDINGS_VIEWPORT_ROWS = 10;
  */
 const CONNECT_DEADLINE_MS = 30_000;
 
+/**
+ * Every card heading is this tall, so two side by side line up whatever is in
+ * them. A 24px control in one and a line of text in the other is otherwise two
+ * different heights.
+ */
+const CARD_HEADER_HEIGHT = 38;
+
+/** Which pane a change is worth repainting. See `syncWorkspacePanels`. */
+const PANE_WATCHLIST = 1;
+const PANE_DETAIL = 2;
+const PANE_BOTH = PANE_WATCHLIST | PANE_DETAIL;
+
 const EMPTY_CANDLES = Object.freeze([]);
 
 /**
@@ -382,6 +394,7 @@ export default class LongbridgeApp extends View {
     // the coalesced repaint publishes them. See `scheduleRedraw`.
     this.chartDirty = false;
     this.repaint = null;
+    this.dirtyPanes = 0;
     // Off unless asked for. The rail names every binding and the row under it
     // reports the window's own measurements -- both are for learning the
     // application and for reading a bug report, and neither is worth four
@@ -626,6 +639,14 @@ export default class LongbridgeApp extends View {
    */
   syncWorkspacePanels() {
     if (!this.workspaceDock) return;
+    // Each `set_props` crosses the nested-view bridge and rebuilds that pane's
+    // whole description, so publishing to both on every repaint costs twice
+    // what the change was worth -- a quote for an instrument nobody selected
+    // moves a row in the watchlist and nothing at all in the details. On the
+    // resizable workspace this view drew both panes itself and one `notify`
+    // covered them; the bridge is what makes the difference worth tracking.
+    const panes = this.dirtyPanes;
+    this.dirtyPanes = 0;
     // A revision and nothing else. The application used to ride along in these
     // props, and it costs: `set_props` crosses the nested-view bridge, so this
     // handed the whole view -- quotes, holdings, the candle cache -- over it
@@ -637,8 +658,8 @@ export default class LongbridgeApp extends View {
     // reference, which is also the only way a pane rebuilt from a saved layout
     // could ever have got one.
     const props = { revision: (this.workspaceRevision += 1) };
-    this.watchlistPanel?.set_props(props);
-    this.detailPanel?.set_props(props);
+    if (panes & PANE_WATCHLIST) this.watchlistPanel?.set_props(props);
+    if (panes & PANE_DETAIL) this.detailPanel?.set_props(props);
   }
 
   /**
@@ -658,7 +679,8 @@ export default class LongbridgeApp extends View {
    *
    * @param {import("gpui").Context} cx
    */
-  scheduleRedraw(cx) {
+  scheduleRedraw(cx, panes = PANE_BOTH) {
+    this.dirtyPanes |= panes;
     if (this.repaint) return;
     this.repaint = cx.timer.after(100, (cx) => {
       this.repaint = null;
@@ -679,7 +701,8 @@ export default class LongbridgeApp extends View {
    *
    * @param {import("gpui").Context} cx
    */
-  redraw(cx) {
+  redraw(cx, panes = PANE_BOTH) {
+    this.dirtyPanes |= panes;
     cx.notify();
     this.syncWorkspacePanels();
   }
@@ -897,6 +920,7 @@ export default class LongbridgeApp extends View {
 
   /** @param {unknown} quote @param {import("gpui").AsyncContext} cx */
   receiveQuote(quote, cx) {
+    let selected = false;
     // Deliberately no re-sort here. `sortLikeTerminal` ranks a row from trade
     // session counts taken across the whole list, so running it per quote made
     // the connect burst -- the whole watchlist twice over, snapshot plus
@@ -924,10 +948,11 @@ export default class LongbridgeApp extends View {
       this.quotePulse = 0.72;
       cx.timer.after(160, (cx) => {
         this.quotePulse = 1;
-        this.scheduleRedraw(cx);
+        this.scheduleRedraw(cx, PANE_DETAIL);
       });
+      selected = true;
     }
-    this.scheduleRedraw(cx);
+    this.scheduleRedraw(cx, selected ? PANE_BOTH : PANE_WATCHLIST);
   }
 
   /** @param {import("gpui").Context} cx */
@@ -1312,7 +1337,10 @@ export default class LongbridgeApp extends View {
           .justify_end()
           .gap(tokens.spacing.sm)
           .child(connectionPill(tokens, this.status.state))
-          .when(this.hasStoredTokens, (element) =>
+          // Only on the page that has the pane it folds. Portfolio is one
+          // column with no details beside it, so the control there would be a
+          // switch for something that is not on screen.
+          .when(this.hasStoredTokens && this.page === "watchlist", (element) =>
             element.child(
               detailToggle(tokens, this.isDetailOpen(), (_event, cx) => this.toggleDetail(cx)),
             ),
@@ -2182,8 +2210,12 @@ export default class LongbridgeApp extends View {
                 h_flex()
                   .items_center()
                   .justify_between()
+                  // A stated height, not one that falls out of the contents:
+                  // the card beside this one carries a 24px control in its
+                  // header and this one carries only text, so left to their
+                  // contents the two headings sat at different heights.
+                  .h(CARD_HEADER_HEIGHT)
                   .px(tokens.spacing.md)
-                  .py(tokens.spacing.sm)
                   .child(
                     h_flex()
                       .items_baseline()
@@ -2215,8 +2247,8 @@ export default class LongbridgeApp extends View {
                   h_flex()
                     .items_center()
                     .justify_between()
+                    .h(CARD_HEADER_HEIGHT)
                     .px(tokens.spacing.md)
-                    .py(tokens.spacing.sm)
                     .child(
                       h_flex()
                         .items_baseline()
