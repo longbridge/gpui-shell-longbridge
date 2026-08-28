@@ -1,7 +1,18 @@
 import { View } from "gpui";
 import { holdContext } from "./context.js";
 import { v_flex } from "gpui-base";
-import { COMMAND, FRAME_TYPE, decodeFrame, encodeAuthRequest, encodeFrame } from "./protocol.js";
+import {
+  COMMAND,
+  FRAME_TYPE,
+  PERIOD,
+  TRADE_SESSION,
+  decodeFrame,
+  encodeAuthRequest,
+  encodeFrame,
+  encodeHistoryCandlestickDateRequest,
+  encodeIntradayRequest,
+  encodeSecurityCandlestickRequest,
+} from "./protocol.js";
 import { createQuoteStream } from "./quote_stream.js";
 
 const bytes = (...values) => Uint8Array.from(values);
@@ -130,6 +141,8 @@ class MockWebSocket {
       packet.command === COMMAND.AUTH ||
       packet.command === COMMAND.SUBSCRIBE ||
       packet.command === COMMAND.REALTIME_QUOTE ||
+      packet.command === COMMAND.INTRADAY ||
+      packet.command === COMMAND.CANDLESTICKS ||
       packet.command === COMMAND.HISTORY_CANDLESTICKS ||
       packet.command === COMMAND.HEARTBEAT
     ) {
@@ -182,9 +195,36 @@ class MockWebSocket {
                   0x80,
                   0x20,
                 )
-              : packet.command === COMMAND.HISTORY_CANDLESTICKS
-                ? bytes(0x0a, 0x07, 0x41, 0x41, 0x50, 0x4c, 0x2e, 0x55, 0x53)
-                : bytes(),
+              : packet.command === COMMAND.INTRADAY
+                ? bytes(
+                    0x0a,
+                    0x07,
+                    0x41,
+                    0x41,
+                    0x50,
+                    0x4c,
+                    0x2e,
+                    0x55,
+                    0x53,
+                    0x12,
+                    0x0c,
+                    0x0a,
+                    0x06,
+                    0x31,
+                    0x38,
+                    0x39,
+                    0x2e,
+                    0x35,
+                    0x30,
+                    0x10,
+                    0x01,
+                    0x30,
+                    0x03,
+                  )
+                : packet.command === COMMAND.CANDLESTICKS ||
+                    packet.command === COMMAND.HISTORY_CANDLESTICKS
+                  ? bytes(0x0a, 0x07, 0x41, 0x41, 0x50, 0x4c, 0x2e, 0x55, 0x53)
+                  : bytes(),
         }),
       );
     }
@@ -305,16 +345,74 @@ async function runVectors() {
     symbol: "AAPL.US",
     startDate: "20260817",
     endDate: "20260826",
+    period: PERIOD.DAY,
+    tradeSession: TRADE_SESSION.ALL,
   });
   check(history.symbol === "AAPL.US", "history query returns decoded candlesticks");
   check(
     decodeFrame(first.writes[3]).command === COMMAND.HISTORY_CANDLESTICKS,
     "history query uses command 27",
   );
+  check(
+    sameBytes(
+      decodeFrame(first.writes[3]).body,
+      encodeHistoryCandlestickDateRequest({
+        symbol: "AAPL.US",
+        startDate: "20260817",
+        endDate: "20260826",
+        period: PERIOD.DAY,
+        tradeSession: TRADE_SESSION.ALL,
+      }),
+    ),
+    "history query retains its requested period and trade session",
+  );
+
+  const intraday = await stream.queryIntraday({
+    symbol: "AAPL.US",
+    tradeSession: TRADE_SESSION.ALL,
+  });
+  check(
+    intraday.symbol === "AAPL.US" &&
+      intraday.lines[0].price === "189.50" &&
+      intraday.lines[0].tradeSession === TRADE_SESSION.OVERNIGHT,
+    "intraday query returns the decoded correlated response",
+  );
+  check(
+    decodeFrame(first.writes[4]).command === COMMAND.INTRADAY &&
+      sameBytes(
+        decodeFrame(first.writes[4]).body,
+        encodeIntradayRequest({ symbol: "AAPL.US", tradeSession: TRADE_SESSION.ALL }),
+      ),
+    "intraday query uses command 18 with its requested session",
+  );
+
+  const currentCandles = await stream.queryCandlesticks({
+    symbol: "AAPL.US",
+    period: PERIOD.FIFTEEN_MINUTE,
+    count: 120,
+    tradeSession: TRADE_SESSION.ALL,
+  });
+  check(
+    currentCandles.symbol === "AAPL.US",
+    "current candle query returns its correlated response",
+  );
+  check(
+    decodeFrame(first.writes[5]).command === COMMAND.CANDLESTICKS &&
+      sameBytes(
+        decodeFrame(first.writes[5]).body,
+        encodeSecurityCandlestickRequest({
+          symbol: "AAPL.US",
+          period: PERIOD.FIFTEEN_MINUTE,
+          count: 120,
+          tradeSession: TRADE_SESSION.ALL,
+        }),
+      ),
+    "current candle query uses command 19 with period and session",
+  );
 
   timers.fireHeartbeat();
   await settle();
-  check(decodeFrame(first.writes[4]).command === COMMAND.HEARTBEAT, "heartbeat write");
+  check(decodeFrame(first.writes[6]).command === COMMAND.HEARTBEAT, "heartbeat write");
 
   first.disconnect();
   await settle();

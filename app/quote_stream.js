@@ -13,12 +13,15 @@ import {
   decodeFrame,
   decodePushQuote,
   decodeSecurityCandlestickResponse,
+  decodeSecurityIntradayResponse,
   decodeSecurityQuoteResponse,
   encodeAuthRequest,
   encodeFrame,
   encodeHeartbeat,
   encodeHistoryCandlestickDateRequest,
+  encodeIntradayRequest,
   encodeRealtimeQuoteRequest,
+  encodeSecurityCandlestickRequest,
   encodeSubscribeRequest,
 } from "./protocol.js";
 
@@ -414,13 +417,36 @@ export function createQuoteStream(options) {
       emitStatus("stopped");
     },
 
-    async queryCandlesticks({ symbol, startDate, endDate }) {
+    async queryIntraday({ symbol, tradeSession }) {
       const session = current;
       if (!session || !active(session)) throw new Error("quote stream is not connected");
       const body = await request(
         session,
-        COMMAND.HISTORY_CANDLESTICKS,
-        encodeHistoryCandlestickDateRequest({ symbol, startDate, endDate }),
+        COMMAND.INTRADAY,
+        encodeIntradayRequest({ symbol, tradeSession }),
+      );
+      return decodeSecurityIntradayResponse(body);
+    },
+
+    async queryCandlesticks({ symbol, period, startDate, endDate, tradeSession, count }) {
+      const session = current;
+      if (!session || !active(session)) throw new Error("quote stream is not connected");
+      const useHistory = startDate !== undefined || endDate !== undefined;
+      if (useHistory && (startDate === undefined || endDate === undefined)) {
+        throw new TypeError("startDate and endDate must be provided together");
+      }
+      const body = await request(
+        session,
+        useHistory ? COMMAND.HISTORY_CANDLESTICKS : COMMAND.CANDLESTICKS,
+        useHistory
+          ? encodeHistoryCandlestickDateRequest({
+              symbol,
+              startDate,
+              endDate,
+              period,
+              tradeSession,
+            })
+          : encodeSecurityCandlestickRequest({ symbol, period, count, tradeSession }),
       );
       return decodeSecurityCandlestickResponse(body);
     },

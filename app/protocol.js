@@ -28,6 +28,8 @@ export const COMMAND = Object.freeze({
   REALTIME_QUOTE: 11,
   DEPTH: 14,
   TRADES: 17,
+  INTRADAY: 18,
+  CANDLESTICKS: 19,
   HISTORY_CANDLESTICKS: 27,
   PUSH_QUOTE: 101,
   PUSH_DEPTH: 102,
@@ -39,6 +41,21 @@ export const SUB_TYPE = Object.freeze({
   DEPTH: 2,
   BROKERS: 3,
   TRADE: 4,
+});
+
+export const PERIOD = Object.freeze({
+  ONE_MINUTE: 1,
+  FIVE_MINUTE: 5,
+  FIFTEEN_MINUTE: 15,
+  DAY: 1000,
+});
+
+export const TRADE_SESSION = Object.freeze({
+  NORMAL: 0,
+  PRE: 1,
+  POST: 2,
+  OVERNIGHT: 3,
+  ALL: 100,
 });
 
 export class LongbridgeProtocolError extends Error {
@@ -66,6 +83,11 @@ function requireInteger(value, name, minimum, maximum) {
 
 function requireString(value, name) {
   if (typeof value !== "string") fail(`${name} must be a string`);
+  return value;
+}
+
+function requireEnum(value, name, values) {
+  if (!Object.values(values).includes(value)) fail(`${name} is not supported`);
   return value;
 }
 
@@ -439,19 +461,63 @@ function requireCompactDate(value, name) {
 }
 
 /**
- * Encodes quote.SecurityHistoryCandlestickRequest for a one-minute,
- * no-adjust, regular-session query by date (command 27).
+ * Encodes quote.SecurityIntradayRequest (command 18). The trade-session
+ * field is retained for newer Longbridge servers while a normal-session
+ * request remains wire-compatible with the one-field legacy request.
  */
-export function encodeHistoryCandlestickDateRequest({ symbol, startDate, endDate }) {
+export function encodeIntradayRequest({ symbol, tradeSession = TRADE_SESSION.NORMAL }) {
+  requireEnum(tradeSession, "tradeSession", TRADE_SESSION);
+  const parts = [stringField(1, symbol, "symbol")];
+  if (tradeSession !== TRADE_SESSION.NORMAL) {
+    parts.push(varintField(2, BigInt(tradeSession), "tradeSession"));
+  }
+  return concat(parts);
+}
+
+/** Encodes quote.SecurityCandlestickRequest for command 19. */
+export function encodeSecurityCandlestickRequest({
+  symbol,
+  period = PERIOD.ONE_MINUTE,
+  count = 120,
+  tradeSession = TRADE_SESSION.NORMAL,
+}) {
+  requireEnum(period, "period", PERIOD);
+  requireEnum(tradeSession, "tradeSession", TRADE_SESSION);
+  return concat([
+    stringField(1, symbol, "symbol"),
+    varintField(2, BigInt(period), "period"),
+    varintField(3, BigInt(requireInteger(count, "count", 1, 1000)), "count"),
+    ...(tradeSession === TRADE_SESSION.NORMAL
+      ? []
+      : [varintField(5, BigInt(tradeSession), "tradeSession")]),
+  ]);
+}
+
+/**
+ * Encodes quote.SecurityHistoryCandlestickRequest for a no-adjust query by
+ * date (command 27).
+ */
+export function encodeHistoryCandlestickDateRequest({
+  symbol,
+  startDate,
+  endDate,
+  period = PERIOD.ONE_MINUTE,
+  tradeSession = TRADE_SESSION.NORMAL,
+}) {
+  requireEnum(period, "period", PERIOD);
+  requireEnum(tradeSession, "tradeSession", TRADE_SESSION);
   const dateQuery = concat([
     stringField(1, requireCompactDate(startDate, "startDate"), "startDate"),
     stringField(2, requireCompactDate(endDate, "endDate"), "endDate"),
   ]);
   return concat([
     stringField(1, symbol, "symbol"),
-    varintField(2, 1n, "period"),
+    varintField(2, BigInt(period), "period"),
     varintField(4, 2n, "queryType"),
     bytesField(6, dateQuery),
+    ...(tradeSession === TRADE_SESSION.NORMAL
+      ? []
+      : [varintField(7, BigInt(tradeSession), "tradeSession")]),
   ]);
 }
 
@@ -753,6 +819,42 @@ function decodeCandlestick(data) {
     return true;
   });
   return candlestick;
+}
+
+function decodeIntradayLine(data) {
+  const line = { tradeSession: TRADE_SESSION.NORMAL };
+  decodeMessage(data, (reader, field, wireType) => {
+    if (field === 1 || field === 4 || field === 5) {
+      expectWireType(wireType, 2, field);
+      const names = { 1: "price", 4: "turnover", 5: "avgPrice" };
+      line[names[field]] = reader.readString(`intraday ${names[field]}`);
+    } else if (field === 2 || field === 3) {
+      expectWireType(wireType, 0, field);
+      const name = field === 2 ? "timestamp" : "volume";
+      line[name] = signed64(reader.readVarint(`intraday ${name}`));
+    } else if (field === 6) {
+      expectWireType(wireType, 0, field);
+      line.tradeSession = unsigned32(reader.readVarint("intraday trade_session"), "trade_session");
+    } else return false;
+    return true;
+  });
+  return line;
+}
+
+/** Decodes quote.SecurityIntradayResponse returned by command 18. */
+export function decodeSecurityIntradayResponse(data) {
+  const response = { lines: [] };
+  decodeMessage(data, (reader, field, wireType) => {
+    if (field === 1) {
+      expectWireType(wireType, 2, field);
+      response.symbol = reader.readString("intraday response symbol");
+    } else if (field === 2) {
+      expectWireType(wireType, 2, field);
+      response.lines.push(decodeIntradayLine(reader.readBytes("intraday line")));
+    } else return false;
+    return true;
+  });
+  return response;
 }
 
 /** Decodes quote.SecurityCandlestickResponse returned by commands 19 and 27. */
