@@ -77,6 +77,8 @@ import {
   dockDropHint,
   dockFrame,
   dockTabBar,
+  dockTileDragBar,
+  dockTileResizeHandles,
   errorMessage,
   filterInput,
   HOLDING_ROW_HEIGHT,
@@ -128,6 +130,131 @@ const WORKSPACE_LAYOUT_KEY = "workspace.layout";
 const WORKSPACE_LAYOUT_VERSION = 3;
 /** The detail dock's starting width; after that the user's drag decides. */
 const DETAIL_DOCK_WIDTH = 460;
+
+// The right dock is a tile canvas. These stable names are deliberately
+// application-owned rather than DockArea panel ids: an id belongs to one live
+// entity only, while a name lets a later startup reconnect the saved geometry
+// to the entity this application has just created.
+const DEFAULT_DETAIL_TILES = Object.freeze([
+  Object.freeze({ name: "quote-details", x: 0, y: 0, width: DETAIL_DOCK_WIDTH, height: 220, z: 0 }),
+  Object.freeze({ name: "chart", x: 0, y: 220, width: DETAIL_DOCK_WIDTH, height: 300, z: 1 }),
+  Object.freeze({
+    name: "market-detail",
+    x: 0,
+    y: 520,
+    width: DETAIL_DOCK_WIDTH,
+    height: 280,
+    z: 2,
+  }),
+]);
+const DETAIL_TILE_NAMES = new Set(DEFAULT_DETAIL_TILES.map((tile) => tile.name));
+
+function finiteTileNumber(value, fallback) {
+  return Number.isFinite(value) ? value : fallback;
+}
+
+/**
+ * Accept only a complete, known tile set. Missing or corrupt entries fall
+ * back one-by-one, which keeps an upgraded or hand-edited saved layout from
+ * making a reading pane unreachable.
+ *
+ * @param {unknown} value
+ */
+export function normalizeDetailTiles(value) {
+  const supplied = new Map(
+    (Array.isArray(value) ? value : [])
+      .filter((tile) => tile && typeof tile === "object" && DETAIL_TILE_NAMES.has(tile.name))
+      .map((tile) => [tile.name, tile]),
+  );
+  return DEFAULT_DETAIL_TILES.map((fallback) => {
+    const tile = supplied.get(fallback.name);
+    if (!tile) return { ...fallback };
+    return {
+      name: fallback.name,
+      x: Math.max(0, finiteTileNumber(tile.x, fallback.x)),
+      y: Math.max(0, finiteTileNumber(tile.y, fallback.y)),
+      width: Math.max(120, finiteTileNumber(tile.width, fallback.width)),
+      height: Math.max(100, finiteTileNumber(tile.height, fallback.height)),
+      z: Math.max(0, Math.floor(finiteTileNumber(tile.z, fallback.z))),
+    };
+  }).sort((left, right) => left.z - right.z || left.name.localeCompare(right.name));
+}
+
+function tileNameFromDump(value) {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value.name ?? value.panel?.name ?? value.panel_name ?? value.info?.name;
+  if (typeof candidate !== "string") return null;
+  // Dump names may be namespaced (`shell:longbridge/chart`); the final segment
+  // is the panel name passed to add_panel and is our durable storage key.
+  const name = candidate.split(/[/:]/).at(-1);
+  return DETAIL_TILE_NAMES.has(name) ? name : null;
+}
+
+function tileBoundsFromDump(value) {
+  if (!value || typeof value !== "object") return null;
+  const bounds = value.bounds ?? value.tile?.bounds ?? value.info?.bounds;
+  if (!bounds || typeof bounds !== "object") return null;
+  // gpui-component serializes a Bounds<Pixels> as `{ origin, size }`; the
+  // shell's JS facade has also used flat `{ x, y, width, height }` bounds.
+  // Store one small, stable shape regardless of which side made the dump.
+  const x = bounds.x ?? bounds.origin?.x;
+  const y = bounds.y ?? bounds.origin?.y;
+  const width = bounds.width ?? bounds.size?.width;
+  const height = bounds.height ?? bounds.size?.height;
+  if (![x, y, width, height].every(Number.isFinite)) return null;
+  return { x, y, width, height };
+}
+
+/**
+ * Pull a portable tile list out of DockArea.dump() without ever loading it.
+ * The dock dump is intentionally opaque to scripts, so this walker tolerates
+ * both current tree shapes and additive future fields. It records the visual
+ * traversal order as a z order and only retains our three known panels.
+ *
+ * @param {unknown} dump
+ * @param {unknown} fallback
+ */
+export function detailTilesFromDockDump(dump, fallback) {
+  const found = new Map();
+  const seen = new Set();
+  let z = 0;
+  const visit = (value) => {
+    if (!value || typeof value !== "object" || seen.has(value)) return;
+    seen.add(value);
+    // DockArea's current serialized Tiles node keeps panel names in children
+    // and tile rectangles in its parallel `metas` vector. Pair them here
+    // before the generic walk below so a drag/resize survives the JSON shape
+    // instead of merely the in-memory facade shape.
+    const tileChildren = value.children;
+    const tileMetas = value.info?.tiles?.metas;
+    if (Array.isArray(tileChildren) && Array.isArray(tileMetas)) {
+      tileChildren.forEach((child, index) => {
+        const name = tileNameFromDump(child);
+        const meta = tileMetas[index];
+        const bounds = tileBoundsFromDump(meta);
+        if (name && bounds) {
+          found.set(name, {
+            name,
+            ...bounds,
+            z: finiteTileNumber(meta.z_index ?? meta.z, index),
+          });
+        }
+      });
+    }
+    const name = tileNameFromDump(value);
+    const bounds = tileBoundsFromDump(value);
+    if (name && bounds) {
+      found.set(name, { name, ...bounds, z: finiteTileNumber(value.z_index ?? value.z, z) });
+      z += 1;
+    }
+    for (const child of Object.values(value)) visit(child);
+  };
+  visit(dump);
+  const previous = normalizeDetailTiles(fallback);
+  return normalizeDetailTiles(
+    previous.map((tile) => ({ ...tile, ...(found.get(tile.name) ?? {}) })),
+  );
+}
 
 const HOLDINGS_VIEWPORT_ROWS = 10;
 /**
@@ -752,6 +879,21 @@ export default class LongbridgeApp extends View {
     this.workspaceDock = DockArea.new("longbridge-workspace", {
       version: WORKSPACE_LAYOUT_VERSION,
     });
+    // Read before adding any panel. `add_panel` is asynchronous from the
+    // layout's point of view, so a dump in this turn still describes the old
+    // tree; seeding with these values is the only way to retain live entity
+    // handles and still put the tiles back where the user left them.
+    let layout = null;
+    try {
+      const saved = localStorage.getItem(WORKSPACE_LAYOUT_KEY);
+      layout = saved ? JSON.parse(saved) : null;
+    } catch {
+      this.layoutStorage = false;
+    }
+    // v2 described one scrolling detail pane, so even a coincidentally shaped
+    // value must not be interpreted as v3 tile geometry.
+    if (layout?.version !== WORKSPACE_LAYOUT_VERSION) layout = null;
+    this.detailTileLayout = normalizeDetailTiles(layout?.detail_tiles);
     this.watchlistPanel = cx.new(WatchlistPanel, { app: this });
     this.quoteDetailsDockPanel = cx.new(QuoteDetailsPanel, { app: this });
     this.chartDockPanel = cx.new(ChartPanel, { app: this });
@@ -776,26 +918,25 @@ export default class LongbridgeApp extends View {
     });
     // Bounds make the right dock a tiles canvas from its first panel. The
     // default is deliberately one vertical strip, but the panels remain real
-    // dock tiles users can resize and rearrange.
-    this.workspaceDock.add_panel(this.quoteDetailsDockPanel, {
-      name: "quote-details",
-      placement: "right",
-      closable: false,
-      size: DETAIL_DOCK_WIDTH,
-      bounds: { x: 0, y: 0, width: DETAIL_DOCK_WIDTH, height: 220 },
-    });
-    this.workspaceDock.add_panel(this.chartDockPanel, {
-      name: "chart",
-      placement: "right",
-      closable: false,
-      bounds: { x: 0, y: 220, width: DETAIL_DOCK_WIDTH, height: 300 },
-    });
-    this.workspaceDock.add_panel(this.marketDetailDockPanel, {
-      name: "market-detail",
-      placement: "right",
-      closable: false,
-      bounds: { x: 0, y: 520, width: DETAIL_DOCK_WIDTH, height: 280 },
-    });
+    // dock tiles users can resize and rearrange. Crucially, restoration uses
+    // the entities held above, never `DockArea.load()`: targeted invalidation
+    // must keep pointing to the panel that is actually in the canvas.
+    const detailPanels = new Map([
+      ["quote-details", this.quoteDetailsDockPanel],
+      ["chart", this.chartDockPanel],
+      ["market-detail", this.marketDetailDockPanel],
+    ]);
+    for (const tile of this.detailTileLayout) {
+      const panel = detailPanels.get(tile.name);
+      if (!panel) continue;
+      this.workspaceDock.add_panel(panel, {
+        name: tile.name,
+        placement: "right",
+        closable: false,
+        ...(tile.name === "quote-details" ? { size: DETAIL_DOCK_WIDTH } : {}),
+        bounds: { x: tile.x, y: tile.y, width: tile.width, height: tile.height },
+      });
+    }
 
     // What is restored is the geometry, not the panels.
     //
@@ -808,13 +949,11 @@ export default class LongbridgeApp extends View {
     // bug, and it only appeared once a layout had been saved, which is why it
     // looked intermittent.
     //
-    // So the panels are always the seeded ones and only what the user actually
-    // adjusts is read back: how wide the details are, and whether they are
-    // folded away. Dragging a pane somewhere else is no longer remembered --
-    // a smaller promise, and one this can keep.
+    // So the panels are always the seeded ones and the app restores their
+    // app-owned geometry before first insertion. The opaque DockArea dump is
+    // reduced to stable names and rectangles when it changes; it is never
+    // handed back to `load`, which would replace these live handles.
     try {
-      const saved = localStorage.getItem(WORKSPACE_LAYOUT_KEY);
-      const layout = saved ? JSON.parse(saved) : null;
       if (layout && layout.version === WORKSPACE_LAYOUT_VERSION) {
         const detail = layout.right_dock;
         if (Number.isFinite(detail?.size)) {
@@ -837,8 +976,10 @@ export default class LongbridgeApp extends View {
         this.layoutWrite = null;
         if (this.layoutStorage === false) return;
         try {
-          // Written in base's shape so an older build could still read it,
-          // but only the two fields this restores are meaningful.
+          this.detailTileLayout = detailTilesFromDockDump(
+            this.workspaceDock.dump(),
+            this.detailTileLayout,
+          );
           localStorage.setItem(
             WORKSPACE_LAYOUT_KEY,
             JSON.stringify({
@@ -848,6 +989,7 @@ export default class LongbridgeApp extends View {
                 size: this.workspaceDock.dock_size("right") ?? DETAIL_DOCK_WIDTH,
                 open: this.workspaceDock.is_dock_open("right"),
               },
+              detail_tiles: this.detailTileLayout,
             }),
           );
         } catch {
@@ -1023,7 +1165,7 @@ export default class LongbridgeApp extends View {
       detail.error instanceof Error ? detail.error.message : String(detail.error ?? "");
     this.depthState = { ...this.depthState, status: "error", error: message };
     this.tradesState = { ...this.tradesState, status: "error", error: message };
-    this.redraw(cx, PANE_DETAIL);
+    this.redraw(cx, PANE_MARKET);
   }
 
   /**
@@ -1049,7 +1191,7 @@ export default class LongbridgeApp extends View {
       bids: normalized.bids,
       error: "",
     };
-    this.redraw(cx, PANE_DETAIL);
+    this.redraw(cx, PANE_MARKET);
   }
 
   /**
@@ -1074,7 +1216,7 @@ export default class LongbridgeApp extends View {
       trades: mergeTrades(this.tradesState.trades, trades),
       error: "",
     };
-    this.redraw(cx, PANE_DETAIL);
+    this.redraw(cx, PANE_MARKET);
   }
 
   /**
@@ -2058,6 +2200,8 @@ export default class LongbridgeApp extends View {
         .flex_1()
         .min_h(0)
         .tab_bar((group, cx) => dockTabBar(cx.theme(), group))
+        .tile_drag_bar((tile, cx) => dockTileDragBar(cx.theme(), tile))
+        .tile_resize_handles((tile, cx) => dockTileResizeHandles(cx.theme(), tile))
         .empty_group((_group, cx) => emptyPanel(cx.theme(), "Nothing here", "Drop a pane in."))
         .drop_indicator((drop, cx) => dockDropHint(cx.theme(), drop))
         // `dockFrame` is base's `render_dock`, ported. It has to be supplied:

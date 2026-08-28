@@ -397,6 +397,16 @@ fn market_detail_state_vectors_run_against_this_application(cx: &mut TestAppCont
 }
 
 #[gpui::test]
+fn workspace_layout_vectors_reconnect_saved_tiles_to_live_panel_handles(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("workspace_layout.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let _loaded = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+}
+
+#[gpui::test]
 fn portfolio_vectors_run_against_this_application(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");

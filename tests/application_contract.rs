@@ -342,6 +342,76 @@ fn time_sales_volume_markers_use_directional_semantic_tones_and_intensity() {
 }
 
 #[test]
+fn depth_and_trade_pushes_invalidate_only_the_market_detail_panel() {
+    let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
+    for method in [
+        "receiveDetailError(detail, cx)",
+        "receiveDepth(depth, cx, generation)",
+        "receiveTrades(payload, cx, generation)",
+    ] {
+        let body = main
+            .split(method)
+            .nth(1)
+            .and_then(|source| source.split("\n  /**").next())
+            .expect("detail market mutation method");
+        assert!(
+            body.contains("this.redraw(cx, PANE_MARKET);"),
+            "{method} must repaint only Market Detail"
+        );
+        assert!(
+            !body.contains("PANE_DETAIL"),
+            "{method} must not notify Quote or the retained Chart"
+        );
+    }
+}
+
+#[test]
+fn tiled_detail_dock_exposes_drag_and_resize_chrome() {
+    let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
+    let ui = fs::read_to_string(app_dir().join("ui.js")).expect("ui.js");
+
+    assert!(
+        main.contains(".tile_drag_bar((tile, cx) => dockTileDragBar(cx.theme(), tile))")
+            && main.contains(
+                ".tile_resize_handles((tile, cx) => dockTileResizeHandles(cx.theme(), tile))"
+            ),
+        "Dock tiles created with bounds need live drag and resize renderers"
+    );
+    assert!(
+        ui.contains("export function dockTileDragBar")
+            && ui.contains(".move_tile(tile)")
+            && ui.contains("export function dockTileResizeHandles")
+            && ui.contains(".resize_tile(tile, \"right\")")
+            && ui.contains(".resize_tile(tile, \"bottom\")"),
+        "tile chrome must use gpui-base's real move_tile and resize_tile commands"
+    );
+}
+
+#[test]
+fn v3_detail_tile_layout_round_trips_through_app_owned_storage() {
+    let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
+
+    assert!(
+        main.contains("const DEFAULT_DETAIL_TILES")
+            && main.contains("function normalizeDetailTiles")
+            && main.contains("function detailTilesFromDockDump")
+            && main.contains("this.detailTileLayout = normalizeDetailTiles(layout?.detail_tiles)")
+            && main.contains("detail_tiles: this.detailTileLayout"),
+        "v3 must persist app-owned stable tile names and geometry instead of only the dock width"
+    );
+    assert!(
+        main.contains("for (const tile of this.detailTileLayout)")
+            && main.contains("const detailPanels = new Map")
+            && main.contains("detailPanels.get(tile.name)"),
+        "restoration must recreate topology with the existing live panel handles, not DockArea.load"
+    );
+    assert!(
+        !main.contains("workspaceDock.load("),
+        "restoring a v3 layout must not replace handles used for targeted invalidation"
+    );
+}
+
+#[test]
 fn detail_dock_defaults_to_three_rearrangeable_vertical_tiles() {
     let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
     let workspace = fs::read_to_string(app_dir().join("workspace.js")).expect("workspace.js");
@@ -351,9 +421,14 @@ fn detail_dock_defaults_to_three_rearrangeable_vertical_tiles() {
             && main.contains("name: \"quote-details\"")
             && main.contains("name: \"chart\"")
             && main.contains("name: \"market-detail\"")
-            && main.contains("bounds: { x: 0, y: 0")
-            && main.contains("bounds: { x: 0, y: 220")
-            && main.contains("bounds: { x: 0, y: 520"),
+            && main.contains("const DEFAULT_DETAIL_TILES")
+            && main.contains("y: 0, width: DETAIL_DOCK_WIDTH, height: 220")
+            && main.contains("y: 220, width: DETAIL_DOCK_WIDTH, height: 300")
+            && main.contains("y: 520,")
+            && main.contains("height: 280,")
+            && main.contains(
+                "bounds: { x: tile.x, y: tile.y, width: tile.width, height: tile.height }"
+            ),
         "the incompatible single-detail layout must migrate to three stacked Dock tiles"
     );
     assert!(
@@ -380,8 +455,9 @@ fn dock_tab_bar_hides_one_tab_but_keeps_multi_tab_navigation() {
     let ui = fs::read_to_string(app_dir().join("ui.js")).expect("ui.js");
 
     assert!(
-        ui.contains("if (visibleTabs.length <= 1) return div().id(`dock-tabbar-hidden-${group.node}`).h(0);")
-            && ui.contains("visibleTabs.map("),
+        ui.contains(
+            "if (visibleTabs.length <= 1) return div().id(`dock-tabbar-hidden-${group.node}`).h(0);"
+        ) && ui.contains("visibleTabs.map("),
         "single-panel dock groups must hide chrome while multi-panel groups keep real tabs"
     );
 }

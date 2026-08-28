@@ -65,11 +65,15 @@ export default class MarketDetailStateProbe extends LongbridgeApp {
     this.selectDetailMarket("B.US", cx);
     const bGeneration = this.detailMarketGeneration;
     check(
-      this.depthState.symbol === "B.US" && this.depthState.status === "loading" && this.depthState.asks.length === 0,
+      this.depthState.symbol === "B.US" &&
+        this.depthState.status === "loading" &&
+        this.depthState.asks.length === 0,
       "selecting B immediately clears A depth while it loads",
     );
     check(
-      this.tradesState.symbol === "B.US" && this.tradesState.status === "loading" && this.tradesState.trades.length === 0,
+      this.tradesState.symbol === "B.US" &&
+        this.tradesState.status === "loading" &&
+        this.tradesState.trades.length === 0,
       "selecting B immediately clears A trades while it loads",
     );
 
@@ -81,8 +85,28 @@ export default class MarketDetailStateProbe extends LongbridgeApp {
       "a stale detail snapshot cannot publish under B",
     );
 
-    this.receiveDepth(depth("B.US", "102.00"), cx, bGeneration);
-    this.receiveTrades(trades("B.US", "102.25"), cx, bGeneration);
+    // Exercise the production invalidation funnel with observable live panel
+    // handles. A detail push still redraws the shell root, but only the Market
+    // Detail entity may receive a targeted notification; Quote and the
+    // retained Chart must not rebuild their descriptions for tape/book data.
+    const quoteHandle = { panel: "quote" };
+    const chartHandle = { panel: "chart" };
+    const marketHandle = { panel: "market" };
+    this.workspaceDock = {};
+    this.quoteDetailsDockPanel = quoteHandle;
+    this.chartDockPanel = chartHandle;
+    this.marketDetailDockPanel = marketHandle;
+    this.dirtyPanes = 0;
+    const notified = [];
+    const metricCx = { notify: (target) => notified.push(target ?? "root") };
+    let retainedChartPublishes = 0;
+    this.priceChart = {
+      set_props: () => (retainedChartPublishes += 1),
+      release: () => {},
+    };
+
+    this.receiveDepth(depth("B.US", "102.00"), metricCx, bGeneration);
+    this.receiveTrades(trades("B.US", "102.25"), metricCx, bGeneration);
     check(
       this.depthState.status === "ready" && this.depthState.asks[0].price === "102.00",
       "the selected depth snapshot publishes normally",
@@ -95,6 +119,20 @@ export default class MarketDetailStateProbe extends LongbridgeApp {
       this.chartState.symbol === "CHART.US" && this.publishedPriceChartProps === chartProps,
       "detail-only updates do not publish new retained-chart props",
     );
+    check(
+      notified.filter((target) => target === marketHandle).length === 2 &&
+        !notified.includes(quoteHandle) &&
+        !notified.includes(chartHandle),
+      "depth and trades notify Market Detail only, never Quote or Chart",
+    );
+    check(
+      retainedChartPublishes === 0,
+      "depth/trade pushes cannot rebuild the retained chart child",
+    );
+    this.workspaceDock = null;
+    this.quoteDetailsDockPanel = null;
+    this.chartDockPanel = null;
+    this.marketDetailDockPanel = null;
 
     // Returning to A is a new selection epoch. A first-A response may arrive
     // after A → B → A, but it must not be mistaken for the final A request.
@@ -118,11 +156,15 @@ export default class MarketDetailStateProbe extends LongbridgeApp {
 
     this.signOut(cx);
     check(
-      this.depthState.symbol === null && this.depthState.status === "idle" && this.depthState.asks.length === 0,
+      this.depthState.symbol === null &&
+        this.depthState.status === "idle" &&
+        this.depthState.asks.length === 0,
       "sign-out clears the depth state",
     );
     check(
-      this.tradesState.symbol === null && this.tradesState.status === "idle" && this.tradesState.trades.length === 0,
+      this.tradesState.symbol === null &&
+        this.tradesState.status === "idle" &&
+        this.tradesState.trades.length === 0,
       "sign-out clears the trades state",
     );
   }

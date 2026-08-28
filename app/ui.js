@@ -1816,6 +1816,50 @@ export function dockTabBar(tokens, group) {
   );
 }
 
+/** A tile's compact drag strip; panel content keeps the visible reading title. */
+export function dockTileDragBar(tokens, tile) {
+  return h_flex()
+    .id(`dock-tile-drag-${tile.panel.id}`)
+    .h(8)
+    .w_full()
+    .cursor_row_resize()
+    .bg(tokens.surface)
+    .border_b(1)
+    .border_color(tokens.border)
+    .move_tile(tile)
+    .hover((style) => style.bg(tokens.muted));
+}
+
+/** Visible edge handles for the free-form tile canvas. */
+export function dockTileResizeHandles(tokens, tile) {
+  return div()
+    .id(`dock-tile-resize-${tile.panel.id}`)
+    .absolute()
+    .inset_0()
+    .child(
+      div()
+        .absolute()
+        .right(0)
+        .top(0)
+        .bottom(0)
+        .w(4)
+        .cursor_col_resize()
+        .resize_tile(tile, "right")
+        .hover((style) => style.bg(tokens.primary)),
+    )
+    .child(
+      div()
+        .absolute()
+        .left(0)
+        .right(0)
+        .bottom(0)
+        .h(4)
+        .cursor_row_resize()
+        .resize_tile(tile, "bottom")
+        .hover((style) => style.bg(tokens.primary)),
+    );
+}
+
 /**
  * A dock's chrome: the edge you drag it by, and nothing else.
  *
