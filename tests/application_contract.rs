@@ -105,11 +105,11 @@ fn application_exposes_api_backed_read_only_views() {
         main.contains("priceChart") && main.contains("allocationChart"),
         "read-only market and allocation charts must remain wired"
     );
-    // The forbidden list is about surfaces that would edit a watchlist or reach
-    // the order book -- not about text state as such. `InputState` came off it
-    // when the lists grew filters: a filter narrows what is already on screen,
-    // writes nothing, and asks the API for nothing.
-    for forbidden in ["Add symbol", "Remove", "Trades", "Bid", "Ask"] {
+    // The forbidden list is about edit controls. Read-only market-detail
+    // panels may now use bid, ask, and time-and-sales terminology; `InputState`
+    // remains limited to the two list filters, which narrow what is already on
+    // screen and never mutate the watchlist.
+    for forbidden in ["Add symbol", "Remove"] {
         assert!(
             !main.contains(forbidden) && !ui.contains(forbidden) && !market.contains(forbidden),
             "forbidden editing or trading surface {forbidden}"

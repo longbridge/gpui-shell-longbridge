@@ -89,3 +89,36 @@ interface PriceChartProps {
   };
   themeRevision: number;
 }
+
+type LongbridgeDetailStatus = "idle" | "loading" | "ready" | "error";
+
+interface LongbridgeDepthLevel {
+  position?: number;
+  price?: string;
+  volume?: bigint;
+  orderNum?: bigint;
+}
+
+interface LongbridgeDepthState {
+  symbol: string | null;
+  status: LongbridgeDetailStatus;
+  asks: LongbridgeDepthLevel[];
+  bids: LongbridgeDepthLevel[];
+  error: string;
+}
+
+interface LongbridgeTrade {
+  price?: string;
+  volume?: bigint;
+  timestamp?: bigint;
+  tradeType?: string;
+  direction?: number;
+  tradeSession?: number;
+}
+
+interface LongbridgeTradesState {
+  symbol: string | null;
+  status: LongbridgeDetailStatus;
+  trades: LongbridgeTrade[];
+  error: string;
+}

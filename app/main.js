@@ -41,6 +41,7 @@ import {
 } from "./market.js";
 import { createQuoteStream } from "./quote_stream.js";
 import { mergeLiveQuote, prepareFiveDaySeries } from "./chart.js";
+import { mergeTrades, normalizeDepth } from "./market_detail.js";
 import { allocationInUsd, normalizeUsdRates, portfolioPresentation } from "./portfolio.js";
 import PriceChartView, { PRICE_CHART_LAYOUT } from "./price_chart_view.js";
 import { loadFpsVisible, saveFpsVisible } from "./fps_preference.js";
@@ -136,6 +137,27 @@ const PANE_DETAIL = 2;
 const PANE_BOTH = PANE_WATCHLIST | PANE_DETAIL;
 
 const EMPTY_CANDLES = Object.freeze([]);
+const EMPTY_DETAIL_LEVELS = Object.freeze([]);
+const EMPTY_DETAIL_TRADES = Object.freeze([]);
+
+function emptyDepthState(symbol = null) {
+  return {
+    symbol,
+    status: symbol ? "loading" : "idle",
+    asks: EMPTY_DETAIL_LEVELS,
+    bids: EMPTY_DETAIL_LEVELS,
+    error: "",
+  };
+}
+
+function emptyTradesState(symbol = null) {
+  return {
+    symbol,
+    status: symbol ? "loading" : "idle",
+    trades: EMPTY_DETAIL_TRADES,
+    error: "",
+  };
+}
 
 /**
  * The height of the window's own title bar, and the room macOS needs on its
@@ -406,6 +428,7 @@ export default class LongbridgeApp extends View {
     this.chartState = { symbol: null, state: "idle" };
     this.chartGeneration = 0;
     this.chartThemeRevision = 0;
+    this.initDetailMarketState();
     this.initInteractionState();
     this.initKeyboard(cx);
     this.initChartCalendar(cx);
@@ -761,6 +784,106 @@ export default class LongbridgeApp extends View {
     this.publishedPriceChartProps = null;
   }
 
+  /** Initializes data which belongs only to the selected instrument's detail panels. */
+  initDetailMarketState() {
+    this.depthState = emptyDepthState();
+    this.tradesState = emptyTradesState();
+    this.detailMarketGeneration = 0;
+  }
+
+  /** Invalidates all in-flight detail work and clears both panel states. */
+  clearDetailMarket() {
+    this.detailMarketGeneration += 1;
+    this.depthState = emptyDepthState();
+    this.tradesState = emptyTradesState();
+  }
+
+  /**
+   * Changes the selected detail instrument without touching the chart's retained props.
+   *
+   * @param {string | null} symbol
+   * @param {import("gpui").Context | import("gpui").AsyncContext} cx
+   */
+  selectDetailMarket(symbol, cx) {
+    const selected = typeof symbol === "string" && symbol ? symbol : null;
+    const generation = ++this.detailMarketGeneration;
+    this.selectedSymbol = selected;
+    this.depthState = emptyDepthState(selected);
+    this.tradesState = emptyTradesState(selected);
+    this.redraw(cx, PANE_DETAIL);
+
+    const stream = this.stream;
+    if (!stream || typeof stream.selectDetailSymbol !== "function") return Promise.resolve();
+    try {
+      return Promise.resolve(stream.selectDetailSymbol(selected)).catch((error) => {
+        if (
+          generation !== this.detailMarketGeneration ||
+          selected !== this.selectedSymbol ||
+          stream !== this.stream
+        ) {
+          return;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        this.depthState = { ...this.depthState, status: "error", error: message };
+        this.tradesState = { ...this.tradesState, status: "error", error: message };
+        this.redraw(cx, PANE_DETAIL);
+      });
+    } catch (error) {
+      if (
+        generation === this.detailMarketGeneration &&
+        selected === this.selectedSymbol &&
+        stream === this.stream
+      ) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.depthState = { ...this.depthState, status: "error", error: message };
+        this.tradesState = { ...this.tradesState, status: "error", error: message };
+        this.redraw(cx, PANE_DETAIL);
+      }
+      return Promise.resolve();
+    }
+  }
+
+  /** @param {unknown} depth @param {import("gpui").Context | import("gpui").AsyncContext} cx */
+  receiveDepth(depth, cx) {
+    if (
+      !depth ||
+      typeof depth !== "object" ||
+      depth.symbol !== this.selectedSymbol ||
+      this.depthState.symbol !== this.selectedSymbol
+    ) {
+      return;
+    }
+    const normalized = normalizeDepth(depth);
+    this.depthState = {
+      symbol: normalized.symbol,
+      status: "ready",
+      asks: normalized.asks,
+      bids: normalized.bids,
+      error: "",
+    };
+    this.redraw(cx, PANE_DETAIL);
+  }
+
+  /** @param {unknown} payload @param {import("gpui").Context | import("gpui").AsyncContext} cx */
+  receiveTrades(payload, cx) {
+    if (
+      !payload ||
+      typeof payload !== "object" ||
+      payload.symbol !== this.selectedSymbol ||
+      this.tradesState.symbol !== this.selectedSymbol
+    ) {
+      return;
+    }
+    const trades = Array.isArray(payload.trades) ? payload.trades : EMPTY_DETAIL_TRADES;
+    this.tradesState = {
+      symbol: this.selectedSymbol,
+      status: "ready",
+      trades: mergeTrades(this.tradesState.trades, trades),
+      error: "",
+    };
+    this.redraw(cx, PANE_DETAIL);
+  }
+
   /**
    * The state a render reaches for unconditionally: both controlled popovers,
    * and the retained text state behind the two list filters.
@@ -900,6 +1023,7 @@ export default class LongbridgeApp extends View {
     // request stale before awaiting stop, so its catch cannot publish into the
     // reconnecting chart while the replacement watchlist is still loading.
     this.chartGeneration += 1;
+    this.clearDetailMarket();
     const previous = this.stream;
     this.stream = null;
     if (previous) await previous.stop();
@@ -947,12 +1071,21 @@ export default class LongbridgeApp extends View {
         if (generation === this.streamGeneration && this.stream === stream)
           this.receiveQuote(quote, cx);
       },
+      onDepth: (depth) => {
+        if (generation === this.streamGeneration && this.stream === stream)
+          this.receiveDepth(depth, cx);
+      },
+      onTrades: (trades) => {
+        if (generation === this.streamGeneration && this.stream === stream)
+          this.receiveTrades(trades, cx);
+      },
       onStatus: (status) => {
         if (generation === this.streamGeneration && this.stream === stream)
           this.receiveStatus(status, cx);
       },
     });
     this.stream = stream;
+    this.selectDetailMarket(this.selectedSymbol, cx);
     await stream.start();
     if (generation !== this.streamGeneration) {
       await stream.stop();
@@ -1165,6 +1298,7 @@ export default class LongbridgeApp extends View {
     this.quotes = [];
     this.portfolioQuotes = [];
     this.selectedSymbol = null;
+    this.clearDetailMarket();
     this.candleCache.clear();
     this.chartGeneration += 1;
     this.chartState = { symbol: null, state: "idle" };
@@ -1990,7 +2124,7 @@ export default class LongbridgeApp extends View {
    */
   selectQuote(symbol, cx) {
     if (!symbol || symbol === this.selectedSymbol) return;
-    this.selectedSymbol = symbol;
+    this.selectDetailMarket(symbol, cx);
     // Paint the selection first. `loadSelectedChart` publishes the chart, and
     // publishing it is the expensive half of this click -- see `publishChart`.
     this.redraw(cx);
