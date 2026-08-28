@@ -1,0 +1,172 @@
+name: Release Longbridge Lite
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing v-prefixed tag to publish
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+jobs:
+  macos-aarch64:
+    name: macOS arm64
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: longbridge-lite
+          ref: ${{ env.RELEASE_TAG }}
+      - name: Install packaging dependencies
+        run: brew install imagemagick
+      - name: Build release binary
+        working-directory: longbridge-lite
+        run: cargo build --locked --release
+      - name: Build application archive
+        working-directory: longbridge-lite
+        run: |
+          scripts/package-release.sh macos-aarch64
+          mkdir -p /tmp/longbridge-lite-smoke
+          tar -xzf dist/longbridge-lite-macos-aarch64.tar.gz -C /tmp/longbridge-lite-smoke
+          '/tmp/longbridge-lite-smoke/Longbridge Lite.app/Contents/MacOS/longbridge-lite' --check-resources
+      - uses: actions/upload-artifact@v4
+        with:
+          name: longbridge-lite-macos-aarch64
+          path: longbridge-lite/dist/longbridge-lite-macos-aarch64.tar.gz
+          if-no-files-found: error
+
+  macos-x86_64:
+    name: macOS x86_64
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: longbridge-lite
+          ref: ${{ env.RELEASE_TAG }}
+      - name: Install packaging dependencies
+        run: brew install imagemagick
+      - name: Build release binary
+        working-directory: longbridge-lite
+        run: cargo build --locked --release
+      - name: Build application archive
+        working-directory: longbridge-lite
+        run: |
+          scripts/package-release.sh macos-x86_64
+          mkdir -p /tmp/longbridge-lite-smoke
+          tar -xzf dist/longbridge-lite-macos-x86_64.tar.gz -C /tmp/longbridge-lite-smoke
+          '/tmp/longbridge-lite-smoke/Longbridge Lite.app/Contents/MacOS/longbridge-lite' --check-resources
+      - uses: actions/upload-artifact@v4
+        with:
+          name: longbridge-lite-macos-x86_64
+          path: longbridge-lite/dist/longbridge-lite-macos-x86_64.tar.gz
+          if-no-files-found: error
+
+  linux-x86_64:
+    name: Linux x86_64
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: longbridge-lite
+          ref: ${{ env.RELEASE_TAG }}
+      - name: Install GPUI and packaging dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang gcc g++ imagemagick libfontconfig-dev librsvg2-bin libssl-dev \
+            libvulkan1 libwayland-dev libwebkit2gtk-4.1-dev \
+            libx11-xcb-dev libxkbcommon-x11-dev libzstd-dev \
+            vulkan-validationlayers
+      - name: Build release binary
+        working-directory: longbridge-lite
+        run: cargo build --locked --release
+      - name: Build application archive
+        working-directory: longbridge-lite
+        run: |
+          scripts/package-release.sh linux-x86_64
+          mkdir -p /tmp/longbridge-lite-smoke
+          tar -xzf dist/longbridge-lite-linux-x86_64.tar.gz -C /tmp/longbridge-lite-smoke
+          /tmp/longbridge-lite-smoke/longbridge-lite.app/bin/longbridge-lite --check-resources
+      - uses: actions/upload-artifact@v4
+        with:
+          name: longbridge-lite-linux-x86_64
+          path: longbridge-lite/dist/longbridge-lite-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  windows-x86_64:
+    name: Windows x86_64
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: longbridge-lite
+          ref: ${{ env.RELEASE_TAG }}
+      - name: Install packaging dependencies
+        shell: powershell
+        run: choco install imagemagick --yes --no-progress
+      - name: Build release binary
+        working-directory: longbridge-lite
+        run: cargo build --locked --release
+      - name: Build application archive
+        working-directory: longbridge-lite
+        shell: powershell
+        run: |
+          scripts/package-release.ps1
+          Expand-Archive dist\longbridge-lite-windows-x86_64.zip -DestinationPath $env:RUNNER_TEMP\longbridge-lite-smoke
+          & $env:RUNNER_TEMP\longbridge-lite-smoke\longbridge-lite\bin\longbridge-lite.exe --check-resources
+      - uses: actions/upload-artifact@v4
+        with:
+          name: longbridge-lite-windows-x86_64
+          path: longbridge-lite/dist/longbridge-lite-windows-x86_64.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: [macos-aarch64, macos-x86_64, linux-x86_64, windows-x86_64]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: longbridge-lite-*
+          path: release-assets
+          merge-multiple: true
+      - name: Validate tag version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)
+          if [[ "$RELEASE_TAG" != "v$version" ]]; then
+            echo "::error::tag $RELEASE_TAG does not match Cargo.toml version $version"
+            exit 1
+          fi
+      - name: Add installers and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp install.sh install.ps1 release-assets/
+          cd release-assets
+          sha256sum longbridge-lite-* install.sh install.ps1 > SHA256SUMS
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" release-assets/* --clobber
+          else
+            gh release create "$RELEASE_TAG" release-assets/* --verify-tag --generate-notes --title "Longbridge Lite $RELEASE_TAG"
+          fi

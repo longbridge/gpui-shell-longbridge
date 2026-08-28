@@ -47,7 +47,14 @@ const FONTS: [&[u8]; 2] = [
 ];
 
 fn main() {
-    let app_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("app");
+    let app_root = application_dir().unwrap_or_else(|error| {
+        eprintln!("Longbridge Lite cannot find its application resources: {error}");
+        std::process::exit(1);
+    });
+    if std::env::args_os().any(|argument| argument == "--check-resources") {
+        println!("{}", app_root.display());
+        return;
+    }
     let assets = AppAssets::new(app_root.clone());
 
     tracing_subscriber::fmt()
@@ -105,9 +112,10 @@ fn main() {
                         let interval = current.since(&previous);
                         previous = current;
                         eprintln!(
-                            "shell-profile script={} mean_script={:.3}ms materialize={} mean_materialize={:.3}ms script_total={:.3}ms materialize_total={:.3}ms",
+                            "shell-profile script={} mean_script={:.3}ms slowest_script={:.3}ms materialize={} mean_materialize={:.3}ms script_total={:.3}ms materialize_total={:.3}ms",
                             interval.script_renders(),
                             interval.mean_script_render().as_secs_f64() * 1_000.0,
+                            interval.slowest_script_render().as_secs_f64() * 1_000.0,
                             interval.materializations(),
                             interval.mean_materialize().as_secs_f64() * 1_000.0,
                             interval.script_render_time().as_secs_f64() * 1_000.0,
@@ -163,6 +171,47 @@ fn main() {
             })
             .expect("failed to open Longbridge window");
         });
+}
+
+/// Finds the script application in an installed bundle or the source tree.
+///
+/// Release packages are relocatable: every candidate is derived from the
+/// executable itself. The manifest-directory path is deliberately last and
+/// exists only for `cargo run` from a checkout.
+fn application_dir() -> Result<PathBuf, String> {
+    if let Some(path) = std::env::var_os("LONGBRIDGE_LITE_APP_DIR") {
+        let path = PathBuf::from(path);
+        return is_application_dir(&path)
+            .then_some(path)
+            .ok_or_else(|| "LONGBRIDGE_LITE_APP_DIR does not contain gpui-shell.json".to_owned());
+    }
+
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("could not locate the executable: {error}"))?;
+    let binary_dir = executable
+        .parent()
+        .ok_or_else(|| "the executable has no parent directory".to_owned())?;
+    let bundle_root = binary_dir.parent().unwrap_or(binary_dir);
+    let candidates = [
+        bundle_root.join("Resources").join("app"),
+        bundle_root.join("share").join("app"),
+        bundle_root.join("app"),
+        binary_dir.join("app"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("app"),
+    ];
+    candidates
+        .into_iter()
+        .find(|path| is_application_dir(path))
+        .ok_or_else(|| {
+            format!(
+                "no app/gpui-shell.json was found beside {} or in the development checkout",
+                executable.display()
+            )
+        })
+}
+
+fn is_application_dir(path: &std::path::Path) -> bool {
+    path.join("gpui-shell.json").is_file()
 }
 
 /// Loads the application and hands back the view to mount, or the reason not to.

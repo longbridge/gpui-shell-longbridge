@@ -1,7 +1,9 @@
 use std::{fs, path::PathBuf};
 
 fn app_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("app")
+    std::env::var_os("LONGBRIDGE_CONTRACT_APP_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("app"))
 }
 
 #[test]
@@ -199,4 +201,100 @@ fn price_chart_is_a_retained_child_view() {
             "root still owns chart-local state {root_owned_hover_state}"
         );
     }
+}
+
+#[test]
+fn workspace_repaints_do_not_checkpoint_the_market_model() {
+    let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
+    let workspace = fs::read_to_string(app_dir().join("workspace.js")).expect("workspace.js");
+    let panel = workspace
+        .split("class WorkspacePanel extends View")
+        .nth(1)
+        .and_then(|source| source.split("export class WatchlistPanel").next())
+        .expect("WorkspacePanel source");
+
+    assert!(
+        !panel.contains("update("),
+        "a panel update makes gpui-shell checkpoint every object reachable through its app; \
+         quote-driven repaints must refresh a panel without journalling the market model"
+    );
+    assert!(
+        panel.contains("this.app = props?.app ?? workspaceApp()"),
+        "the panel must still acquire its application once during initialization"
+    );
+    assert!(
+        main.contains("cx.notify(this.watchlistPanel)")
+            && main.contains("cx.notify(this.detailPanel)"),
+        "shared-state panes must use GPUI-style targeted notification"
+    );
+    assert!(
+        !main.contains("workspaceRevision") && !main.contains("const props = { revision:"),
+        "pane repaint must not manufacture props only to cross the nested-view update path"
+    );
+}
+
+#[test]
+fn chart_publication_yields_to_interaction_and_is_rate_limited() {
+    let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
+
+    assert!(
+        main.contains("const CHART_PUBLISH_INTERVAL_MS = 500")
+            && main.contains("Date.now() - this.chartPublishedAt >= CHART_PUBLISH_INTERVAL_MS"),
+        "live quotes must not publish the complete five-day chart on every feed repaint"
+    );
+    assert!(
+        main.contains("this.chartPublish = cx.timer.after(0")
+            && main.contains("this.publishChart(cx)"),
+        "selection and load handlers must defer the large chart update so their first frame can paint"
+    );
+
+    let select_quote = main
+        .split("selectQuote(symbol, cx) {")
+        .nth(1)
+        .and_then(|source| source.split("\n  }").next())
+        .expect("selectQuote source");
+    let redraw = select_quote
+        .find("this.redraw(cx)")
+        .expect("selection redraw");
+    let load = select_quote
+        .find("this.loadSelectedChart(cx)")
+        .expect("chart load");
+    assert!(
+        redraw < load,
+        "the selected Watchlist row must be submitted for paint before chart loading/publishing starts"
+    );
+}
+
+#[test]
+fn release_build_resolves_packaged_application_resources() {
+    let manifest = fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"))
+        .expect("Cargo.toml");
+    let host = fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/main.rs"))
+        .expect("src/main.rs");
+
+    assert!(
+        manifest.contains("name = \"longbridge-lite\""),
+        "the Cargo package and executable must use the release product name"
+    );
+    assert!(
+        host.contains("LONGBRIDGE_LITE_APP_DIR")
+            && host.contains("Resources").then_some(()).is_some()
+            && host.contains("share").then_some(()).is_some(),
+        "the host must resolve explicit, macOS, and portable application resource locations"
+    );
+    let resolver = host
+        .split("fn application_dir()")
+        .nth(1)
+        .and_then(|source| source.split("\nfn ").next())
+        .expect("application_dir resolver");
+    let override_position = resolver
+        .find("LONGBRIDGE_LITE_APP_DIR")
+        .expect("environment override");
+    let development_position = resolver
+        .find("CARGO_MANIFEST_DIR")
+        .expect("development fallback");
+    assert!(
+        override_position < development_position,
+        "the source checkout may only be the final development fallback"
+    );
 }

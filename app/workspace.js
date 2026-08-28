@@ -60,10 +60,9 @@ class WorkspacePanel extends View {
     this.app = props?.app ?? workspaceApp();
   }
 
-  /** @param {{ app?: any }} props */
-  update(props) {
-    if (props?.app) this.app = props.app;
-  }
+  // No `update`: the panel has no changing props. Its application is shared
+  // state retained once during init, and the parent repaints it with targeted
+  // `cx.notify(entity)` rather than manufacturing a child update transaction.
 }
 
 /** The watchlist, with its filter and its virtualized table. */

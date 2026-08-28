@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="128px" height="128px" viewBox="0 0 128 128" version="1.1" xmlns="http://www.w3.org/2000/svg">
+  <title>Longbridge Lite</title>
+  <g stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
+    <rect fill="#000000" x="0" y="0" width="128" height="128"/>
+    <g transform="translate(30 29)" fill-rule="nonzero">
+      <rect fill="#FFFFFF" x="0" y="0" width="3" height="69"/>
+      <rect fill="#FFE000" x="21" y="60" width="9" height="9"/>
+      <rect fill="#FFFFFF" x="33" y="60" width="3" height="9"/>
+      <rect fill="#FFFFFF" x="53" y="43" width="9" height="26"/>
+      <rect fill="#FC5200" x="66" y="26" width="3" height="43"/>
+      <rect fill="#FC5200" x="40" y="52" width="10" height="17"/>
+      <rect fill="#00DBB6" x="7" y="0" width="10" height="69"/>
+    </g>
+  </g>
+</svg>

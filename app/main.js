@@ -114,6 +114,9 @@ const CONNECT_DEADLINE_MS = 30_000;
  */
 const CARD_HEADER_HEIGHT = 38;
 
+/** How often the chart's live tail may cross the nested-view bridge. */
+const CHART_PUBLISH_INTERVAL_MS = 500;
+
 /** Which pane a change is worth repainting. See `syncWorkspacePanels`. */
 const PANE_WATCHLIST = 1;
 const PANE_DETAIL = 2;
@@ -394,6 +397,10 @@ export default class LongbridgeApp extends View {
     // the coalesced repaint publishes them. See `scheduleRedraw`.
     this.chartDirty = false;
     this.repaint = null;
+    /** The pending deferred chart publish, if one is already queued. */
+    this.chartPublish = null;
+    /** When the chart last crossed the bridge, for the live tail's rate limit. */
+    this.chartPublishedAt = 0;
     this.dirtyPanes = 0;
     /** Pushes that have arrived but not yet been merged. See `drainQuotes`. */
     this.pendingQuotes = [];
@@ -541,7 +548,6 @@ export default class LongbridgeApp extends View {
     // Reset runs this a second time, so nothing here may assume it is the
     // first: the dock, its panels and the restored flag are all replaced
     // wholesale rather than added to.
-    this.workspaceRevision = 0;
     this.workspaceDock = DockArea.new("longbridge-workspace", { version: WORKSPACE_LAYOUT_VERSION });
     this.watchlistPanel = cx.new(WatchlistPanel, { app: this });
     this.detailPanel = cx.new(DetailPanel, { app: this });
@@ -636,10 +642,12 @@ export default class LongbridgeApp extends View {
    * A dock panel is not a child of this view's description — the dock area
    * holds it — so `cx.notify()` here repaints the header, the footer and the
    * chrome, and reaches neither pane. This is the other half of that: it hands
-   * each panel a revision it never reads, because what the call is for is the
-   * refresh, not the value.
+   * each panel a targeted notification, because what the call is for is a
+   * repaint of shared state rather than a new value.
+   *
+   * @param {import("gpui").Context | import("gpui").AsyncContext} cx
    */
-  syncWorkspacePanels() {
+  syncWorkspacePanels(cx) {
     if (!this.workspaceDock) return;
     // Each `set_props` crosses the nested-view bridge and rebuilds that pane's
     // whole description, so publishing to both on every repaint costs twice
@@ -649,19 +657,12 @@ export default class LongbridgeApp extends View {
     // covered them; the bridge is what makes the difference worth tracking.
     const panes = this.dirtyPanes;
     this.dirtyPanes = 0;
-    // A revision and nothing else. The application used to ride along in these
-    // props, and it costs: `set_props` crosses the nested-view bridge, so this
-    // handed the whole view -- quotes, holdings, the candle cache -- over it
-    // once a second, and the operation was interrupted for overrunning the
-    // sandbox's budget every time. The panes then did not repaint at all, which
-    // is the opposite of what this call is for.
-    //
-    // Nothing is lost. A pane takes the application from `workspace.js`'s held
-    // reference, which is also the only way a pane rebuilt from a saved layout
-    // could ever have got one.
-    const props = { revision: (this.workspaceRevision += 1) };
-    if (panes & PANE_WATCHLIST) this.watchlistPanel?.set_props(props);
-    if (panes & PANE_DETAIL) this.detailPanel?.set_props(props);
+    // These panes read the shared application they retained during `init`.
+    // `cx.notify(entity)` is GPUI's targeted invalidation: unlike `set_props`,
+    // it does not run a child update transaction or checkpoint every object
+    // reachable through that application reference.
+    if (panes & PANE_WATCHLIST && this.watchlistPanel) cx.notify(this.watchlistPanel);
+    if (panes & PANE_DETAIL && this.detailPanel) cx.notify(this.detailPanel);
   }
 
   /**
@@ -702,8 +703,18 @@ export default class LongbridgeApp extends View {
     this.repaint = cx.timer.after(100, (cx) => {
       this.repaint = null;
       this.drainQuotes();
-      if (this.chartDirty) {
+      // The chart's live tail, at a rate a chart can be read at.
+      //
+      // `mergeLiveQuote` answers with a new series for every push, so the
+      // identity guard in `syncPriceChartView` never holds on this path and
+      // every tick would hand the whole window across the nested-view bridge.
+      // Crossing it is not the cost -- journalling is: the shell snapshots
+      // every object reachable from the child before running its `update`, and
+      // what is reachable from this one is five sessions of candles. Twice a
+      // second is well under what reads as live on a five-day chart.
+      if (this.chartDirty && Date.now() - this.chartPublishedAt >= CHART_PUBLISH_INTERVAL_MS) {
         this.chartDirty = false;
+        this.chartPublishedAt = Date.now();
         this.syncPriceChartView();
       }
       this.redraw(cx);
@@ -722,7 +733,7 @@ export default class LongbridgeApp extends View {
   redraw(cx, panes = PANE_BOTH) {
     this.dirtyPanes |= panes;
     cx.notify();
-    this.syncWorkspacePanels();
+    this.syncWorkspacePanels(cx);
   }
 
   releasePriceChartView() {
@@ -983,7 +994,7 @@ export default class LongbridgeApp extends View {
     const stream = this.stream;
     if (!symbol) {
       this.chartState = { symbol: null, state: "idle" };
-      this.syncPriceChartView();
+      this.publishChart(cx);
       return;
     }
     const generation = ++this.chartGeneration;
@@ -991,8 +1002,8 @@ export default class LongbridgeApp extends View {
       symbol,
       state: this.candleCache.has(symbol) ? "ready" : "loading",
     };
-    this.syncPriceChartView();
     this.redraw(cx);
+    this.publishChart(cx);
     if (!stream) return;
     // The window ends on the day the picker chose, and on today when it has
     // chosen nothing. Fourteen calendar days back is enough to contain five
@@ -1017,8 +1028,31 @@ export default class LongbridgeApp extends View {
           state: this.candleCache.has(symbol) ? "ready" : "error",
         };
       }
-      this.syncPriceChartView();
       this.redraw(cx);
+      this.publishChart(cx);
+    });
+  }
+
+  /**
+   * Hands the chart its series on the next turn rather than in this one.
+   *
+   * `syncPriceChartView` crosses the nested-view bridge, and what it carries is
+   * the whole selected window -- five sessions of minute candles is around two
+   * thousand points, and the bridge costs about 0.03 ms each. Sixty
+   * milliseconds is nothing on a background task and a stall on a click: the
+   * frame that would have shown the new selection cannot be drawn until the
+   * handler that started it returns, so the row highlighted late and the click
+   * read as dropped. Deferring the publish lets the selection paint on the next
+   * frame and the chart arrive on the one after.
+   *
+   * @param {import("gpui").Context | import("gpui").AsyncContext} cx
+   */
+  publishChart(cx) {
+    if (this.chartPublish) return;
+    this.chartPublish = cx.timer.after(0, (cx) => {
+      this.chartPublish = null;
+      this.syncPriceChartView();
+      this.redraw(cx, PANE_DETAIL);
     });
   }
 
@@ -1922,8 +1956,10 @@ export default class LongbridgeApp extends View {
   selectQuote(symbol, cx) {
     if (!symbol || symbol === this.selectedSymbol) return;
     this.selectedSymbol = symbol;
-    this.loadSelectedChart(cx);
+    // Paint the selection first. `loadSelectedChart` publishes the chart, and
+    // publishing it is the expensive half of this click -- see `publishChart`.
     this.redraw(cx);
+    this.loadSelectedChart(cx);
   }
 
   /** @param {import("gpui-base").Theme} tokens */
