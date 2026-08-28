@@ -12,18 +12,25 @@ import {
   TRADE_SESSION,
   decodeErrorResponse,
   decodeFrame,
+  decodePushDepth,
   decodePushQuote,
+  decodePushTrade,
   decodeSecurityCandlestickResponse,
+  decodeSecurityDepthResponse,
   decodeSecurityIntradayResponse,
   decodeSecurityQuoteResponse,
+  decodeSecurityTradeResponse,
   encodeAuthRequest,
   encodeFrame,
   encodeHeartbeat,
   encodeHistoryCandlestickDateRequest,
   encodeIntradayRequest,
   encodeRealtimeQuoteRequest,
+  encodeSecurityRequest,
   encodeSecurityCandlestickRequest,
+  encodeSecurityTradeRequest,
   encodeSubscribeRequest,
+  encodeUnsubscribeRequest,
 } from "./protocol.js";
 
 // Longbridge negotiates the binary protocol during the HTTP upgrade. These
@@ -94,6 +101,7 @@ const INTRADAY_SESSIONS = Object.freeze([
   TRADE_SESSION.POST,
   TRADE_SESSION.OVERNIGHT,
 ]);
+const DETAIL_SUB_TYPES = Object.freeze([SUB_TYPE.DEPTH, SUB_TYPE.TRADE]);
 
 function mergeIntradayResponses(symbol, responses) {
   const indexedLines = [];
@@ -133,6 +141,8 @@ export function createQuoteStream(options) {
   };
   const symbols = requireSymbols(options.symbols);
   const onQuote = requireCallback(options.onQuote, "onQuote");
+  const onDepth = requireCallback(options.onDepth, "onDepth");
+  const onTrades = requireCallback(options.onTrades, "onTrades");
   const onStatus = requireCallback(options.onStatus, "onStatus");
   const transport = options.WebSocket ?? WebSocket;
   if (!transport || typeof transport.connect !== "function")
@@ -170,6 +180,8 @@ export function createQuoteStream(options) {
   let handshakeHandle = null;
   let reconnectAttempt = 0;
   let startPromise = null;
+  let selectedDetailSymbol = null;
+  let detailTransition = Promise.resolve();
 
   const emitStatus = (state, extra = {}) => onStatus({ state, ...extra });
   const active = (session) => !stopped && current === session;
@@ -314,13 +326,62 @@ export function createQuoteStream(options) {
   }
 
   function receivePush(packet) {
-    if (packet.command !== COMMAND.PUSH_QUOTE) return;
-    const quote = decodePushQuote(packet.body);
+    let callback;
+    let payload;
+    if (packet.command === COMMAND.PUSH_QUOTE) {
+      callback = onQuote;
+      payload = decodePushQuote(packet.body);
+    } else if (packet.command === COMMAND.PUSH_DEPTH) {
+      callback = onDepth;
+      payload = decodePushDepth(packet.body);
+    } else if (packet.command === COMMAND.PUSH_TRADE) {
+      callback = onTrades;
+      payload = decodePushTrade(packet.body);
+    } else {
+      return;
+    }
     try {
-      onQuote(quote);
+      callback(payload);
     } catch (error) {
       emitStatus("callback_error", { error: String(error?.message ?? error) });
     }
+  }
+
+  async function requestDetailSnapshots(session, symbol) {
+    const [depthBody, tradesBody] = await Promise.all([
+      request(session, COMMAND.DEPTH, encodeSecurityRequest(symbol)),
+      request(session, COMMAND.TRADES, encodeSecurityTradeRequest({ symbol, count: 20 })),
+    ]);
+    if (!active(session) || selectedDetailSymbol !== symbol) return;
+    try {
+      onDepth(decodeSecurityDepthResponse(depthBody));
+      onTrades(decodeSecurityTradeResponse(tradesBody));
+    } catch (error) {
+      emitStatus("callback_error", { error: String(error?.message ?? error) });
+    }
+  }
+
+  async function subscribeDetail(session, symbol) {
+    await request(
+      session,
+      COMMAND.SUBSCRIBE,
+      encodeSubscribeRequest({ symbols: [symbol], subTypes: DETAIL_SUB_TYPES, isFirstPush: true }),
+    );
+    if (!active(session) || selectedDetailSymbol !== symbol) return;
+    await requestDetailSnapshots(session, symbol);
+  }
+
+  async function synchronizeDetailSelection(previous, symbol) {
+    const session = current;
+    if (!session || !active(session)) return;
+    if (previous) {
+      await request(
+        session,
+        COMMAND.UNSUBSCRIBE,
+        encodeUnsubscribeRequest({ symbols: [previous], subTypes: DETAIL_SUB_TYPES }),
+      );
+    }
+    if (symbol) await subscribeDetail(session, symbol);
   }
 
   async function readLoop(session) {
@@ -401,6 +462,9 @@ export function createQuoteStream(options) {
         }
       }
       if (!active(session)) throw new Error("quote stream disconnected during initial snapshot");
+
+      if (selectedDetailSymbol) await subscribeDetail(session, selectedDetailSymbol);
+      if (!active(session)) throw new Error("quote stream disconnected during detail snapshot");
 
       reconnectAttempt = 0;
       startHeartbeat(session);
@@ -487,6 +551,39 @@ export function createQuoteStream(options) {
           : encodeSecurityCandlestickRequest({ symbol, period, count, tradeSession }),
       );
       return decodeSecurityCandlestickResponse(body);
+    },
+
+    async queryDepth(symbol) {
+      const session = current;
+      if (!session || !active(session)) throw new Error("quote stream is not connected");
+      return decodeSecurityDepthResponse(
+        await request(session, COMMAND.DEPTH, encodeSecurityRequest(requireString(symbol, "symbol"))),
+      );
+    },
+
+    async queryTrades(symbol, count = 20) {
+      const session = current;
+      if (!session || !active(session)) throw new Error("quote stream is not connected");
+      return decodeSecurityTradeResponse(
+        await request(
+          session,
+          COMMAND.TRADES,
+          encodeSecurityTradeRequest({
+            symbol: requireString(symbol, "symbol"),
+            count: requirePositiveInteger(count, "count"),
+          }),
+        ),
+      );
+    },
+
+    selectDetailSymbol(symbol) {
+      if (symbol !== null) requireString(symbol, "symbol");
+      if (symbol === selectedDetailSymbol) return detailTransition;
+      const previous = selectedDetailSymbol;
+      selectedDetailSymbol = symbol;
+      const transition = detailTransition.then(() => synchronizeDetailSelection(previous, symbol));
+      detailTransition = transition.catch(() => {});
+      return transition;
     },
   };
 }
