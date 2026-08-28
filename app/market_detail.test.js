@@ -97,6 +97,15 @@ function runVectors() {
     Array.from({ length: 21 }, (_, index) => trade({ timestamp: BigInt(index), price: String(index) })),
   );
   check(retained.length === 20 && retained[0].timestamp === 20n && retained.at(-1).timestamp === 1n, "trades retain the newest twenty records");
+  const oversizedLimit = mergeTrades(
+    [],
+    Array.from({ length: 21 }, (_, index) => trade({ timestamp: BigInt(index), price: String(index) })),
+    21,
+  );
+  check(
+    oversizedLimit.length === 20 && oversizedLimit.at(-1).timestamp === 1n,
+    "an oversized custom trade limit cannot exceed the twenty-row ceiling",
+  );
 
   check(tradeVolumeRatio(25n, 100n) === 0.5, "trade volume scaling uses square-root magnitude");
   check(tradeVolumeRatio(-25n, 100n) === 0.5, "trade volume scaling uses absolute volume");

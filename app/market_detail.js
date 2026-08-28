@@ -134,7 +134,9 @@ function compareTrades(left, right) {
  * returns the newest bounded sequence without modifying either input array.
  */
 export function mergeTrades(current, incoming, limit = DEFAULT_TRADE_LIMIT) {
-  const maximum = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : DEFAULT_TRADE_LIMIT;
+  const maximum = Number.isFinite(limit)
+    ? Math.min(DEFAULT_TRADE_LIMIT, Math.max(0, Math.floor(limit)))
+    : DEFAULT_TRADE_LIMIT;
   const unique = new Map();
   for (const trade of [...(Array.isArray(incoming) ? incoming : []), ...(Array.isArray(current) ? current : [])]) {
     if (!trade || typeof trade !== "object") continue;
