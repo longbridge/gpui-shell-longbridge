@@ -314,6 +314,16 @@ fn chart_vectors_run_against_this_application(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn chart_mode_vectors_run_against_this_application(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("chart_modes.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let _loaded = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+}
+
+#[gpui::test]
 fn reconnect_invalidates_the_superseded_chart_request_before_stopping(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
