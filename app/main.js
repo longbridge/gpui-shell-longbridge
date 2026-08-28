@@ -635,7 +635,17 @@ export default class LongbridgeApp extends View {
    */
   syncWorkspacePanels() {
     if (!this.workspaceDock) return;
-    const props = { app: this, revision: (this.workspaceRevision += 1) };
+    // A revision and nothing else. The application used to ride along in these
+    // props, and it costs: `set_props` crosses the nested-view bridge, so this
+    // handed the whole view -- quotes, holdings, the candle cache -- over it
+    // once a second, and the operation was interrupted for overrunning the
+    // sandbox's budget every time. The panes then did not repaint at all, which
+    // is the opposite of what this call is for.
+    //
+    // Nothing is lost. A pane takes the application from `workspace.js`'s held
+    // reference, which is also the only way a pane rebuilt from a saved layout
+    // could ever have got one.
+    const props = { revision: (this.workspaceRevision += 1) };
     this.watchlistPanel?.set_props(props);
     this.detailPanel?.set_props(props);
   }
