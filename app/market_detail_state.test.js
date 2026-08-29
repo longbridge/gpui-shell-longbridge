@@ -85,17 +85,9 @@ export default class MarketDetailStateProbe extends LongbridgeApp {
       "a stale detail snapshot cannot publish under B",
     );
 
-    // Exercise the production invalidation funnel with observable live panel
-    // handles. A detail push still redraws the shell root, but only the Market
-    // Detail entity may receive a targeted notification; Quote and the
-    // retained Chart must not rebuild their descriptions for tape/book data.
-    const quoteHandle = { panel: "quote" };
-    const chartHandle = { panel: "chart" };
-    const marketHandle = { panel: "market" };
-    this.workspaceDock = {};
-    this.quoteDetailsDockPanel = quoteHandle;
-    this.chartDockPanel = chartHandle;
-    this.marketDetailDockPanel = marketHandle;
+    // Detail content is inline in the responsive resizable workspace, so each
+    // push repaints the root once. The chart itself remains a retained child
+    // and must not receive new props for book/tape data.
     this.dirtyPanes = 0;
     const notified = [];
     const metricCx = { notify: (target) => notified.push(target ?? "root") };
@@ -120,19 +112,13 @@ export default class MarketDetailStateProbe extends LongbridgeApp {
       "detail-only updates do not publish new retained-chart props",
     );
     check(
-      notified.filter((target) => target === marketHandle).length === 2 &&
-        !notified.includes(quoteHandle) &&
-        !notified.includes(chartHandle),
-      "depth and trades notify Market Detail only, never Quote or Chart",
+      notified.filter((target) => target === "root").length === 2,
+      "depth and trades repaint the inline workspace once per accepted snapshot",
     );
     check(
       retainedChartPublishes === 0,
       "depth/trade pushes cannot rebuild the retained chart child",
     );
-    this.workspaceDock = null;
-    this.quoteDetailsDockPanel = null;
-    this.chartDockPanel = null;
-    this.marketDetailDockPanel = null;
 
     // Returning to A is a new selection epoch. A first-A response may arrive
     // after A → B → A, but it must not be mistaken for the final A request.

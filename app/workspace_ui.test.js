@@ -1,4 +1,3 @@
-import { div } from "gpui";
 import { v_flex } from "gpui-base";
 import { holdContext } from "./context.js";
 import LongbridgeApp from "./main.js";
@@ -72,14 +71,10 @@ export default class WorkspaceUiProbe extends LongbridgeApp {
     this.chartGeneration = 0;
     this.chartThemeRevision = 0;
     this.initPriceChartView(cx);
-    this.initWorkspaceDock(cx);
     this.clock = null;
   }
 
   render(cx) {
-    return v_flex()
-      .size_full()
-      .child(div().id("workspace-panel-count").child(String(this.workspaceDock.panels().length)))
-      .child(this.watchlistPage(cx.theme()));
+    return v_flex().size_full().child(this.watchlistPage(cx.theme()));
   }
 }

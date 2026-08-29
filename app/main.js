@@ -5,7 +5,6 @@ import { View, div, svg } from "gpui";
 import { holdContext } from "./context.js";
 import {
   CalendarState,
-  DockArea,
   InputState,
   Popover,
   Scrollbar,
@@ -13,11 +12,12 @@ import {
   TableBody,
   Tab,
   Tabs,
-  dock_area,
-  dock_content,
   h_flex,
+  h_resizable,
+  resizable_panel,
   set_theme,
   v_flex,
+  v_resizable,
   v_virtual_list,
 } from "gpui-base";
 import { fps_monitor } from "gpui-fps";
@@ -57,13 +57,6 @@ import { loadFpsVisible, saveFpsVisible } from "./fps_preference.js";
 import { omarchyBaseColors, omarchyMarketColors, omarchyTheme } from "./system_theme.js";
 import { setOmarchyAvatarColors, setOmarchyMarketColors, statusColors } from "./palette.js";
 import {
-  ChartPanel,
-  MarketDetailPanel,
-  QuoteDetailsPanel,
-  WatchlistPanel,
-  holdWorkspaceApp,
-} from "./workspace.js";
-import {
   accordionGroup,
   accordionSection,
   action,
@@ -72,16 +65,10 @@ import {
   detailGrid,
   emptyPanel,
   kbd,
-  detailToggle,
-  PANE_INSET,
-  dockDropHint,
-  dockFrame,
-  dockTabBar,
-  dockTileDragBar,
-  dockTileResizeHandles,
   errorMessage,
   filterInput,
   HOLDING_ROW_HEIGHT,
+  PANE_INSET,
   TABLE_HEADER_HEIGHT,
   holdingRow,
   holdingsHeader,
@@ -122,168 +109,6 @@ async function currentOmarchyColors() {
 // How many Holdings rows the panel shows before the page scrolls instead of
 // the panel growing. Any ceiling would do; this one keeps the summary and the
 // allocation chart reachable above it without a scroll.
-/** Where the workspace layout is kept between runs, and under which shape. */
-const WORKSPACE_LAYOUT_KEY = "workspace.layout";
-// 3 introduces three independently dockable detail panels. Layouts from the
-// single-detail-pane shape are intentionally reset rather than partly restored
-// into a different panel topology.
-const WORKSPACE_LAYOUT_VERSION = 3;
-/** The detail dock's starting width; after that the user's drag decides. */
-const DETAIL_DOCK_WIDTH = 460;
-
-// The right dock is a tile canvas. These stable names are deliberately
-// application-owned rather than DockArea panel ids: an id belongs to one live
-// entity only, while a name lets a later startup reconnect the saved geometry
-// to the entity this application has just created.
-const DEFAULT_DETAIL_TILES = Object.freeze([
-  Object.freeze({ name: "quote-details", x: 0, y: 0, width: DETAIL_DOCK_WIDTH, height: 220, z: 0 }),
-  Object.freeze({ name: "chart", x: 0, y: 220, width: DETAIL_DOCK_WIDTH, height: 300, z: 1 }),
-  Object.freeze({
-    name: "market-detail",
-    x: 0,
-    y: 520,
-    width: DETAIL_DOCK_WIDTH,
-    height: 280,
-    z: 2,
-  }),
-]);
-const DETAIL_TILE_NAMES = new Set(DEFAULT_DETAIL_TILES.map((tile) => tile.name));
-
-/**
- * Seed only the containers that live panel handles will enter next.
- *
- * A bounded `add_panel` is an `add_tile` at the host boundary. It deliberately
- * refuses a region that is not already a tiles canvas, so the first bounded
- * panel cannot create its own right dock. Loading this panel-free skeleton is
- * safe: unlike loading a saved panel tree it constructs no replacement views,
- * and queued dock edits preserve the load -> add order.
- */
-const EMPTY_WORKSPACE_DOCK_LAYOUT = Object.freeze({
-  version: WORKSPACE_LAYOUT_VERSION,
-  center: {
-    panel_name: "StackPanel",
-    children: [],
-    info: { stack: { sizes: [], axis: 0 } },
-  },
-  right_dock: {
-    panel: {
-      panel_name: "Tiles",
-      children: [],
-      info: { tiles: { metas: [] } },
-    },
-    placement: "right",
-    size: DETAIL_DOCK_WIDTH,
-    open: true,
-  },
-});
-
-function finiteTileNumber(value, fallback) {
-  return Number.isFinite(value) ? value : fallback;
-}
-
-/**
- * Accept only a complete, known tile set. Missing or corrupt entries fall
- * back one-by-one, which keeps an upgraded or hand-edited saved layout from
- * making a reading pane unreachable.
- *
- * @param {unknown} value
- */
-export function normalizeDetailTiles(value) {
-  const supplied = new Map(
-    (Array.isArray(value) ? value : [])
-      .filter((tile) => tile && typeof tile === "object" && DETAIL_TILE_NAMES.has(tile.name))
-      .map((tile) => [tile.name, tile]),
-  );
-  return DEFAULT_DETAIL_TILES.map((fallback) => {
-    const tile = supplied.get(fallback.name);
-    if (!tile) return { ...fallback };
-    return {
-      name: fallback.name,
-      x: Math.max(0, finiteTileNumber(tile.x, fallback.x)),
-      y: Math.max(0, finiteTileNumber(tile.y, fallback.y)),
-      width: Math.max(120, finiteTileNumber(tile.width, fallback.width)),
-      height: Math.max(100, finiteTileNumber(tile.height, fallback.height)),
-      z: Math.max(0, Math.floor(finiteTileNumber(tile.z, fallback.z))),
-    };
-  }).sort((left, right) => left.z - right.z || left.name.localeCompare(right.name));
-}
-
-function tileNameFromDump(value) {
-  if (!value || typeof value !== "object") return null;
-  const candidate = value.name ?? value.panel?.name ?? value.panel_name ?? value.info?.name;
-  if (typeof candidate !== "string") return null;
-  // Dump names may be namespaced (`shell:longbridge/chart`); the final segment
-  // is the panel name passed to add_panel and is our durable storage key.
-  const name = candidate.split(/[/:]/).at(-1);
-  return DETAIL_TILE_NAMES.has(name) ? name : null;
-}
-
-function tileBoundsFromDump(value) {
-  if (!value || typeof value !== "object") return null;
-  const bounds = value.bounds ?? value.tile?.bounds ?? value.info?.bounds;
-  if (!bounds || typeof bounds !== "object") return null;
-  // gpui-component serializes a Bounds<Pixels> as `{ origin, size }`; the
-  // shell's JS facade has also used flat `{ x, y, width, height }` bounds.
-  // Store one small, stable shape regardless of which side made the dump.
-  const x = bounds.x ?? bounds.origin?.x;
-  const y = bounds.y ?? bounds.origin?.y;
-  const width = bounds.width ?? bounds.size?.width;
-  const height = bounds.height ?? bounds.size?.height;
-  if (![x, y, width, height].every(Number.isFinite)) return null;
-  return { x, y, width, height };
-}
-
-/**
- * Pull a portable tile list out of DockArea.dump() without ever loading it.
- * The dock dump is intentionally opaque to scripts, so this walker tolerates
- * both current tree shapes and additive future fields. It records the visual
- * traversal order as a z order and only retains our three known panels.
- *
- * @param {unknown} dump
- * @param {unknown} fallback
- */
-export function detailTilesFromDockDump(dump, fallback) {
-  const found = new Map();
-  const seen = new Set();
-  let z = 0;
-  const visit = (value) => {
-    if (!value || typeof value !== "object" || seen.has(value)) return;
-    seen.add(value);
-    // DockArea's current serialized Tiles node keeps panel names in children
-    // and tile rectangles in its parallel `metas` vector. Pair them here
-    // before the generic walk below so a drag/resize survives the JSON shape
-    // instead of merely the in-memory facade shape.
-    const tileChildren = value.children;
-    const tileMetas = value.info?.tiles?.metas;
-    if (Array.isArray(tileChildren) && Array.isArray(tileMetas)) {
-      tileChildren.forEach((child, index) => {
-        const name = tileNameFromDump(child);
-        const meta = tileMetas[index];
-        const bounds = tileBoundsFromDump(meta);
-        if (name && bounds) {
-          found.set(name, {
-            name,
-            ...bounds,
-            z: finiteTileNumber(meta.z_index ?? meta.z, index),
-          });
-        }
-      });
-    }
-    const name = tileNameFromDump(value);
-    const bounds = tileBoundsFromDump(value);
-    if (name && bounds) {
-      found.set(name, { name, ...bounds, z: finiteTileNumber(value.z_index ?? value.z, z) });
-      z += 1;
-    }
-    for (const child of Object.values(value)) visit(child);
-  };
-  visit(dump);
-  const previous = normalizeDetailTiles(fallback);
-  return normalizeDetailTiles(
-    previous.map((tile) => ({ ...tile, ...(found.get(tile.name) ?? {}) })),
-  );
-}
-
 const HOLDINGS_VIEWPORT_ROWS = 10;
 /**
  * How long the steps before the stream exists may take before the window says
@@ -394,7 +219,6 @@ function motion(element, property) {
  * which is where the question is asked.
  */
 const NARROW_VIEWPORT = 960;
-const COMPACT_WATCHLIST_WIDTH = 620;
 
 /** How many holdings one page of the Holdings panel shows. */
 
@@ -629,7 +453,6 @@ export default class LongbridgeApp extends View {
     this.initKeyboard(cx);
     this.initChartCalendar(cx);
     this.initPriceChartView(cx);
-    this.initWorkspaceDock(cx);
     this.clock = cx.timer.every(1_000, (cx) => {
       this.syncSystemTheme(cx);
       this.lastTick = Date.now();
@@ -890,144 +713,6 @@ export default class LongbridgeApp extends View {
    *
    * @param {import("gpui").Context} cx
    */
-  initWorkspaceDock(cx) {
-    // Before anything can rebuild a panel. A pane the dock reconstructs from a
-    // saved layout is constructed with no props, so the application it draws
-    // cannot arrive that way; it takes the held one instead.
-    holdWorkspaceApp(this);
-    // Registered before the layout is restored: this is what lets a saved
-    // layout find the class its panel is rebuilt from.
-    DockArea.register_panel("watchlist", WatchlistPanel);
-    DockArea.register_panel("quote-details", QuoteDetailsPanel);
-    DockArea.register_panel("chart", ChartPanel);
-    DockArea.register_panel("market-detail", MarketDetailPanel);
-
-    // Reset runs this a second time, so nothing here may assume it is the
-    // first: the dock, its panels and the restored flag are all replaced
-    // wholesale rather than added to.
-    this.workspaceDock = DockArea.new("longbridge-workspace", {
-      version: WORKSPACE_LAYOUT_VERSION,
-    });
-    // Establish the empty right-side tiles canvas before the bounded panel
-    // additions queued below. This load contains no panel names, so every
-    // panel in the resulting area is still the live entity created here.
-    this.workspaceDock.load(EMPTY_WORKSPACE_DOCK_LAYOUT);
-    // Read before adding any panel. `add_panel` is asynchronous from the
-    // layout's point of view, so a dump in this turn still describes the old
-    // tree; seeding with these values is the only way to retain live entity
-    // handles and still put the tiles back where the user left them.
-    let layout = null;
-    try {
-      const saved = localStorage.getItem(WORKSPACE_LAYOUT_KEY);
-      layout = saved ? JSON.parse(saved) : null;
-    } catch {
-      this.layoutStorage = false;
-    }
-    // v2 described one scrolling detail pane, so even a coincidentally shaped
-    // value must not be interpreted as v3 tile geometry.
-    if (layout?.version !== WORKSPACE_LAYOUT_VERSION) layout = null;
-    this.detailTileLayout = normalizeDetailTiles(layout?.detail_tiles);
-    this.watchlistPanel = cx.new(WatchlistPanel, { app: this });
-    this.quoteDetailsDockPanel = cx.new(QuoteDetailsPanel, { app: this });
-    this.chartDockPanel = cx.new(ChartPanel, { app: this });
-    this.marketDetailDockPanel = cx.new(MarketDetailPanel, { app: this });
-    // Watchlist is the center and the details are the right dock, which is the
-    // opposite of how they started. Only a left, right or bottom dock is a
-    // *dock*: the center is the area itself, it has no frame, and so it has no
-    // collapse control -- which put the affordance on the pane nobody wants to
-    // put away. The watchlist is the list this window is for; the details are
-    // what it is showing about one row of it, and that is the half worth
-    // folding out of the way.
-    // `closable: false` on both, and it is not only a matter of taste. A dock
-    // whose last panel is closed keeps the dock and loses the panel, so the
-    // window came back with an empty group offering to have a pane dropped in
-    // it and no way to put the closed one back -- there is no "reopen" for a
-    // panel this application never offers to close. Two panes that are always
-    // both there cannot reach that state.
-    this.workspaceDock.add_panel(this.watchlistPanel, {
-      name: "watchlist",
-      placement: "center",
-      closable: false,
-    });
-    // Bounds make the right dock a tiles canvas from its first panel. The
-    // default is deliberately one vertical strip, but the panels remain real
-    // dock tiles users can resize and rearrange. Crucially, restoration uses
-    // the entities held above, never `DockArea.load()`: targeted invalidation
-    // must keep pointing to the panel that is actually in the canvas.
-    const detailPanels = new Map([
-      ["quote-details", this.quoteDetailsDockPanel],
-      ["chart", this.chartDockPanel],
-      ["market-detail", this.marketDetailDockPanel],
-    ]);
-    for (const tile of this.detailTileLayout) {
-      const panel = detailPanels.get(tile.name);
-      if (!panel) continue;
-      this.workspaceDock.add_panel(panel, {
-        name: tile.name,
-        placement: "right",
-        closable: false,
-        ...(tile.name === "quote-details" ? { size: DETAIL_DOCK_WIDTH } : {}),
-        bounds: { x: tile.x, y: tile.y, width: tile.width, height: tile.height },
-      });
-    }
-
-    // What is restored is the geometry, not the panels.
-    //
-    // `load` rebuilds every panel through the registry, which means the two
-    // this view just created are replaced by two it has no handle on -- and a
-    // panel it cannot address is a panel it cannot repaint. `window.refresh()`
-    // does not reach them either; measured, the pane rendered twice at startup
-    // and never again, so the watchlist arrived and the pane went on showing
-    // the empty state it had drawn before the data landed. That is the whole
-    // bug, and it only appeared once a layout had been saved, which is why it
-    // looked intermittent.
-    //
-    // So the panels are always the seeded ones and the app restores their
-    // app-owned geometry before first insertion. The opaque DockArea dump is
-    // reduced to stable names and rectangles when it changes; it is never
-    // handed back to `load`, which would replace these live handles.
-    try {
-      if (layout && layout.version === WORKSPACE_LAYOUT_VERSION) {
-        const detail = layout.right_dock;
-        if (Number.isFinite(detail?.size)) {
-          this.workspaceDock.set_dock_size("right", detail.size);
-        }
-      }
-    } catch {
-      this.layoutStorage = false;
-    }
-
-    // Fires on every edit, including each step of a drag, so the write is on a
-    // timer rather than on the event.
-    this.workspaceDock.on("layout_changed", (cx) => {
-      this.redraw(cx);
-      if (this.layoutWrite) return;
-      this.layoutWrite = cx.timer.after(400, () => {
-        this.layoutWrite = null;
-        if (this.layoutStorage === false) return;
-        try {
-          this.detailTileLayout = detailTilesFromDockDump(
-            this.workspaceDock.dump(),
-            this.detailTileLayout,
-          );
-          localStorage.setItem(
-            WORKSPACE_LAYOUT_KEY,
-            JSON.stringify({
-              version: WORKSPACE_LAYOUT_VERSION,
-              right_dock: {
-                placement: "right",
-                size: this.workspaceDock.dock_size("right") ?? DETAIL_DOCK_WIDTH,
-              },
-              detail_tiles: this.detailTileLayout,
-            }),
-          );
-        } catch {
-          this.layoutStorage = false;
-        }
-      });
-    });
-  }
-
   /**
    * Repaints the two panes.
    *
@@ -1040,7 +725,6 @@ export default class LongbridgeApp extends View {
    * @param {import("gpui").Context | import("gpui").AsyncContext} cx
    */
   syncWorkspacePanels(cx) {
-    if (!this.workspaceDock) return;
     // Each `set_props` crosses the nested-view bridge and rebuilds that pane's
     // whole description, so publishing to both on every repaint costs twice
     // what the change was worth -- a quote for an instrument nobody selected
@@ -1053,10 +737,8 @@ export default class LongbridgeApp extends View {
     // `cx.notify(entity)` is GPUI's targeted invalidation: unlike `set_props`,
     // it does not run a child update transaction or checkpoint every object
     // reachable through that application reference.
-    if (panes & PANE_WATCHLIST && this.watchlistPanel) cx.notify(this.watchlistPanel);
-    if (panes & PANE_QUOTE && this.quoteDetailsDockPanel) cx.notify(this.quoteDetailsDockPanel);
-    if (panes & PANE_CHART && this.chartDockPanel) cx.notify(this.chartDockPanel);
-    if (panes & PANE_MARKET && this.marketDetailDockPanel) cx.notify(this.marketDetailDockPanel);
+    void panes;
+    void cx;
   }
 
   /**
@@ -1991,11 +1673,6 @@ export default class LongbridgeApp extends View {
             // Only on the page that has the pane it folds. Portfolio is one
             // column with no details beside it, so the control there would be a
             // switch for something that is not on screen.
-            .when(this.hasStoredTokens && this.page === "watchlist", (element) =>
-              element.child(
-                detailToggle(tokens, this.isDetailOpen(), (_event, cx) => this.toggleDetail(cx)),
-              ),
-            )
             .when(!this.followsSystemTheme, (element) =>
               element.child(
                 themeButton(tokens, (_event, cx) =>
@@ -2100,9 +1777,7 @@ export default class LongbridgeApp extends View {
    * Release throughput while still letting a wide Watchlist show its columns.
    */
   isWatchlistCompact() {
-    const viewportWidth = window.viewport_size().width;
-    const detailWidth = this.isDetailOpen() ? (this.workspaceDock.dock_size("right") ?? 0) : 0;
-    return viewportWidth - detailWidth < COMPACT_WATCHLIST_WIDTH;
+    return window.viewport_size().width < NARROW_VIEWPORT;
   }
 
   /** @param {import("gpui-base").Theme} tokens */
@@ -2167,60 +1842,6 @@ export default class LongbridgeApp extends View {
   }
 
   /**
-   * Puts the workspace back the way it ships.
-   *
-   * A dock area is the one part of this window whose shape is the user's, and
-   * the price of that is a shape they can get stuck in: a pane dragged into the
-   * centre and its dock left holding nothing, a pane collapsed and its handle
-   * off the edge of the window. Every one of those is recoverable by hand and
-   * none of them is obvious, so the way back is a menu item rather than a
-   * paragraph in a README.
-   *
-   * The stored layout goes first. Rebuilding the dock republishes one through
-   * `layout_changed`, so clearing afterwards would only delete the layout that
-   * was just written, and the next launch would restore the shape this is
-   * supposed to be undoing.
-   *
-   * @param {import("gpui").Context} cx
-   */
-  resetWorkspace(cx) {
-    if (this.layoutWrite) {
-      this.layoutWrite = null;
-    }
-    try {
-      localStorage.removeItem(WORKSPACE_LAYOUT_KEY);
-    } catch {
-      // A host that granted no storage has nothing to forget, and the rebuild
-      // below is the part that matters.
-      this.layoutStorage = false;
-    }
-    this.initWorkspaceDock(cx);
-    this.redraw(cx);
-    cx.notify();
-    window.push_toast({ title: "Layout reset", level: "success", id: "workspace-reset" });
-  }
-
-  /**
-   * Whether the stock details are showing.
-   *
-   * Read from the dock every time rather than mirrored on this view: the pane
-   * can also be closed by dragging its edge shut, and a copy of the flag would
-   * be wrong from the first time that happened.
-   */
-  isDetailOpen() {
-    return Boolean(this.workspaceDock?.is_dock_open("right"));
-  }
-
-  /** @param {import("gpui").Context} cx */
-  toggleDetail(cx) {
-    if (!this.workspaceDock) return;
-    this.workspaceDock.toggle_dock("right");
-    // The dock writes its own layout back through `layout_changed`; this is
-    // only the title bar catching up with the icon it should now be showing.
-    cx.notify();
-  }
-
-  /**
    * The workspace, as a dock the user rearranges and keeps.
    *
    * The two panes used to be halves of a resizable group, which meant the
@@ -2234,34 +1855,20 @@ export default class LongbridgeApp extends View {
    * @param {import("gpui-base").Theme} tokens
    */
   watchlistPage(tokens) {
-    // No `.dock()` here, deliberately. That hook does not decorate a dock --
-    // it *replaces* base's whole `render_dock`, which is where a side dock's
-    // own box comes from (`Left | Right => h_flex().h_full().w(size)`), along
-    // with the early return that gives a closed dock no width and the resize
-    // handle on its edge. Chrome that returns anything else has silently taken
-    // over the layout, and a dock that no longer states its width stops being
-    // a column beside the centre and drops into the flow below it.
-    //
-    // None of that is worth owning. The one thing this window wanted from dock
-    // chrome was a collapse control, and `DockArea` exposes that directly --
-    // `is_dock_open` and `toggle_dock` take a placement -- so the control lives
-    // in the title bar and base keeps the layout it is good at.
-    return (
-      dock_area(this.workspaceDock)
+    const watchlist = this.watchlist(tokens).size_full();
+    const details = this.stockDetail(tokens).size_full();
+    if (this.isNarrow()) {
+      return v_resizable("watchlist-workspace-stacked")
         .flex_1()
         .min_h(0)
-        .tab_bar((group, cx) => dockTabBar(cx.theme(), group))
-        .tile_drag_bar((tile, cx) => dockTileDragBar(cx.theme(), tile))
-        .tile_resize_handles((tile, cx) => dockTileResizeHandles(cx.theme(), tile))
-        .empty_group((_group, cx) => emptyPanel(cx.theme(), "Nothing here", "Drop a pane in."))
-        .drop_indicator((drop, cx) => dockDropHint(cx.theme(), drop))
-        // `dockFrame` is base's `render_dock`, ported. It has to be supplied:
-        // gpui-shell replaces base's version whether or not an application asks,
-        // and its default chrome hands back the content bare -- no width, so a
-        // side dock stops being a column and drops into the flow below the
-        // centre. See the note on `dockFrame`.
-        .dock((dock, cx) => dockFrame(cx.theme(), dock, dock_content().flex_1().min_h(0).w_full()))
-    );
+        .child(resizable_panel().size(300).size_range(180).child(watchlist))
+        .child(resizable_panel().size_range(240).child(details));
+    }
+    return h_resizable("watchlist-workspace")
+      .flex_1()
+      .min_h(0)
+      .child(resizable_panel().size(620).size_range(360).child(watchlist))
+      .child(resizable_panel().size_range(360).child(details));
   }
 
   /** @param {import("gpui-base").Theme} tokens */
@@ -2612,14 +2219,14 @@ export default class LongbridgeApp extends View {
   // Test probes that draw the old inline shell still call this method. The
   // application dock never does: production gives each child its own tile.
   stockDetail(tokens) {
-    return v_flex()
+    return v_resizable("stock-detail-panels")
       .size_full()
       .min_w(0)
       .min_h(0)
       .children([
-        this.quoteDetailsPanel(tokens).flex_1().min_h(0),
-        this.chartDetailsPanel(tokens).flex_1().min_h(0),
-        this.marketDetailPanel(tokens).flex_1().min_h(0),
+        resizable_panel().size(220).size_range(140).child(this.quoteDetailsPanel(tokens)),
+        resizable_panel().size(300).size_range(180).child(this.chartDetailsPanel(tokens)),
+        resizable_panel().size_range(180).child(this.marketDetailPanel(tokens)),
       ]);
   }
 

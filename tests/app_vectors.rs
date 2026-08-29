@@ -397,16 +397,6 @@ fn market_detail_state_vectors_run_against_this_application(cx: &mut TestAppCont
 }
 
 #[gpui::test]
-fn workspace_layout_vectors_reconnect_saved_tiles_to_live_panel_handles(cx: &mut TestAppContext) {
-    cx.update(gpui_shell::init);
-    let runtime = cx.update(ShellRuntime::new).expect("runtime");
-    let fixture = ApplicationFixture::new("workspace_layout.test.js");
-    let window = cx.add_window(|_, _| Empty);
-    let mut context = VisualTestContext::from_window(*window.deref(), cx);
-    let _loaded = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
-}
-
-#[gpui::test]
 fn portfolio_vectors_run_against_this_application(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -598,38 +588,13 @@ fn authenticated_workspace_materializes_a_scrollable_watchlist(cx: &mut TestAppC
             .unwrap_or_default()
     });
 
-    // The panes are dock panels, so the description of this view is the area
-    // and its chrome handlers — nothing else. Everything the panes draw belongs
-    // to their own snapshots, which is the whole reason a drag or a collapse no
-    // longer needs this view to render at all.
-    let area = rendered
-        .lines()
-        .find(|line| line.contains("dock_area"))
-        .expect("workspace dock area");
-    // `:dock(fn)` is here because it has to be: gpui-shell replaces base's
-    // `render_dock` whether or not this application supplies chrome, and its
-    // default hands back the content with none of the box base wraps a dock in.
-    // Without a handler a side dock has no width, stops being a column and
-    // falls into the flow below the centre.
-    for handler in [
-        ":tab_bar(fn)",
-        ":empty_group(fn)",
-        ":drop_indicator(fn)",
-        ":dock(fn)",
-    ] {
-        assert!(
-            area.contains(handler),
-            "the dock draws its own {handler}: {area}"
-        );
-    }
     assert!(
-        !rendered.contains("h_resizable"),
-        "the resizable workspace was replaced by the dock: {rendered}"
-    );
-    assert!(
-        rendered.contains(r#":id[Str("workspace-panel-count")]"#)
-            && rendered.contains(r#"text "4""#),
-        "the live DockArea must contain Watchlist plus all three detail panels: {rendered}"
+        rendered.contains(r#"h_resizable "watchlist-workspace""#)
+            && rendered.contains(r#"v_resizable "stock-detail-panels""#)
+            && rendered.contains("quote-details-panel")
+            && rendered.contains("chart-panel")
+            && rendered.contains("market-detail-panel"),
+        "the wide workspace must join Watchlist to three visible stacked panels: {rendered}"
     );
 }
 

@@ -183,57 +183,13 @@ fn application_exposes_api_backed_read_only_views() {
             && main.contains("Scrollbar.vertical(`${id}-rows`)"),
         "both lists must virtualize their rows and pair a scrollbar with them by name"
     );
-    // The Watchlist and the three right-hand readings are real dock panels.
     assert!(
-        main.contains("dock_area(this.workspaceDock)")
-            && main.contains("DockArea.register_panel(\"watchlist\", WatchlistPanel)")
-            && main.contains("DockArea.register_panel(\"quote-details\", QuoteDetailsPanel)")
-            && main.contains("DockArea.register_panel(\"chart\", ChartPanel)")
-            && main.contains("DockArea.register_panel(\"market-detail\", MarketDetailPanel)"),
-        "all workspace readings must be panels of the workspace dock"
-    );
-    // Base draws none of this once gpui-shell is in the picture.
-    //
-    // `dockFrame` is on this list for a reason worth writing down, because it
-    // was taken off once. gpui-shell's `ScriptDockSkin::render_dock` replaces
-    // base's `render_dock` whether or not an application supplies chrome, and
-    // the default chrome returns the content bare -- without the box base wraps
-    // a dock in. A side dock with no width is not a column, so it drops into
-    // the flow below the centre and sizes to its content. Removing `dockFrame`
-    // does not restore base's box; it only swaps our missing one for the
-    // shell's.
-    let ui_source = &ui;
-    for chrome in ["dockTabBar", "dockDropHint", "dockFrame"] {
-        assert!(
-            main.contains(chrome) && ui_source.contains(&format!("export function {chrome}")),
-            "the dock's {chrome} must be drawn by the application"
-        );
-    }
-    assert!(
-        main.contains("toggle_dock(\"right\")") && ui.contains("export function detailToggle"),
-        "the details pane must still be collapsible from the window chrome"
-    );
-    // The geometry is remembered; the arrangement is not, and deliberately.
-    // `load` rebuilds every panel through the registry, so the panels this view
-    // created are replaced by two it has no handle on -- and a panel it cannot
-    // address is a panel it cannot repaint. Measured, the pane rendered twice
-    // at startup and never again: the watchlist arrived and the pane went on
-    // showing the empty state it had drawn before the data landed. So the
-    // panels are always seeded here and only the details pane's width and
-    // whether it is folded away are read back.
-    assert!(
-        main.contains("WORKSPACE_LAYOUT_KEY") && main.contains("dock_size(\"right\")"),
-        "the details pane's width must be written back to storage"
-    );
-    assert!(
-        !main.contains("detail?.open === false")
-            && !main.contains("open: this.workspaceDock.is_dock_open"),
-        "a temporary collapsed detail dock must not strand the workspace after restart or resize"
-    );
-    assert!(
-        main.matches("workspaceDock.load(").count() == 1
-            && main.contains("workspaceDock.load(EMPTY_WORKSPACE_DOCK_LAYOUT)"),
-        "only the panel-free container skeleton may be loaded; saved panels would replace live handles"
+        main.contains("h_resizable(\"watchlist-workspace\")")
+            && main.contains("v_resizable(\"watchlist-workspace-stacked\")")
+            && main.contains("v_resizable(\"stock-detail-panels\")")
+            && !main.contains("dock_area(this.workspaceDock)")
+            && !main.contains(".tile_drag_bar("),
+        "the responsive workspace must use joined resizable panels and no tile canvas"
     );
 
     // A row inside a virtual list cannot register a handler: it is rebuilt on
@@ -372,36 +328,24 @@ fn depth_and_trade_pushes_invalidate_only_the_market_detail_panel() {
 #[test]
 fn tiled_detail_dock_exposes_drag_and_resize_chrome() {
     let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
-    let ui = fs::read_to_string(app_dir().join("ui.js")).expect("ui.js");
-
     assert!(
-        main.contains(".tile_drag_bar((tile, cx) => dockTileDragBar(cx.theme(), tile))")
-            && main.contains(
-                ".tile_resize_handles((tile, cx) => dockTileResizeHandles(cx.theme(), tile))"
-            ),
-        "Dock tiles created with bounds need live drag and resize renderers"
-    );
-    assert!(
-        ui.contains("export function dockTileDragBar")
-            && ui.contains(".move_tile(tile)")
-            && ui.contains("export function dockTileResizeHandles")
-            && ui.contains(".resize_tile(tile, \"right\")")
-            && ui.contains(".resize_tile(tile, \"bottom\")"),
-        "tile chrome must use gpui-base's real move_tile and resize_tile commands"
+        main.contains("v_resizable(\"stock-detail-panels\")")
+            && main.matches("resizable_panel()").count() >= 5
+            && !main.contains("dockTileDragBar")
+            && !main.contains("dockTileResizeHandles"),
+        "three joined detail panels must resize without tile chrome"
     );
 }
 
 #[test]
 fn tiled_detail_dock_hit_geometry_matches_the_current_dock_api() {
-    let ui = fs::read_to_string(app_dir().join("ui.js")).expect("ui.js");
+    let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
 
     assert!(
-        ui.contains("const DOCK_TILE_DRAG_BAR_HEIGHT = 30")
-            && ui.contains("const DOCK_TILE_HANDLE_SIZE = 5")
-            && ui.contains(".h(DOCK_TILE_DRAG_BAR_HEIGHT)")
-            && ui.matches(".w(DOCK_TILE_HANDLE_SIZE)").count() == 1
-            && ui.matches(".h(DOCK_TILE_HANDLE_SIZE)").count() == 1,
-        "tile chrome must keep Dock's mandated 30px drag hit band and 5px resize hit edges"
+        !main.contains("bounds: { x: tile.x")
+            && !main.contains(".move_tile(")
+            && !main.contains(".resize_tile("),
+        "production must not use tile geometry or tile interactions"
     );
 }
 
@@ -410,63 +354,27 @@ fn v3_detail_tile_layout_round_trips_through_app_owned_storage() {
     let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
 
     assert!(
-        main.contains("const DEFAULT_DETAIL_TILES")
-            && main.contains("function normalizeDetailTiles")
-            && main.contains("function detailTilesFromDockDump")
-            && main.contains("this.detailTileLayout = normalizeDetailTiles(layout?.detail_tiles)")
-            && main.contains("detail_tiles: this.detailTileLayout"),
-        "v3 must persist app-owned stable tile names and geometry instead of only the dock width"
-    );
-    assert!(
-        main.contains("for (const tile of this.detailTileLayout)")
-            && main.contains("const detailPanels = new Map")
-            && main.contains("detailPanels.get(tile.name)"),
-        "restoration must recreate topology with the existing live panel handles, not DockArea.load"
-    );
-    assert!(
-        main.matches("workspaceDock.load(").count() == 1
-            && main.contains("workspaceDock.load(EMPTY_WORKSPACE_DOCK_LAYOUT)")
-            && main.contains("children: []")
-            && main.contains("info: { tiles: { metas: [] } }"),
-        "restoration may seed an empty tiles canvas but must not load saved panels over live handles"
+        !main.contains("workspaceDock.load(") && !main.contains("workspaceDock.add_panel("),
+        "responsive panel layout must not construct or restore a Dock tile tree"
     );
 }
 
 #[test]
 fn detail_dock_defaults_to_three_rearrangeable_vertical_tiles() {
     let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
-    let workspace = fs::read_to_string(app_dir().join("workspace.js")).expect("workspace.js");
 
     assert!(
-        main.contains("const WORKSPACE_LAYOUT_VERSION = 3")
-            && main.contains("name: \"quote-details\"")
-            && main.contains("name: \"chart\"")
-            && main.contains("name: \"market-detail\"")
-            && main.contains("const DEFAULT_DETAIL_TILES")
-            && main.contains("y: 0, width: DETAIL_DOCK_WIDTH, height: 220")
-            && main.contains("y: 220, width: DETAIL_DOCK_WIDTH, height: 300")
-            && main.contains("y: 520,")
-            && main.contains("height: 280,")
-            && main.contains(
-                "bounds: { x: tile.x, y: tile.y, width: tile.width, height: tile.height }"
-            ),
-        "the incompatible single-detail layout must migrate to three stacked Dock tiles"
-    );
-    assert!(
-        workspace.contains("export class QuoteDetailsPanel")
-            && workspace.contains("export class ChartPanel")
-            && workspace.contains("export class MarketDetailPanel")
-            && workspace.contains("marketDetailPanel(cx.theme())"),
-        "each right-side reading must be a stable independent panel class"
+        main.contains("resizable_panel().size(220)")
+            && main.contains("resizable_panel().size(300)")
+            && main.contains("this.quoteDetailsPanel(tokens)")
+            && main.contains("this.chartDetailsPanel(tokens)")
+            && main.contains("this.marketDetailPanel(tokens)"),
+        "Quote, Chart and Market Detail must be three joined vertical resizable panels"
     );
     assert!(
         main.contains("marketDetailPanel(tokens)")
             && main.contains("overflow_y_scrollbar()")
-            && !workspace
-                .split("export class MarketDetailPanel")
-                .nth(1)
-                .unwrap_or_default()
-                .contains("chartDetailsPanel"),
+            && main.contains("this.chartDetailsPanel(tokens)"),
         "only Market Detail owns the tape/book scroll and it cannot remount the retained chart"
     );
 }
@@ -595,28 +503,11 @@ fn title_mark_preserves_official_multicolor_roles_with_live_semantic_tokens() {
 #[test]
 fn workspace_repaints_do_not_checkpoint_the_market_model() {
     let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
-    let workspace = fs::read_to_string(app_dir().join("workspace.js")).expect("workspace.js");
-    let panel = workspace
-        .split("class WorkspacePanel extends View")
-        .nth(1)
-        .and_then(|source| source.split("export class WatchlistPanel").next())
-        .expect("WorkspacePanel source");
-
     assert!(
-        !panel.contains("update("),
-        "a panel update makes gpui-shell checkpoint every object reachable through its app; \
-         quote-driven repaints must refresh a panel without journalling the market model"
-    );
-    assert!(
-        panel.contains("this.app = props?.app ?? workspaceApp()"),
-        "the panel must still acquire its application once during initialization"
-    );
-    assert!(
-        main.contains("cx.notify(this.watchlistPanel)")
-            && main.contains("cx.notify(this.quoteDetailsDockPanel)")
-            && main.contains("cx.notify(this.chartDockPanel)")
-            && main.contains("cx.notify(this.marketDetailDockPanel)"),
-        "shared-state panes must use GPUI-style targeted notification"
+        main.contains("this.repaint = cx.timer.after(100")
+            && !main.contains("cx.notify(this.watchlistPanel)")
+            && !main.contains("cx.notify(this.marketDetailDockPanel)"),
+        "inline responsive panels must coalesce feed repaints without nested panel checkpoints"
     );
     assert!(
         !main.contains("workspaceRevision") && !main.contains("const props = { revision:"),
