@@ -492,7 +492,7 @@ fn title_mark_preserves_official_multicolor_roles_with_live_semantic_tokens() {
             ],
         ),
         (
-            "logo-info.svg",
+            "logo-info-cyan.svg",
             "status.info",
             &["x=\"7\" y=\"0\" width=\"10\" height=\"69\""],
         ),
@@ -517,6 +517,7 @@ fn title_mark_preserves_official_multicolor_roles_with_live_semantic_tokens() {
                 && main.contains(&format!(".text_color({token})"))
         })
             && main.contains("const status = statusColors(tokens);")
+            && !main.contains("assets/logo-info.svg")
             && main.contains("this.titleBar(tokens)")
             && !main.contains(".child(div().absolute().left(1)")
             && !main.contains("assets/logo-dark.svg")

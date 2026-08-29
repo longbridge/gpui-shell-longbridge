@@ -1938,7 +1938,9 @@ export default class LongbridgeApp extends View {
                     .inset_0()
                     .text_color(tokens.foreground),
                 )
-                .child(svg("assets/logo-info.svg").absolute().inset_0().text_color(status.info))
+                .child(
+                  svg("assets/logo-info-cyan.svg").absolute().inset_0().text_color(status.info),
+                )
                 .child(
                   svg("assets/logo-warning.svg").absolute().inset_0().text_color(status.warning),
                 )

@@ -1913,15 +1913,15 @@ fn title_bar_draws_the_themed_official_svg_mark(cx: &mut TestAppContext) {
 
     assert!(
         [
-            "assets/logo-foreground.svg",
-            "assets/logo-info.svg",
-            "assets/logo-warning.svg",
-            "assets/logo-danger.svg",
+            ("assets/logo-foreground.svg", "#f4f7ff"),
+            ("assets/logo-info-cyan.svg", "#20d9ff"),
+            ("assets/logo-warning.svg", "#f5c76d"),
+            ("assets/logo-danger.svg", "#ff758f"),
         ]
         .iter()
-        .all(|asset| {
+        .all(|(asset, color)| {
             rendered.contains(&format!(
-                "svg \"{asset}\" .absolute .inset_0 .text_color[Str(\"#000000\")]"
+                "svg \"{asset}\" .absolute .inset_0 .text_color[Str(\"{color}\")]"
             ))
         })
             && !rendered.contains(".absolute .left[Number(1.0)]"),
