@@ -79,15 +79,16 @@ fn debug_builds_watch_application_sources() {
 }
 
 #[test]
-fn application_exposes_api_backed_read_only_views() {
+fn the_only_change_this_application_makes_is_to_the_watchlist() {
     let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
     let ui = fs::read_to_string(app_dir().join("ui.js")).expect("ui.js");
     let market = fs::read_to_string(app_dir().join("market.js")).expect("market.js");
     let orders = fs::read_to_string(app_dir().join("orders.js")).expect("orders.js");
+    let http = fs::read_to_string(app_dir().join("http.js")).expect("http.js");
 
     assert!(
         main.contains("/v1/watchlist/groups"),
-        "watchlist must load from the read-only API"
+        "watchlist must load from the API"
     );
     assert!(
         main.contains("/v1/trade/order/today") && main.contains("/v1/trade/order/history"),
@@ -119,17 +120,33 @@ fn application_exposes_api_backed_read_only_views() {
         main.contains("priceChart") && main.contains("allocationChart"),
         "read-only market and allocation charts must remain wired"
     );
-    // The forbidden list is about edit controls. Read-only market-detail
-    // panels may now use bid, ask, and time-and-sales terminology; `InputState`
-    // remains limited to the two list filters, which narrow what is already on
-    // screen and never mutate the watchlist.
-    for forbidden in ["Add symbol", "Remove", "Place order", "Cancel order"] {
+    // The application changes exactly one thing about an account: which
+    // securities it watches. That is one path, one method, and the HTTP
+    // boundary is where it is enforced rather than remembered -- a second
+    // writable path would have to be added here before it could be added
+    // there.
+    assert!(
+        http.contains(r#"const EDITABLE_PATHS = new Set(["/v1/watchlist/groups"]);"#)
+            && http.contains("assertEditablePath(path);")
+            && http.matches(r#"method: "#).count() == 1
+            && http.contains(r#"method: "PUT","#),
+        "the only write this boundary can make is to the watchlist's own groups"
+    );
+    // Everything else stays a reading. An order is something an account
+    // already placed; nothing here submits, amends or withdraws one.
+    for forbidden in [
+        "Place order",
+        "Cancel order",
+        "/v1/trade/order/submit",
+        "/v1/trade/order/replace",
+        "/v1/trade/order/withdraw",
+    ] {
         assert!(
             !main.contains(forbidden)
                 && !ui.contains(forbidden)
                 && !market.contains(forbidden)
                 && !orders.contains(forbidden),
-            "forbidden editing or trading surface {forbidden}"
+            "forbidden trading surface {forbidden}"
         );
     }
     // The two side captions exist in exactly one place, `orders.js`, and only
@@ -162,15 +179,16 @@ fn application_exposes_api_backed_read_only_views() {
             "forbidden trading action {forbidden}"
         );
     }
-    // Retained text state is only ever a list filter: four lists, four
-    // filters, each of which narrows what is already on screen and none of
-    // which sends anything anywhere.
+    // Retained text state is the four list filters, which narrow what is
+    // already on screen, and the one field that names a security to add.
+    // Nothing composes an order.
     assert!(
-        main.matches("InputState.new({ placeholder:").count() == 4
+        main.matches("InputState.new({ placeholder:").count() == 5
             && main.contains("Filter watchlist")
             && main.contains("Filter holdings")
-            && main.matches("Filter orders").count() == 2,
-        "the only retained text state may be the list filters"
+            && main.matches("Filter orders").count() == 2
+            && main.contains(r#"placeholder: "AAPL.US""#),
+        "the only retained text state may be the list filters and the symbol to add"
     );
     assert!(
         market.contains("export function filterRows"),

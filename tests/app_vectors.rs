@@ -699,6 +699,16 @@ fn an_empty_today_gives_its_height_back_to_the_history(cx: &mut TestAppContext) 
 }
 
 #[gpui::test]
+fn watchlist_edit_vectors_run_against_this_application(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("watchlist_edit.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let _loaded = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+}
+
+#[gpui::test]
 fn order_vectors_run_against_this_application(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -2098,7 +2108,9 @@ fn escape_puts_away_what_the_workspace_opened_and_then_carries_on(cx: &mut TestA
 }
 
 #[gpui::test]
-fn a_right_press_in_the_watchlist_copies_the_selected_instrument(cx: &mut TestAppContext) {
+fn a_right_press_in_the_watchlist_opens_a_menu_for_the_selected_instrument(
+    cx: &mut TestAppContext,
+) {
     cx.update(gpui_shell::init);
     grant_app_capabilities();
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -2127,12 +2139,41 @@ fn a_right_press_in_the_watchlist_copies_the_selected_instrument(cx: &mut TestAp
         first_mouse: false,
     });
     context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
 
-    let copied = context.update(|_, cx| cx.read_from_clipboard());
-    assert_eq!(
-        copied.and_then(|item| item.text()),
-        Some("AAPL.US".to_owned()),
-        "a right press over the Watchlist must copy the selected instrument"
+    let view = window
+        .root(&mut context)
+        .expect("workspace root")
+        .read_with(&context, |root, cx| {
+            root.0
+                .read(cx)
+                .content()
+                .clone()
+                .downcast::<gpui_shell::ScriptView>()
+                .expect("workspace content is a script view")
+        });
+    let rendered = context.update(|_, cx| {
+        view.read(cx)
+            .snapshot()
+            .map(gpui_shell::RenderSnapshot::debug_tree)
+            .unwrap_or_default()
+    });
+
+    // The menu is drawn where the press was, inside the pane whose coordinates
+    // the press reported, and it names the instrument it will act on -- which
+    // is the selected one, because a virtual list's rows carry no handler that
+    // could say which of them was pressed.
+    assert!(
+        rendered.contains(r#"Button "row-menu-copy""#)
+            && rendered.contains(r#"Button "row-menu-drop""#)
+            && rendered.contains("Copy symbol")
+            && rendered.contains("text \"Remove\"")
+            && rendered.contains("text \"AAPL.US\""),
+        "a right press must open a menu for the selected instrument:\n{rendered}"
+    );
+    assert!(
+        rendered.contains(".absolute .left[Number(") && rendered.contains(":on_mouse_down_out(fn)"),
+        "the menu is placed at the pointer and closes on a press outside it:\n{rendered}"
     );
 }
 

@@ -28,7 +28,7 @@ import {
   loadTokens,
   pollDeviceAuthorization,
 } from "./auth.js";
-import { get } from "./http.js";
+import { get, put } from "./http.js";
 import {
   applyQuotes,
   filterRows,
@@ -50,6 +50,13 @@ import {
 import { PERIOD, TRADE_SESSION } from "./protocol.js";
 import { depthRatio, mergeTrades, normalizeDepth, validDepthLevel } from "./market_detail.js";
 import { HISTORY_WINDOW_DAYS, historyRange, normalizeOrders } from "./orders.js";
+import {
+  addTargetGroup,
+  groupRequestId,
+  groupsHolding,
+  symbolFromInput,
+  watchlistGroups,
+} from "./watchlist_edit.js";
 import { allocationInUsd, normalizeUsdRates, portfolioPresentation } from "./portfolio.js";
 import PriceChartView, {
   PRICE_CHART_LAYOUT,
@@ -58,7 +65,12 @@ import PriceChartView, {
 import { loadFpsVisible, saveFpsVisible } from "./fps_preference.js";
 import { DEFAULT_CHART_MODE, loadChartMode, saveChartMode } from "./chart_mode_preference.js";
 import { omarchyBaseColors, omarchyMarketColors, omarchyTheme } from "./system_theme.js";
-import { setOmarchyAvatarColors, setOmarchyMarketColors, statusColors } from "./palette.js";
+import {
+  changeTone,
+  setOmarchyAvatarColors,
+  setOmarchyMarketColors,
+  statusColors,
+} from "./palette.js";
 import {
   action,
   allocationChart,
@@ -86,6 +98,7 @@ import {
   ordersHeader,
   calendarGrid,
   muted,
+  numeric,
   panel,
   popoverSurface,
   sessionAvatar,
@@ -452,6 +465,8 @@ export default class LongbridgeApp extends View {
       this.redraw(cx);
     });
     this.instruments = [];
+    /** The account's editable watchlist groups, as the list was last read. */
+    this.groups = [];
     this.quotes = [];
     this.portfolioQuotes = [];
     this.selectedSymbol = null;
@@ -973,6 +988,16 @@ export default class LongbridgeApp extends View {
     this.allocationHelpOpen = false;
     this.todayOrdersQuery = "";
     this.historyOrdersQuery = "";
+    this.symbolQuery = "";
+    /** The add-a-security surface, and the row menu, are the view's own. */
+    this.addSymbolOpen = false;
+    this.addSymbolPending = false;
+    this.addSymbolError = "";
+    /** @type {{ status: "idle" | "loading" | "ready" | "error", symbol: string, name: string, exchange: string, currency: string, last: string, change: string, changePercent: string, error: string }} */
+    this.symbolPreview = { status: "idle", symbol: "", error: "" };
+    this.symbolPreviewGeneration = 0;
+    /** @type {{ symbol: string, x: number, y: number } | null} */
+    this.rowMenu = null;
     /** Which stock-detail sections are expanded. */
     this.detailSections = { more: false };
     this.watchlistQuery = "";
@@ -1000,6 +1025,15 @@ export default class LongbridgeApp extends View {
     this.historyOrdersFilter = InputState.new({ placeholder: "Filter orders" });
     this.historyOrdersFilter.on("change", (_event, cx) => {
       this.historyOrdersQuery = this.historyOrdersFilter.value();
+      this.redraw(cx);
+    });
+    // The one text state that is not a filter: what a filter narrows is
+    // already here, and this names something that is not yet.
+    this.symbolInput = InputState.new({ placeholder: "AAPL.US" });
+    this.symbolInput.on("change", (_event, cx) => {
+      this.symbolQuery = this.symbolInput.value();
+      if (this.addSymbolError) this.addSymbolError = "";
+      this.previewSymbol(cx);
       this.redraw(cx);
     });
   }
@@ -1129,8 +1163,10 @@ export default class LongbridgeApp extends View {
     this.armConnectDeadline(cx, generation);
     this.redraw(cx);
 
-    const instruments = watchlistInstruments(await get("/v1/watchlist/groups"));
+    const watchlist = await get("/v1/watchlist/groups");
+    const instruments = watchlistInstruments(watchlist);
     if (generation !== this.streamGeneration) return;
+    this.groups = watchlistGroups(watchlist);
     this.instruments = instruments;
     this.quotes = sortLikeTerminal(initialQuotes(instruments), Date.now());
     this.selectedSymbol = instruments[0]?.symbol ?? null;
@@ -1447,6 +1483,215 @@ export default class LongbridgeApp extends View {
     return { today, history };
   }
 
+  /**
+   * Reads the watchlist again, keeping the prices already on screen.
+   *
+   * A quote is a running value, not a property of the list, so a row that was
+   * already there keeps the one it has: rebuilding from `initialQuotes` alone
+   * would blank every price on the screen each time a security was added.
+   */
+  async refreshWatchlist() {
+    const watchlist = await get("/v1/watchlist/groups");
+    const instruments = watchlistInstruments(watchlist);
+    const previous = new Map(this.quotes.map((quote) => [quote.symbol, quote]));
+    this.groups = watchlistGroups(watchlist);
+    this.instruments = instruments;
+    this.quotes = sortLikeTerminal(
+      initialQuotes(instruments).map((quote) => previous.get(quote.symbol) ?? quote),
+      Date.now(),
+    );
+  }
+
+  /**
+   * Looks up whatever has been typed, as soon as it is the shape of a symbol.
+   *
+   * A watchlist is a list of securities, and `NVDA.US` is a string until
+   * something says what it names. So the moment the field holds a symbol this
+   * asks the socket what that symbol is, and the answer -- a name, an
+   * exchange, a price -- is what the reader confirms rather than the spelling
+   * they just typed.
+   *
+   * The generation is what makes a fast typist safe: every keystroke starts a
+   * lookup and only the newest one is allowed to publish.
+   *
+   * @param {import("gpui").Context} cx
+   */
+  previewSymbol(cx) {
+    const { symbol } = symbolFromInput(this.symbolQuery);
+    if (!symbol) {
+      this.symbolPreviewGeneration += 1;
+      this.symbolPreview = { status: "idle", symbol: "", error: "" };
+      return;
+    }
+    if (this.symbolPreview.symbol === symbol && this.symbolPreview.status !== "error") return;
+    const generation = ++this.symbolPreviewGeneration;
+    this.symbolPreview = { status: "loading", symbol, error: "" };
+    const stream = this.stream;
+    if (!stream) {
+      this.symbolPreview = {
+        status: "error",
+        symbol,
+        error: "Not connected. Reconnect to look this symbol up.",
+      };
+      return;
+    }
+    cx.spawn(async (cx) => {
+      try {
+        const [statics, quotes] = await Promise.all([
+          stream.queryStaticInfo([symbol]),
+          stream.queryQuotes([symbol]).catch(() => []),
+        ]);
+        if (generation !== this.symbolPreviewGeneration) return;
+        const info = statics.find((entry) => entry.symbol === symbol) ?? statics[0];
+        if (!info || !info.symbol) {
+          this.symbolPreview = {
+            status: "error",
+            symbol,
+            error: `No security is called ${symbol}.`,
+          };
+          this.redraw(cx);
+          return;
+        }
+        const quote = quotes.find((entry) => entry.symbol === symbol) ?? quotes[0] ?? {};
+        const [row] = applyQuotes(initialQuotes([{ symbol, code: symbol.split(".")[0] }]), [
+          { ...quote, symbol },
+        ]);
+        this.symbolPreview = {
+          status: "ready",
+          symbol,
+          name: info.nameEn || info.nameCn || info.nameHk || symbol,
+          exchange: info.exchange || symbol.split(".")[1] || "",
+          currency: info.currency || "",
+          last: row?.last ?? "--",
+          change: row?.change ?? "--",
+          changePercent: row?.changePercent ?? "--",
+          error: "",
+        };
+      } catch (failure) {
+        if (generation !== this.symbolPreviewGeneration) return;
+        this.symbolPreview = {
+          status: "error",
+          symbol,
+          error: failure instanceof Error ? failure.message : String(failure),
+        };
+      }
+      this.redraw(cx);
+    });
+  }
+
+  /**
+   * Adds the typed security to the account's first watchlist group.
+   *
+   * The list is read back rather than assumed: Longbridge answers a refused
+   * addition with a code in a 200, and a symbol that named nothing comes back
+   * as a list that does not contain it. So what says the change happened is
+   * the change being there afterwards.
+   *
+   * @param {import("gpui").Context} cx
+   */
+  addSymbol(cx) {
+    if (this.addSymbolPending || this.symbolPreview.status !== "ready") return;
+    const { symbol, error } = symbolFromInput(this.symbolQuery);
+    const group = addTargetGroup(this.groups);
+    const refused = error
+      ? error
+      : this.quotes.some((quote) => quote.symbol === symbol)
+        ? `${symbol} is already on the watchlist.`
+        : group
+          ? ""
+          : "This account has no watchlist group to add to.";
+    if (refused) {
+      this.addSymbolError = refused;
+      this.redraw(cx);
+      return;
+    }
+    this.addSymbolPending = true;
+    this.addSymbolError = "";
+    this.redraw(cx);
+    cx.spawn(async (cx) => {
+      try {
+        await put("/v1/watchlist/groups", {
+          id: groupRequestId(group),
+          securities: [symbol],
+          mode: "add",
+        });
+        await this.refreshWatchlist();
+        if (!this.instruments.some((instrument) => instrument.symbol === symbol)) {
+          throw new Error(`Longbridge did not add ${symbol}. Check the symbol.`);
+        }
+        await this.stream?.watchSymbols([symbol]);
+        this.addSymbolPending = false;
+        this.addSymbolOpen = false;
+        this.symbolInput.set_value("");
+        this.symbolQuery = "";
+        this.symbolPreviewGeneration += 1;
+        this.symbolPreview = { status: "idle", symbol: "", error: "" };
+        this.selectQuote(symbol, cx);
+        this.redraw(cx);
+        window.push_toast({
+          title: `${symbol} added to ${group.name}`,
+          level: "success",
+          id: "watchlist-add",
+        });
+      } catch (failure) {
+        this.addSymbolPending = false;
+        this.addSymbolError = failure instanceof Error ? failure.message : String(failure);
+        this.redraw(cx);
+      }
+    });
+  }
+
+  /**
+   * Takes a security out of every group that holds it.
+   *
+   * Out of every one, because the account's groups overlap -- the whole list
+   * and the market's own group both hold it -- and taking it out of one of
+   * them leaves it on screen, put there by the other.
+   *
+   * @param {string} symbol @param {import("gpui").Context} cx
+   */
+  dropSymbol(symbol, cx) {
+    const holders = groupsHolding(this.groups, symbol);
+    this.rowMenu = null;
+    this.redraw(cx);
+    if (holders.length === 0) return;
+    cx.spawn(async (cx) => {
+      try {
+        for (const group of holders) {
+          await put("/v1/watchlist/groups", {
+            id: groupRequestId(group),
+            securities: [symbol],
+            mode: "remove",
+          });
+        }
+        await this.refreshWatchlist();
+        if (this.instruments.some((instrument) => instrument.symbol === symbol)) {
+          throw new Error(`Longbridge is still watching ${symbol}.`);
+        }
+        // A holding is streamed for the Portfolio page whether or not the
+        // watchlist names it, so only a symbol nothing else needs is dropped.
+        if (!this.holdings.some((holding) => holding.symbol === symbol)) {
+          await this.stream?.unwatchSymbols([symbol]);
+        }
+        if (this.selectedSymbol === symbol) {
+          this.selectedSymbol = null;
+          const next = this.quotes[0]?.symbol ?? null;
+          if (next) this.selectQuote(next, cx);
+          else this.clearDetailMarket();
+        }
+        this.redraw(cx);
+        window.push_toast({
+          title: `${symbol} removed from the watchlist`,
+          level: "success",
+          id: "watchlist-drop",
+        });
+      } catch (failure) {
+        this.error = failure instanceof Error ? failure.message : String(failure);
+        this.redraw(cx);
+      }
+    });
+  }
+
   /** @param {import("gpui").Context} cx */
   loadPortfolio(cx) {
     cx.spawn(async (cx) => {
@@ -1594,6 +1839,16 @@ export default class LongbridgeApp extends View {
     if (this.userMenuOpen || this.allocationHelpOpen) {
       this.userMenuOpen = false;
       this.allocationHelpOpen = false;
+      this.redraw(cx);
+      return;
+    }
+    if (this.rowMenu) {
+      this.rowMenu = null;
+      this.redraw(cx);
+      return;
+    }
+    if (this.addSymbolOpen) {
+      this.addSymbolOpen = false;
       this.redraw(cx);
       return;
     }
@@ -2070,6 +2325,172 @@ export default class LongbridgeApp extends View {
       );
   }
 
+  /**
+   * The way to put something on the watchlist: a symbol, typed.
+   *
+   * There is no search behind it because there is no search endpoint on this
+   * boundary, and a client that guessed at what was meant would be adding
+   * securities nobody asked for. What it does instead is state the shape --
+   * code, dot, market -- refuse anything that is not that shape before the
+   * request, and say what Longbridge said when the request is refused.
+   *
+   * @param {import("gpui-base").Theme} tokens
+   */
+  addSymbolPopover(tokens) {
+    const pending = this.addSymbolPending;
+    const preview = this.symbolPreview;
+    const ready = preview.status === "ready";
+    return Popover.new("add-symbol")
+      .open(this.addSymbolOpen)
+      .anchor("top_right")
+      .on_open_change((open, cx) => {
+        this.addSymbolOpen = open;
+        if (!open) {
+          this.addSymbolError = "";
+          this.symbolPreviewGeneration += 1;
+          this.symbolPreview = { status: "idle", symbol: "", error: "" };
+        }
+        this.redraw(cx);
+      })
+      .trigger(
+        iconAction(tokens, "add-symbol-trigger", "Add a security", "assets/plus.svg", () => {}),
+      )
+      .content(
+        popoverSurface(tokens, { width: 268 })
+          .child(label(tokens, "Add to watchlist", 13).font_weight(700))
+          .child(filterInput(tokens, this.symbolInput, 244))
+          .child(this.symbolPreviewCard(tokens))
+          .when(Boolean(this.addSymbolError), (element) =>
+            element.child(errorMessage(tokens, this.addSymbolError)),
+          )
+          .child(
+            h_flex()
+              .justify_end()
+              .child(
+                action(
+                  tokens,
+                  "add-symbol-confirm",
+                  pending ? "Adding…" : "Add",
+                  (_event, cx) => this.addSymbol(cx),
+                  { variant: "ghost", disabled: pending || !ready },
+                ),
+              ),
+          ),
+      );
+  }
+
+  /**
+   * What the typed symbol turned out to be.
+   *
+   * Four things can be true of a field someone is typing into -- it is not a
+   * symbol yet, it is one and is being looked up, it named a security, or it
+   * named nothing -- and each of them is a different thing to say. The last
+   * two are why this exists: `NVDA.US` and `NVDA.HK` are both well-formed, and
+   * only one of them is a company.
+   *
+   * @param {import("gpui-base").Theme} tokens
+   */
+  symbolPreviewCard(tokens) {
+    const preview = this.symbolPreview;
+    if (preview.status === "idle") {
+      return muted(tokens, "A code, a dot and its market: AAPL.US, 700.HK, 000001.SZ.");
+    }
+    if (preview.status === "loading") return muted(tokens, `Looking up ${preview.symbol}…`);
+    if (preview.status === "error") return errorMessage(tokens, preview.error);
+    const held = this.quotes.some((quote) => quote.symbol === preview.symbol);
+    return v_flex()
+      .id("add-symbol-preview")
+      .gap(tokens.spacing.xs)
+      .p(tokens.spacing.sm)
+      .rounded(tokens.radius.sm)
+      .bg(tokens.background)
+      .child(
+        h_flex()
+          .items_start()
+          .justify_between()
+          .gap(tokens.spacing.sm)
+          .child(
+            v_flex()
+              .flex_1()
+              .min_w(0)
+              .gap(tokens.spacing.xxs)
+              .child(label(tokens, preview.name, 13).font_weight(700).truncate())
+              .child(
+                muted(
+                  tokens,
+                  [preview.symbol, preview.exchange, preview.currency].filter(Boolean).join(" · "),
+                ).truncate(),
+              ),
+          )
+          .child(
+            v_flex()
+              .flex_none()
+              .items_end()
+              .gap(tokens.spacing.xxs)
+              .child(numeric(tokens, preview.last, 15))
+              .child(
+                numeric(tokens, preview.changePercent, 11).text_color(
+                  changeTone(tokens, preview.changePercent),
+                ),
+              ),
+          ),
+      )
+      .when(held, (element) => element.child(muted(tokens, "Already on the watchlist.")));
+  }
+
+  /**
+   * The menu a right press opens, at the pointer.
+   *
+   * It acts on the selected instrument rather than on whatever the pointer
+   * happens to be over: a virtual list rebuilds its rows every frame it
+   * scrolls, so a row carries no handler of its own and there is nothing to
+   * ask which one was pressed. The menu names the instrument it will act on,
+   * which is what keeps that honest.
+   *
+   * @param {import("gpui").MouseButtonEvent} event @param {import("gpui").Context} cx
+   */
+  openRowMenu(event, cx) {
+    if (!this.selectedSymbol) return;
+    const local = event.local_position ?? { x: 0, y: 0 };
+    this.rowMenu = {
+      symbol: this.selectedSymbol,
+      x: Math.max(0, local.x),
+      y: Math.max(0, local.y),
+    };
+    this.redraw(cx);
+  }
+
+  /** @param {import("gpui-base").Theme} tokens */
+  rowMenuSurface(tokens) {
+    const menu = this.rowMenu;
+    return popoverSurface(tokens, { width: 200, menu: true })
+      .absolute()
+      .left(menu.x)
+      .top(menu.y)
+      .on_mouse_down_out((_event, cx) => {
+        this.rowMenu = null;
+        this.redraw(cx);
+      })
+      .child(muted(tokens, menu.symbol).px(tokens.spacing.sm).py(tokens.spacing.xxs))
+      .child(
+        menuItem(tokens, "row-menu-copy", "Copy symbol", (_event, cx) => {
+          this.rowMenu = null;
+          this.copySelectedSymbol(cx);
+        }),
+      )
+      .child(
+        menuItem(
+          tokens,
+          "row-menu-drop",
+          "Remove",
+          (_event, cx) => this.dropSymbol(menu.symbol, cx),
+          {
+            destructive: true,
+          },
+        ),
+      );
+  }
+
   /** @param {import("gpui-base").Theme} tokens */
   watchlist(tokens) {
     const status = streamStatusSummary({ state: this.status.state, delay: this.status.delay });
@@ -2084,17 +2505,26 @@ export default class LongbridgeApp extends View {
         .border_t(0)
         .flex_1()
         .min_h(0)
+        // The row menu is drawn inside this pane, at the pointer, so the pane
+        // is what its coordinates are measured from.
+        .relative()
         // On the pane rather than on whatever holds it: the pane is now a dock
         // panel's whole body, and there is no wrapper left to carry this.
-        .on_mouse_down("right", (_event, cx) => this.copySelectedSymbol(cx))
+        .on_mouse_down("right", (event, cx) => this.openRowMenu(event, cx))
         .child(
           tableToolbar(tokens)
             // No title here. The tab above this row already says "Watchlist",
             // and a pane that names itself twice is two headers wearing one
-            // pane. What is left is what the tab cannot carry: the filter and
-            // the feed's state.
+            // pane. What is left is what the tab cannot carry: the filter, the
+            // way to add to the list, and the feed's state.
             .child(filterInput(tokens, this.watchlistFilter))
-            .child(muted(tokens, status)),
+            .child(
+              h_flex()
+                .items_center()
+                .gap(tokens.spacing.sm)
+                .child(muted(tokens, status))
+                .child(this.addSymbolPopover(tokens)),
+            ),
         )
         .child(rule(tokens))
         .when(Boolean(this.streamError), (element) =>
@@ -2123,13 +2553,14 @@ export default class LongbridgeApp extends View {
               : emptyPanel(
                   tokens,
                   "Watchlist is empty",
-                  "Add securities in Longbridge, then reconnect to refresh this read-only view.",
+                  "Add a security with the + beside the filter, or in Longbridge.",
                 ),
             2,
           )
             .flex_1()
             .min_h(0),
         )
+        .when(Boolean(this.rowMenu), (element) => element.child(this.rowMenuSurface(tokens)))
     );
   }
 
@@ -3454,6 +3885,7 @@ export default class LongbridgeApp extends View {
   /** Whether Escape has something of this application's to put away. */
   hasSomethingToDismiss() {
     if (this.calendarOpen || this.userMenuOpen || this.allocationHelpOpen) return true;
+    if (this.rowMenu || this.addSymbolOpen) return true;
     if (this.page === "orders" && this.selectedOrderId) return true;
     return Boolean(this.pageFilter().query);
   }

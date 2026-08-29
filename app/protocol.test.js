@@ -14,6 +14,7 @@ import {
   decodeSecurityIntradayResponse,
   decodePushQuote,
   decodeSecurityQuoteResponse,
+  decodeSecurityStaticInfoResponse,
   encodeAuthRequest,
   encodeFrame,
   encodeHeartbeat,
@@ -640,6 +641,104 @@ function runVectors() {
       quotePush.timestamp === 1_700_000_000n &&
       quotePush.volume === 100n,
     "PushQuote protobuf",
+  );
+
+  // SecurityStaticInfoResponse, field for field as `quote/api.proto` numbers
+  // them: what the add-a-security preview reads is the name and the exchange,
+  // and reading either from the wrong field number would put a listing date
+  // where a company name goes.
+  const [staticInfo] = decodeSecurityStaticInfoResponse(
+    bytes(
+      0x0a,
+      0x48,
+      0x0a,
+      0x05,
+      0x4b,
+      0x4f,
+      0x2e,
+      0x55,
+      0x53,
+      0x12,
+      0x0a,
+      0x4b,
+      0x65,
+      0x6b,
+      0x6f,
+      0x75,
+      0x20,
+      0x4b,
+      0x65,
+      0x6c,
+      0x65,
+      0x1a,
+      0x09,
+      0x43,
+      0x6f,
+      0x63,
+      0x61,
+      0x2d,
+      0x43,
+      0x6f,
+      0x6c,
+      0x61,
+      0x22,
+      0x09,
+      0x43,
+      0x6f,
+      0x63,
+      0x61,
+      0x2d,
+      0x43,
+      0x6f,
+      0x6c,
+      0x61,
+      0x2a,
+      0x0a,
+      0x31,
+      0x39,
+      0x31,
+      0x39,
+      0x2d,
+      0x30,
+      0x39,
+      0x2d,
+      0x30,
+      0x35,
+      0x32,
+      0x04,
+      0x4e,
+      0x59,
+      0x53,
+      0x45,
+      0x3a,
+      0x03,
+      0x55,
+      0x53,
+      0x44,
+      0x40,
+      0x01,
+      0x48,
+      0x80,
+      0x96,
+      0xb3,
+      0x82,
+      0x10,
+    ),
+  );
+  check(
+    staticInfo.symbol === "KO.US" &&
+      staticInfo.nameCn === "Kekou Kele" &&
+      staticInfo.nameEn === "Coca-Cola" &&
+      staticInfo.nameHk === "Coca-Cola" &&
+      staticInfo.listingDate === "1919-09-05" &&
+      staticInfo.exchange === "NYSE" &&
+      staticInfo.currency === "USD" &&
+      staticInfo.lotSize === 1,
+    "SecurityStaticInfo protobuf",
+  );
+  check(
+    staticInfo.totalShares === undefined,
+    "a field the preview does not read is skipped rather than misread",
   );
 
   const quoteResponse = decodeSecurityQuoteResponse(

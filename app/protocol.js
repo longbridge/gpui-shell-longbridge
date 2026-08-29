@@ -25,6 +25,7 @@ export const COMMAND = Object.freeze({
   AUTH: 2,
   SUBSCRIBE: 6,
   UNSUBSCRIBE: 7,
+  STATIC_INFO: 10,
   REALTIME_QUOTE: 11,
   DEPTH: 14,
   TRADES: 17,
@@ -681,6 +682,49 @@ function decodeSecurityQuote(data) {
     return true;
   });
   return quote;
+}
+
+/**
+ * Decodes one quote.StaticInfo.
+ *
+ * Only the fields that say which security this is are read; the rest of the
+ * message -- share counts, per-share figures, what derivatives exist -- is
+ * skipped, which is what an unrecognized field number costs here anyway.
+ */
+function decodeStaticInfo(data) {
+  const info = {};
+  decodeMessage(data, (reader, field, wireType) => {
+    if (field >= 1 && field <= 7) {
+      expectWireType(wireType, 2, field);
+      const names = [
+        "symbol",
+        "nameCn",
+        "nameEn",
+        "nameHk",
+        "listingDate",
+        "exchange",
+        "currency",
+      ];
+      info[names[field - 1]] = reader.readString(`static ${names[field - 1]}`);
+    } else if (field === 8) {
+      expectWireType(wireType, 0, field);
+      info.lotSize = signed32(reader.readVarint("static lot_size"), "static lot_size");
+    } else return false;
+    return true;
+  });
+  return info;
+}
+
+/** Decodes quote.SecurityStaticInfoResponse returned by command 10. */
+export function decodeSecurityStaticInfoResponse(data) {
+  const infos = [];
+  decodeMessage(data, (reader, field, wireType) => {
+    if (field !== 1) return false;
+    expectWireType(wireType, 2, field);
+    infos.push(decodeStaticInfo(reader.readBytes("secu_static_info")));
+    return true;
+  });
+  return infos;
 }
 
 /** Decodes quote.SecurityQuoteResponse returned by command 11. */
