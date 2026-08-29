@@ -1,6 +1,8 @@
 import { View } from "gpui";
 import {
+  compactFiveDaySeries,
   findNearestPricePoint,
+  formatMarketDate,
   formatMarketTime,
   layoutIntradaySeries,
   layoutPriceSeries,
@@ -128,6 +130,10 @@ function runVectors() {
     formatMarketTime("AAPL.US", Number(unix("2026-01-09T14:30:45Z")), true) === "09:30:45",
     "can retain seconds for a market-local trade tape",
   );
+  check(
+    formatMarketDate("AAPL.US", Number(unix("2026-03-09T02:30:00Z"))) === "2026-03-08",
+    "formats the exchange date rather than the UTC or browser-local date",
+  );
   const usLaidOut = layoutPriceSeries(us, { width: 500, height: 100, dayGap: 10 });
   check(
     usLaidOut.points[0].date === "2026-03-08" && usLaidOut.points.at(-1).date === "2026-03-09",
@@ -245,8 +251,24 @@ function runVectors() {
   const many = Array.from({ length: 4000 }, (_, index) =>
     candle(new Date(Date.parse("2026-08-24T02:00:00Z") + index * 60_000).toISOString(), index + 1),
   );
-  const wide = layoutPriceSeries(prepareFiveDaySeries("700.HK", many), box);
+  const preparedMany = prepareFiveDaySeries("700.HK", many);
+  const wide = layoutPriceSeries(preparedMany, box);
   check(wide.min === 1 && wide.max === 4000, "extremes hold for a full day of minute candles");
+  const compact = compactFiveDaySeries(preparedMany, box);
+  check(
+    compact.points.length <= box.width,
+    "the retained 5D child stays within the visible horizontal pixel budget",
+  );
+  check(
+    compact.points[0].timestamp === preparedMany.points[0].timestamp &&
+      compact.points.at(-1).timestamp === preparedMany.points.at(-1).timestamp,
+    "compaction preserves the visible time range",
+  );
+  check(
+    Math.min(...compact.points.map((point) => point.close)) === 1 &&
+      Math.max(...compact.points.map((point) => point.close)) === 4000,
+    "compaction preserves the visible price extrema",
+  );
 
   // New York daylight saving is resolved per year and remembered; a series that
   // steps over New Year must not be dated with the previous year's boundaries.

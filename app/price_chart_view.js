@@ -2,6 +2,7 @@ import { Background, PathBuilder, View, div } from "gpui";
 import { Progress, ProgressIndicator, ProgressTrack, h_flex, v_flex } from "gpui-base";
 import {
   findNearestPricePoint,
+  formatMarketDate,
   formatMarketTime,
   layoutIntradaySeries,
   layoutPriceSeries,
@@ -96,6 +97,53 @@ function candleWickPath(candle) {
     .build();
 }
 
+function candleDate(symbol, candle) {
+  return typeof candle?.marketDay === "string" && candle.marketDay
+    ? candle.marketDay
+    : formatMarketDate(symbol, candle?.timestamp);
+}
+
+function candleAxisLabel(symbol, mode, candle) {
+  const date = candleDate(symbol, candle);
+  if (mode === "1D") return date;
+  const time = formatMarketTime(symbol, candle?.timestamp);
+  return `${date.slice(5)} ${time}`.trim();
+}
+
+function candleAxisTicks(candles) {
+  if (candles.length <= 1) return candles;
+  const middle = candles[Math.floor((candles.length - 1) / 2)];
+  return [candles[0], middle, candles.at(-1)].filter(
+    (item, index, ticks) =>
+      ticks.findIndex((candidate) => candidate.timestamp === item.timestamp) === index,
+  );
+}
+
+function candleAxisTick(tokens, symbol, mode, item) {
+  const x = item.wick.x;
+  const axisLabel = muted(tokens, candleAxisLabel(symbol, mode, item))
+    .absolute()
+    .top(2)
+    .w(80)
+    .min_w(0)
+    .truncate();
+  return div()
+    .id(`candlestick-axis-tick-${item.timestamp}`)
+    .absolute()
+    .left(`${x}%`)
+    .top(0)
+    .w(1)
+    .h_full()
+    .child(div().w(1).h(3).bg(tokens.border))
+    .child(
+      x <= 10
+        ? axisLabel.left(0).text_left()
+        : x >= 90
+          ? axisLabel.right(0).text_right()
+          : axisLabel.left(-40).text_center(),
+    );
+}
+
 function retainIntradayExtrema(points, budget, hasSessionBoundary) {
   if (points.length <= budget) return points;
   // Later segments overlap the preceding session by one connector point. The
@@ -166,6 +214,47 @@ export function layoutIntradayForView(series, layout) {
   });
 }
 
+/** Shrinks the retained-view prop graph before it crosses the nested update bridge. */
+export function compactIntradaySeriesForView(series, layout) {
+  if (!series || !Array.isArray(series.candles)) return series;
+  const geometry = layoutIntradayForView(series, layout);
+  if (series.candles.length <= INTRADAY_POINT_LIMIT) return series;
+  const seen = new Set();
+  const candles = [];
+  for (const point of geometry.points) {
+    const identity = String(point.timestamp);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    candles.push(
+      Object.freeze({
+        timestamp: point.timestamp,
+        close: point.close,
+        tradeSession: point.tradeSession,
+        ...(point.marketDay === undefined ? {} : { marketDay: point.marketDay }),
+      }),
+    );
+  }
+  const sessionBoundaries = [];
+  let previousSession = Symbol("first session");
+  for (let index = 0; index < candles.length; index += 1) {
+    if (candles[index].tradeSession === previousSession) continue;
+    sessionBoundaries.push(
+      Object.freeze({
+        index,
+        timestamp: candles[index].timestamp,
+        tradeSession: candles[index].tradeSession,
+        marketDay: candles[index].marketDay,
+      }),
+    );
+    previousSession = candles[index].tradeSession;
+  }
+  return Object.freeze({
+    candles: Object.freeze(candles),
+    sessionBoundaries: Object.freeze(sessionBoundaries),
+    ...(series.previousClose === undefined ? {} : { previousClose: series.previousClose }),
+  });
+}
+
 /** The retained invalidation boundary for chart geometry and hover interaction. */
 export default class PriceChartView extends View {
   init(props) {
@@ -185,8 +274,7 @@ export default class PriceChartView extends View {
     const previousTheme = this.themeRevision;
     this.symbol = props.symbol;
     this.mode = props.mode ?? "5D";
-    this.series = props.series;
-    this.chartSeries = props.chartSeries ?? props.series;
+    this.chartSeries = props.chartSeries;
     this.state = props.state;
     this.layout = props.layout;
     this.themeRevision = props.themeRevision;
@@ -253,7 +341,8 @@ export default class PriceChartView extends View {
       .gap(tokens.spacing.xs)
       .child(
         h_flex()
-          .items_center()
+          .w_full()
+          .items_baseline()
           .justify_between()
           .child(
             label(tokens, chartTitle(this.mode), TYPE.body)
@@ -388,10 +477,15 @@ export default class PriceChartView extends View {
               .child(this.lineTooltip(tokens, point, geometry, date, time, tone)),
           ),
       )
-      .child(div().w_full().h(1).bg(tokens.border))
       .child(
         h_flex()
+          .id("five-day-time-axis")
+          .w_full()
+          .h(16)
+          .items_center()
           .justify_between()
+          .border_t(1)
+          .border_color(tokens.border)
           .children(geometry.days.map((day) => muted(tokens, day.date.slice(5)))),
       );
   }
@@ -414,7 +508,7 @@ export default class PriceChartView extends View {
       : null;
     const current = geometry.points.at(-1);
     const currentMarker = current ? markerBlock(current, geometry) : null;
-    const date = typeof point?.marketDay === "string" ? point.marketDay : "";
+    const date = point ? candleDate(this.symbol, point) : "";
     const time = point ? formatMarketTime(this.symbol, point.timestamp) : "";
     return chart
       .child(
@@ -426,9 +520,15 @@ export default class PriceChartView extends View {
           .on_mouse_move((event, cx) => this.onMouseMove(event, cx))
           .on_hover((hovered, cx) => this.onHover(hovered, cx))
           .when(previousLine, (element) =>
-            element.child(
-              window.paint_path(previousLine, tokens.muted_foreground).absolute().inset_0(),
-            ),
+            element
+              .child(window.paint_path(previousLine, tokens.muted_foreground).absolute().inset_0())
+              .child(
+                muted(tokens, `Previous close ${formatValue(previous.price)}`)
+                  .absolute()
+                  .right(2)
+                  .bottom(2)
+                  .bg(tokens.background),
+              ),
           )
           .when(currentMarker, (element) =>
             element.child(
@@ -501,7 +601,13 @@ export default class PriceChartView extends View {
       )
       .child(
         h_flex()
+          .id("intraday-time-axis")
+          .w_full()
+          .h(16)
+          .items_center()
           .justify_between()
+          .border_t(1)
+          .border_color(tokens.border)
           .children(
             geometry.sessionBoundaries.map((boundary) =>
               label(
@@ -510,9 +616,6 @@ export default class PriceChartView extends View {
                 TYPE.bodySmall,
               ).text_color(sessionTone(tokens, boundary.tradeSession)),
             ),
-          )
-          .when(previous, (element) =>
-            element.child(muted(tokens, `Previous close ${formatValue(previous.price)}`)),
           ),
       );
   }
@@ -525,30 +628,42 @@ export default class PriceChartView extends View {
       ? PathBuilder.stroke(1).move_to(x, 0).line_to(x, "100%").dash_array([3, 3]).build()
       : null;
     const time = candle ? formatMarketTime(this.symbol, candle.timestamp) : "";
-    const day = typeof candle?.marketDay === "string" ? candle.marketDay : "";
-    return chart.child(
-      div()
-        .id("price-chart-candles")
-        .relative()
-        .h(height)
-        .w_full()
-        .on_mouse_move((event, cx) => this.onMouseMove(event, cx))
-        .on_hover((hovered, cx) => this.onHover(hovered, cx))
-        .children(
-          geometry.candles.flatMap((item) => {
-            const tone = valueTone(tokens, candleDirection(item));
-            return [
-              window.paint_path(candleWickPath(item), tone).absolute().inset_0(),
-              window.paint_path(candleBodyPath(item), tone).absolute().inset_0(),
-            ];
-          }),
-        )
-        .when(indicator, (element) =>
-          element
-            .child(window.paint_path(indicator, tokens.muted_foreground).absolute().inset_0())
-            .child(this.candleTooltip(tokens, candle, day, time)),
-        ),
-    );
+    const day = candle ? candleDate(this.symbol, candle) : "";
+    const ticks = candleAxisTicks(geometry.candles);
+    return chart
+      .child(
+        div()
+          .id("price-chart-candles")
+          .relative()
+          .h(height)
+          .w_full()
+          .on_mouse_move((event, cx) => this.onMouseMove(event, cx))
+          .on_hover((hovered, cx) => this.onHover(hovered, cx))
+          .children(
+            geometry.candles.flatMap((item) => {
+              const tone = valueTone(tokens, candleDirection(item));
+              return [
+                window.paint_path(candleWickPath(item), tone).absolute().inset_0(),
+                window.paint_path(candleBodyPath(item), tone).absolute().inset_0(),
+              ];
+            }),
+          )
+          .when(indicator, (element) =>
+            element
+              .child(window.paint_path(indicator, tokens.muted_foreground).absolute().inset_0())
+              .child(this.candleTooltip(tokens, candle, day, time)),
+          ),
+      )
+      .child(
+        v_flex()
+          .id("candlestick-time-axis")
+          .relative()
+          .w_full()
+          .h(16)
+          .border_t(1)
+          .border_color(tokens.border)
+          .children(ticks.map((item) => candleAxisTick(tokens, this.symbol, this.mode, item))),
+      );
   }
 
   candleTooltip(tokens, candle, day, time) {

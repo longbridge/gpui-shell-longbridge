@@ -24,6 +24,7 @@ import {
 } from "gpui-base";
 import { formatCompactNumber, quoteFreshness, tradeStatusLabel } from "./market.js";
 import { formatMarketTime } from "./chart.js";
+import { validDepthLevel } from "./market_detail.js";
 import { tradeIdentity, tradeVolumeRatio } from "./market_detail.js";
 import { allocationColor, avatarColor, changeTone, statusColors, valueTone } from "./palette.js";
 import { foldAllocationSlices } from "./portfolio.js";
@@ -721,8 +722,10 @@ function orderBookStatus(state, hasDepth) {
  * @param {{ bid: number, ask: number }} ratio
  */
 export function orderBookPanel(tokens, state, ratio) {
-  const asks = Array.isArray(state?.asks) ? state.asks.slice(0, 5).reverse() : [];
-  const bids = Array.isArray(state?.bids) ? state.bids.slice(0, 5) : [];
+  const asks = Array.isArray(state?.asks)
+    ? state.asks.filter(validDepthLevel).slice(0, 5).reverse()
+    : [];
+  const bids = Array.isArray(state?.bids) ? state.bids.filter(validDepthLevel).slice(0, 5) : [];
   const hasDepth = asks.length > 0 || bids.length > 0;
   const bidPercent = Math.round((ratio?.bid ?? 0) * 100);
   const askPercent = Math.max(0, 100 - bidPercent);
@@ -737,39 +740,41 @@ export function orderBookPanel(tokens, state, ratio) {
         .justify_between()
         .px(tokens.spacing.sm)
         .py(tokens.spacing.xs)
-        .child(label(tokens, "Order Book", 13).font_weight(700))
+        .child(label(tokens, "Order Book", 12).font_weight(700))
         .child(muted(tokens, status)),
     )
     .child(rule(tokens))
     .child(
-      state?.status !== "ready" || !hasDepth
+      state?.status !== "ready"
         ? v_flex()
             .p(tokens.spacing.md)
             .child(detailStatus(tokens, state, "No order book data"))
-        : v_flex()
-            .py(tokens.spacing.xs)
-            .children(asks.map((level) => depthRow(tokens, "ask", level)))
-            .child(
-              h_flex()
-                .id("order-book-ratio-divider")
-                .items_center()
-                .h(22)
-                .px(tokens.spacing.sm)
-                .child(muted(tokens, `Bid ${bidPercent}%`).w("28%").min_w(0).truncate())
-                .child(
-                  h_flex()
-                    .flex_1()
-                    .h(5)
-                    .overflow_hidden()
-                    .bg(tokens.muted)
-                    .child(div().h_full().w(`${bidPercent}%`).bg(statusColors(tokens).up))
-                    .child(div().h_full().w(`${askPercent}%`).bg(statusColors(tokens).down)),
-                )
-                .child(
-                  muted(tokens, `Ask ${askPercent}%`).w("28%").min_w(0).truncate().text_right(),
-                ),
-            )
-            .children(bids.map((level) => depthRow(tokens, "bid", level))),
+        : hasDepth
+          ? v_flex()
+              .py(tokens.spacing.xs)
+              .children(asks.map((level) => depthRow(tokens, "ask", level)))
+              .child(
+                h_flex()
+                  .id("order-book-ratio-divider")
+                  .items_center()
+                  .h(22)
+                  .px(tokens.spacing.sm)
+                  .child(muted(tokens, `Bid ${bidPercent}%`).w("28%").min_w(0).truncate())
+                  .child(
+                    h_flex()
+                      .flex_1()
+                      .h(5)
+                      .overflow_hidden()
+                      .bg(tokens.muted)
+                      .child(div().h_full().w(`${bidPercent}%`).bg(statusColors(tokens).up))
+                      .child(div().h_full().w(`${askPercent}%`).bg(statusColors(tokens).down)),
+                  )
+                  .child(
+                    muted(tokens, `Ask ${askPercent}%`).w("28%").min_w(0).truncate().text_right(),
+                  ),
+              )
+              .children(bids.map((level) => depthRow(tokens, "bid", level)))
+          : div().h(0),
     );
 }
 
@@ -866,7 +871,7 @@ export function timeSalesPanel(tokens, state, context = {}) {
         .justify_between()
         .px(tokens.spacing.sm)
         .py(tokens.spacing.xs)
-        .child(label(tokens, "Time & Sales", 13).font_weight(700))
+        .child(label(tokens, "Time & Sales", 12).font_weight(700))
         .child(muted(tokens, status)),
     )
     .child(rule(tokens))
@@ -900,7 +905,7 @@ function dataHealth(quote, now) {
 function metricRows(tokens, entries) {
   return v_flex()
     .flex_1()
-    .gap(tokens.spacing.md)
+    .gap(tokens.spacing.sm)
     .children(
       entries.map((entry) =>
         v_flex()
@@ -917,36 +922,31 @@ function metricRows(tokens, entries) {
 export function quoteDetail(tokens, quote, now = Date.now(), pulseOpacity = 1) {
   const tone = changeTone(tokens, quote.change);
   const cell = (content) =>
-    v_flex()
-      .min_w(0)
-      .flex_basis(190)
-      .flex_grow(1)
-      .gap(tokens.spacing.xs)
-      .p(tokens.spacing.sm)
-      .child(content);
+    v_flex().min_w(0).flex_basis(220).flex_grow(1).gap(tokens.spacing.sm).child(content);
   return h_flex()
     .id("quote-detail-content")
     .flex_1()
     .flex_wrap()
     .items_stretch()
     .p(tokens.spacing.sm)
+    .gap(tokens.spacing.sm)
     .child(
       cell(
         v_flex()
-          .gap(tokens.spacing.xs)
+          .gap(tokens.spacing.sm)
           .child(label(tokens, quote.name, 16).font_weight(700))
-          .child(muted(tokens, `${quote.market} · ${quote.symbol} · ${quote.currency}`)),
-      ),
-    )
-    .child(
-      cell(
-        v_flex()
-          .id("quote-detail-price")
-          .gap(tokens.spacing.xs)
-          .opacity(quote.receivedAt ? pulseOpacity : 0.72)
-          .transition("opacity", MOTION)
-          .child(numeric(tokens, quote.last, 24))
-          .child(numeric(tokens, `${quote.change} · ${quote.changePercent}`, 13).text_color(tone)),
+          .child(muted(tokens, `${quote.market} · ${quote.symbol} · ${quote.currency}`))
+          .child(
+            v_flex()
+              .id("quote-detail-price")
+              .gap(tokens.spacing.xs)
+              .opacity(quote.receivedAt ? pulseOpacity : 0.72)
+              .transition("opacity", MOTION)
+              .child(numeric(tokens, quote.last, 24))
+              .child(
+                numeric(tokens, `${quote.change} · ${quote.changePercent}`, 13).text_color(tone),
+              ),
+          ),
       ),
     )
     .child(
@@ -954,12 +954,6 @@ export function quoteDetail(tokens, quote, now = Date.now(), pulseOpacity = 1) {
         metricRows(tokens, [
           { title: "Previous close", value: quote.prevClose },
           { title: "Open", value: quote.open },
-        ]),
-      ),
-    )
-    .child(
-      cell(
-        metricRows(tokens, [
           {
             title: "Day range",
             value:
@@ -1740,6 +1734,8 @@ export function kbd(tokens, keystroke, state = {}) {
  * on both sides, and two adjacent regions come to twice this.
  */
 export const PANE_INSET = 4;
+export const PANEL_TITLE_TOP_GAP = 2;
+export const WATCHLIST_MIN_WIDTH = 400;
 
 export function panelTitle(name) {
   const bare = name.slice(name.lastIndexOf("/") + 1);
@@ -1759,15 +1755,26 @@ export function dockTabBar(tokens, group) {
   if (tabs.length === 1) {
     return h_flex()
       .h(30)
+      .mx(PANE_INSET)
+      .mt(PANEL_TITLE_TOP_GAP)
       .px(tokens.spacing.sm)
       .items_center()
+      .border_t(1)
+      .border_l(1)
+      .border_r(1)
       .border_b(1)
       .border_color(tokens.border)
+      .drag_tab(group, tabs[0].index)
       .child(label(tokens, panelTitle(tabs[0].name), 13).font_weight(700));
   }
   return h_flex()
     .h(30)
+    .mx(PANE_INSET)
+    .mt(PANEL_TITLE_TOP_GAP)
     .items_end()
+    .border_t(1)
+    .border_l(1)
+    .border_r(1)
     .border_b(1)
     .border_color(tokens.border)
     .children(
@@ -1787,13 +1794,11 @@ export function dockTabBar(tokens, group) {
     );
 }
 
-export function dockFrame(tokens, dock, content) {
+export function dockFrame(tokens, dock, content, onResize = null) {
   const bottom = dock.placement === "bottom";
   return v_flex()
     .size_full()
     .relative()
-    .border(1)
-    .border_color(tokens.border)
     .child(content)
     .child(
       div()
@@ -1810,6 +1815,8 @@ export function dockFrame(tokens, dock, content) {
               ? element.left(0)
               : element,
         )
+        .on_mouse_move((_event, cx) => onResize?.(cx, false))
+        .on_mouse_up("left", (_event, cx) => onResize?.(cx, true))
         .resize_dock(dock),
     );
 }

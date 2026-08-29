@@ -5,6 +5,7 @@ import {
   normalizeDepth,
   tradeIdentity,
   tradeVolumeRatio,
+  validDepthLevel,
 } from "./market_detail.js";
 
 function check(condition, message) {
@@ -45,14 +46,18 @@ function runVectors() {
   };
   const depth = normalizeDepth(depthSnapshot);
   check(
-    depth.symbol === "AAPL.US" && depth.asks.map((level) => level.position).join(",") === "1,2,3,4,5",
+    depth.symbol === "AAPL.US" &&
+      depth.asks.map((level) => level.position).join(",") === "1,2,3,4,5",
     "depth asks sort by source position and retain the nearest five levels",
   );
   check(
     depth.bids.map((level) => level.position).join(",") === "1,2,3,4,5",
     "depth bids sort by source position and retain the nearest five levels",
   );
-  check(depth !== depthSnapshot && depth.asks !== depthSnapshot.asks, "depth normalization is immutable");
+  check(
+    depth !== depthSnapshot && depth.asks !== depthSnapshot.asks,
+    "depth normalization is immutable",
+  );
 
   const ratio = depthRatio(depth);
   check(
@@ -64,6 +69,19 @@ function runVectors() {
       depthRatio({ bids: [], asks: [] }).ask === 0,
     "zero visible depth has zero ratios",
   );
+  check(
+    depthRatio({
+      bids: [{ price: "99", volume: 25n }],
+      asks: [{ price: "", volume: 75n }],
+    }).bid === 1,
+    "hidden invalid levels cannot influence the displayed depth ratio",
+  );
+  check(
+    !validDepthLevel({ price: "0", volume: 1n }) &&
+      !validDepthLevel({ price: "-1", volume: 1n }) &&
+      !validDepthLevel({ price: "1", volume: -1n }),
+    "non-positive price and volume are not valid order-book levels",
+  );
 
   const current = [
     trade({ timestamp: 12n, price: "12.00", volume: 2n }),
@@ -72,11 +90,19 @@ function runVectors() {
   const incoming = [
     trade({ timestamp: 11n, price: "11.00", volume: 1n }),
     trade({ timestamp: 12n, price: "12.00", volume: 2n }),
-    trade({ timestamp: 10n, price: "9.99", volume: 9n, tradeType: "A", direction: 2, tradeSession: 1 }),
+    trade({
+      timestamp: 10n,
+      price: "9.99",
+      volume: 9n,
+      tradeType: "A",
+      direction: 2,
+      tradeSession: 1,
+    }),
   ];
   const merged = mergeTrades(current, incoming);
   check(
-    merged.map((item) => item.timestamp.toString()).join(",") === "12,11,10,10" && merged.length === 4,
+    merged.map((item) => item.timestamp.toString()).join(",") === "12,11,10,10" &&
+      merged.length === 4,
     "trades de-duplicate by stable identity and sort newest first",
   );
   check(merged !== current && merged[0] !== incoming[1], "trade merging is immutable");
@@ -87,19 +113,40 @@ function runVectors() {
   const tied = mergeTrades(
     [],
     [
-      trade({ timestamp: 1n, price: "9", volume: 2n, tradeType: "A", direction: 1, tradeSession: 0 }),
-      trade({ timestamp: 1n, price: "10", volume: 1n, tradeType: "A", direction: 1, tradeSession: 0 }),
+      trade({
+        timestamp: 1n,
+        price: "9",
+        volume: 2n,
+        tradeType: "A",
+        direction: 1,
+        tradeSession: 0,
+      }),
+      trade({
+        timestamp: 1n,
+        price: "10",
+        volume: 1n,
+        tradeType: "A",
+        direction: 1,
+        tradeSession: 0,
+      }),
     ],
   );
   check(tied[0].price === "10", "trade ties use price as a deterministic secondary key");
   const retained = mergeTrades(
     [],
-    Array.from({ length: 21 }, (_, index) => trade({ timestamp: BigInt(index), price: String(index) })),
+    Array.from({ length: 21 }, (_, index) =>
+      trade({ timestamp: BigInt(index), price: String(index) }),
+    ),
   );
-  check(retained.length === 20 && retained[0].timestamp === 20n && retained.at(-1).timestamp === 1n, "trades retain the newest twenty records");
+  check(
+    retained.length === 20 && retained[0].timestamp === 20n && retained.at(-1).timestamp === 1n,
+    "trades retain the newest twenty records",
+  );
   const oversizedLimit = mergeTrades(
     [],
-    Array.from({ length: 21 }, (_, index) => trade({ timestamp: BigInt(index), price: String(index) })),
+    Array.from({ length: 21 }, (_, index) =>
+      trade({ timestamp: BigInt(index), price: String(index) }),
+    ),
     21,
   );
   check(

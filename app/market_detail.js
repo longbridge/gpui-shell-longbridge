@@ -15,6 +15,17 @@ function numericMagnitude(value) {
   return typeof magnitude === "bigint" ? Number(magnitude) : magnitude;
 }
 
+/** A depth level is visible only when both its price and quantity are usable. */
+export function validDepthLevel(level) {
+  const price = decimalParts(level?.price);
+  const volume = level?.volume;
+  const positiveVolume =
+    typeof volume === "bigint"
+      ? volume > 0n
+      : Number.isFinite(Number(volume)) && Number(volume) > 0;
+  return price?.sign === 1 && positiveVolume;
+}
+
 function compareQuantity(left, right) {
   const leftMagnitude = absolute(left);
   const rightMagnitude = absolute(right);
@@ -37,7 +48,10 @@ function visibleLevels(levels) {
     levels
       .filter((level) => level && typeof level === "object")
       .map((level, index) => ({ level: Object.freeze({ ...level }), index }))
-      .sort((left, right) => levelPosition(left.level) - levelPosition(right.level) || left.index - right.index)
+      .sort(
+        (left, right) =>
+          levelPosition(left.level) - levelPosition(right.level) || left.index - right.index,
+      )
       .slice(0, VISIBLE_LEVELS)
       .map(({ level }) => level),
   );
@@ -56,7 +70,9 @@ export function normalizeDepth(snapshot) {
 /** Returns the visible bid/ask share of total depth volume. */
 export function depthRatio(depth) {
   const total = (levels) =>
-    (Array.isArray(levels) ? levels : []).reduce((sum, level) => sum + numericMagnitude(level?.volume), 0);
+    (Array.isArray(levels) ? levels : [])
+      .filter(validDepthLevel)
+      .reduce((sum, level) => sum + numericMagnitude(level.volume), 0);
   const bids = total(depth?.bids);
   const asks = total(depth?.asks);
   const combined = bids + asks;
@@ -138,7 +154,10 @@ export function mergeTrades(current, incoming, limit = DEFAULT_TRADE_LIMIT) {
     ? Math.min(DEFAULT_TRADE_LIMIT, Math.max(0, Math.floor(limit)))
     : DEFAULT_TRADE_LIMIT;
   const unique = new Map();
-  for (const trade of [...(Array.isArray(incoming) ? incoming : []), ...(Array.isArray(current) ? current : [])]) {
+  for (const trade of [
+    ...(Array.isArray(incoming) ? incoming : []),
+    ...(Array.isArray(current) ? current : []),
+  ]) {
     if (!trade || typeof trade !== "object") continue;
     const identity = tradeIdentity(trade);
     if (!unique.has(identity)) unique.set(identity, Object.freeze({ ...trade }));
@@ -150,7 +169,12 @@ export function mergeTrades(current, incoming, limit = DEFAULT_TRADE_LIMIT) {
 export function tradeVolumeRatio(volume, maximum) {
   const numerator = numericMagnitude(volume);
   const denominator = numericMagnitude(maximum);
-  if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || numerator <= 0 || denominator <= 0) {
+  if (
+    !Number.isFinite(numerator) ||
+    !Number.isFinite(denominator) ||
+    numerator <= 0 ||
+    denominator <= 0
+  ) {
     return 0;
   }
   return Math.sqrt(Math.min(1, numerator / denominator));

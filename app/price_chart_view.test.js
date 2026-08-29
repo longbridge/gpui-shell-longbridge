@@ -1,6 +1,10 @@
 import { prepareFiveDaySeries } from "./chart.js";
 import { prepareCandleSeries, prepareIntradaySeries } from "./chart_modes.js";
-import PriceChartView, { PRICE_CHART_LAYOUT, layoutIntradayForView } from "./price_chart_view.js";
+import PriceChartView, {
+  PRICE_CHART_LAYOUT,
+  compactIntradaySeriesForView,
+  layoutIntradayForView,
+} from "./price_chart_view.js";
 import { Button, h_flex, v_flex } from "gpui-base";
 
 /** @param {string} iso @param {number} close */
@@ -24,6 +28,7 @@ const SESSION_CANDLES = Object.freeze([
 const CANDLE_SERIES = Object.freeze([
   {
     timestamp: BigInt(Date.parse("2026-03-09T13:30:00Z") / 1000),
+    marketDay: "2026-03-09",
     open: "100",
     high: "104",
     low: "99",
@@ -69,6 +74,18 @@ if (
   );
 }
 
+const retainedIntraday = compactIntradaySeriesForView(
+  { ...prepareIntradaySeries(denseIntraday), previousClose: "99" },
+  PRICE_CHART_LAYOUT,
+);
+if (
+  retainedIntraday.candles.length > 240 ||
+  retainedIntraday.sessionBoundaries.length !== 4 ||
+  retainedIntraday.previousClose !== "99"
+) {
+  throw new Error("intraday props are compact before crossing the retained-view bridge");
+}
+
 function propsFor(mode) {
   const fiveDay = prepareFiveDaySeries("AAPL.US", SESSION_CANDLES);
   const chartSeries =
@@ -80,7 +97,6 @@ function propsFor(mode) {
   return {
     symbol: "AAPL.US",
     mode,
-    series: fiveDay,
     chartSeries,
     state: "ready",
     layout: PRICE_CHART_LAYOUT,

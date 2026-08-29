@@ -1,4 +1,6 @@
 import { View } from "gpui";
+import { v_flex } from "gpui-base";
+import { PANE_INSET, WATCHLIST_MIN_WIDTH } from "./ui.js";
 
 let heldApp = null;
 
@@ -6,11 +8,25 @@ export function holdWorkspaceApp(app) {
   heldApp = app;
 }
 
+function workspaceApp() {
+  if (!heldApp) throw new Error("workspace application is not available");
+  return heldApp;
+}
+
+function panelContent(content, minimumWidth = 0) {
+  return v_flex()
+    .size_full()
+    .min_w(minimumWidth)
+    .min_h(0)
+    .px(PANE_INSET)
+    .pb(PANE_INSET)
+    .child(content.flex_1().min_h(0));
+}
+
 class WorkspacePanel extends View {
-  init(props, cx) {
-    this.app = props?.app ?? heldApp;
+  init(_props, cx) {
     this.revision = -1;
-    this.refresh = cx.timer.every(50, (cx) => {
+    this.refresh = cx.timer.every(100, (cx) => {
       const revision = this.currentRevision();
       if (revision === this.revision) return;
       this.revision = revision;
@@ -25,36 +41,36 @@ class WorkspacePanel extends View {
 
 export class WatchlistPanel extends WorkspacePanel {
   currentRevision() {
-    return this.app?.paneRevisions?.watchlist ?? 0;
+    return heldApp?.paneRevisions?.watchlist ?? 0;
   }
   render(cx) {
-    return this.app.watchlist(cx.theme()).size_full();
+    return panelContent(workspaceApp().watchlist(cx.theme()), WATCHLIST_MIN_WIDTH);
   }
 }
 
 export class QuoteDetailsPanel extends WorkspacePanel {
   currentRevision() {
-    return this.app?.paneRevisions?.quote ?? 0;
+    return heldApp?.paneRevisions?.quote ?? 0;
   }
   render(cx) {
-    return this.app.quoteDetailsPanel(cx.theme()).size_full();
+    return panelContent(workspaceApp().quoteDetailsPanel(cx.theme()));
   }
 }
 
 export class ChartPanel extends WorkspacePanel {
   currentRevision() {
-    return this.app?.paneRevisions?.chart ?? 0;
+    return heldApp?.paneRevisions?.chart ?? 0;
   }
   render(cx) {
-    return this.app.chartDetailsPanel(cx.theme()).size_full();
+    return panelContent(workspaceApp().chartDetailsPanel(cx.theme()));
   }
 }
 
 export class MarketDetailPanel extends WorkspacePanel {
   currentRevision() {
-    return this.app?.paneRevisions?.market ?? 0;
+    return heldApp?.paneRevisions?.market ?? 0;
   }
   render(cx) {
-    return this.app.marketDetailPanel(cx.theme()).size_full();
+    return panelContent(workspaceApp().marketDetailPanel(cx.theme()));
   }
 }

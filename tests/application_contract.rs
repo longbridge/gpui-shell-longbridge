@@ -250,6 +250,7 @@ fn price_chart_is_a_retained_child_view() {
 #[test]
 fn watchlist_and_detail_panes_do_not_depend_on_window_viewport_width() {
     let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
+    let ui = fs::read_to_string(app_dir().join("ui.js")).expect("ui.js");
     let watchlist = main
         .split("  watchlist(tokens) {")
         .nth(1)
@@ -283,6 +284,102 @@ fn watchlist_and_detail_panes_do_not_depend_on_window_viewport_width() {
             && detail.contains("timeSalesPanel(tokens, this.tradesState, {")
             && !detail.contains("compact"),
         "detail lanes must be pane-safe by construction rather than switch from viewport compactness"
+    );
+    assert!(
+        ui.contains("export const WATCHLIST_MIN_WIDTH = 400")
+            && main.contains("layout = clampWorkspaceLayout(layout)")
+            && fs::read_to_string(app_dir().join("workspace.js"))
+                .expect("workspace.js")
+                .contains(
+                    "panelContent(workspaceApp().watchlist(cx.theme()), WATCHLIST_MIN_WIDTH)"
+                ),
+        "the Right Dock must yield before Watchlist falls below its 400px minimum"
+    );
+}
+
+#[test]
+fn watchlist_panel_does_not_override_its_minimum_width() {
+    let workspace = fs::read_to_string(app_dir().join("workspace.js")).expect("workspace.js");
+
+    assert!(
+        !workspace.contains(".min_w(minimumWidth)\n    .min_w(0)"),
+        "the generic zero minimum must not override the Watchlist minimum"
+    );
+}
+
+#[test]
+fn title_bar_keeps_the_right_dock_reachable() {
+    let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
+
+    assert!(
+        main.contains("detailToggle,")
+            && main.contains("this.workspaceDock.is_dock_open(\"right\")")
+            && main.contains("this.workspaceDock.toggle_dock(\"right\")")
+            && main.matches("persisted.right_dock.open = true").count() >= 2,
+        "the Right Dock needs a title-bar toggle whose closed state does not survive restart"
+    );
+}
+
+#[test]
+fn dock_resize_preserves_watchlist_minimum_and_persists_the_final_size() {
+    let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
+    let ui = fs::read_to_string(app_dir().join("ui.js")).expect("ui.js");
+
+    assert!(
+        main.contains("queueWorkspaceDockReconcile(cx)")
+            && main.contains("viewportWidth - PANE_INSET * 2 - WATCHLIST_MIN_WIDTH")
+            && main.contains("this.workspaceDock.set_dock_size(\"right\", maximum)")
+            && main.contains("this.workspaceLayout = this.workspaceDock.dump()")
+            && ui.contains(".on_mouse_move((_event, cx) => onResize?.(cx, false))")
+            && ui.contains(".on_mouse_up(\"left\", (_event, cx) => onResize?.(cx, true))"),
+        "Dock drag and window resize must clamp live at a 400px Watchlist and persist the final size"
+    );
+}
+
+#[test]
+fn workspace_outer_gap_is_not_double_padded() {
+    let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
+    let render = main
+        .split("  render(cx) {")
+        .nth(1)
+        .expect("application render method");
+
+    assert!(
+        render.contains(".px(PANE_INSET)")
+            && render.contains(".pb(PANE_INSET)")
+            && render.contains(".pt(0)"),
+        "the shell keeps 8px side/bottom gaps while the first panel sits 4px below the TitleBar"
+    );
+}
+
+#[test]
+fn retained_chart_props_do_not_duplicate_the_large_series() {
+    let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
+    let chart_props = main
+        .split("  chartProps() {")
+        .nth(1)
+        .and_then(|source| source.split("  nextPriceChartProps() {").next())
+        .expect("chartProps method");
+
+    assert!(
+        !chart_props.contains("series:")
+            && !main.contains("previous?.series === next.series")
+            && chart_props.contains("compactIntradaySeriesForView"),
+        "the retained chart must receive one mode-specific series, not a duplicate five-day graph"
+    );
+}
+
+#[test]
+fn window_declares_a_minimum_workbench_size() {
+    let host = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("main.rs"),
+    )
+    .expect("src/main.rs");
+    assert!(
+        host.contains("window_min_size: Some(size(px(720.), px(600.)))"),
+        "the native window must preserve the Watchlist and Right Dock minimum widths"
     );
 }
 
@@ -357,6 +454,9 @@ fn v3_detail_tile_layout_round_trips_through_app_owned_storage() {
     assert!(
         main.contains("workspaceDock.load(layout)")
             && main.contains("info: { stack: { sizes: [220, 300, 0], axis: 1 } }")
+            && main.contains("children: [tabState(\"watchlist\")]")
+            && main.contains("right_dock:")
+            && main.contains("panel: detailStackState()")
             && !main.contains("info: { tiles:"),
         "saved Dock split/tab layouts must restore without a Tile tree"
     );
@@ -371,15 +471,17 @@ fn detail_dock_defaults_to_three_rearrangeable_vertical_tiles() {
         main.contains("tabState(\"quote-details\")")
             && main.contains("tabState(\"chart\")")
             && main.contains("tabState(\"market-detail\")")
+            && main.contains("const DEFAULT_DETAIL_DOCK_RATIO = 0.4")
+            && main.contains("* DEFAULT_DETAIL_DOCK_RATIO")
             && workspace.contains("export class QuoteDetailsPanel")
             && workspace.contains("export class ChartPanel")
             && workspace.contains("export class MarketDetailPanel"),
-        "Quote, Chart and Market Detail must default to three vertical independent Dock panels"
+        "the 6:4 Watchlist/detail layout must contain three vertical independent detail panels"
     );
     assert!(
         main.contains("marketDetailPanel(tokens)")
             && main.contains("overflow_y_scrollbar()")
-            && workspace.contains("this.app.chartDetailsPanel(cx.theme())"),
+            && workspace.contains("workspaceApp().chartDetailsPanel(cx.theme())"),
         "only Market Detail owns the tape/book scroll and it cannot remount the retained chart"
     );
 }
@@ -387,12 +489,54 @@ fn detail_dock_defaults_to_three_rearrangeable_vertical_tiles() {
 #[test]
 fn dock_tab_bar_hides_one_tab_but_keeps_multi_tab_navigation() {
     let ui = fs::read_to_string(app_dir().join("ui.js")).expect("ui.js");
+    let single = ui
+        .split("if (tabs.length === 1)")
+        .nth(1)
+        .and_then(|source| {
+            source
+                .split("  return h_flex()\n    .h(30)\n    .mx(PANE_INSET)")
+                .next()
+        })
+        .expect("single panel title branch");
 
     assert!(
         ui.contains("if (tabs.length === 1)")
             && ui.contains("tabs.map(")
-            && ui.contains(".select_tab(group, tab.index)"),
+            && ui.contains(".select_tab(group, tab.index)")
+            && single.contains(".drag_tab(group, tabs[0].index)"),
         "one panel must show a title region while combined panels show draggable tabs"
+    );
+}
+
+#[test]
+fn dock_panels_own_one_consistent_omarchy_gap_and_the_title_bar_has_no_rule() {
+    let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
+    let ui = fs::read_to_string(app_dir().join("ui.js")).expect("ui.js");
+    let title_bar = main
+        .split("  titleBar(tokens) {")
+        .nth(1)
+        .and_then(|source| source.split("  /**\n   * The session menu").next())
+        .expect("title bar method");
+
+    assert!(
+        !title_bar.contains(".border_b(1)"),
+        "the application TitleBar must not add a rule above the first Dock gap"
+    );
+    assert!(
+        ui.contains("export const PANE_INSET = 4")
+            && ui.contains("export const PANEL_TITLE_TOP_GAP = 2")
+            && ui.matches(".mx(PANE_INSET)").count() >= 2
+            && ui.matches(".mt(PANEL_TITLE_TOP_GAP)").count() >= 2,
+        "single-title and combined-tab bars must share the same 2px TitleBar gap"
+    );
+    let workspace = fs::read_to_string(app_dir().join("workspace.js")).expect("workspace.js");
+    assert!(
+        workspace.contains(".size_full()")
+            && workspace.contains(".px(PANE_INSET)")
+            && workspace.contains(".pb(PANE_INSET)")
+            && main.contains(".px(PANE_INSET)")
+            && main.contains(".pt(0)"),
+        "all four panel bodies must align to their title bars and form an 8px peer gap"
     );
 }
 
@@ -517,6 +661,15 @@ fn workspace_repaints_do_not_checkpoint_the_market_model() {
     assert!(
         !main.contains("workspaceRevision") && !main.contains("const props = { revision:"),
         "pane repaint must not manufacture props only to cross the nested-view update path"
+    );
+}
+
+#[test]
+fn dock_panels_do_not_retain_the_large_application_graph() {
+    let workspace = fs::read_to_string(app_dir().join("workspace.js")).expect("workspace.js");
+    assert!(
+        !workspace.contains("this.app =") && !workspace.contains("this.app?.paneRevisions"),
+        "a nested Dock view must read the module-held application without retaining the full quote/candle graph in its rollback checkpoint"
     );
 }
 

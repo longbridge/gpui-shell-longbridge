@@ -109,6 +109,11 @@ export default class MarketDetailStateProbe extends LongbridgeApp {
       this.depthState.status === "ready" && this.depthState.asks[0].price === "102.00",
       "the selected depth snapshot publishes normally",
     );
+    this.receiveDepth({ symbol: "B.US", asks: [], bids: [] }, metricCx, bGeneration);
+    check(
+      this.depthState.asks[0].price === "102.00" && this.depthState.bids[0].price === "99.00",
+      "an empty depth push keeps the selected symbol's last valid order book",
+    );
     check(
       this.tradesState.status === "ready" && this.tradesState.trades[0].price === "102.25",
       "the selected trades snapshot publishes normally",
@@ -150,8 +155,9 @@ export default class MarketDetailStateProbe extends LongbridgeApp {
     check(
       this.depthState.symbol === null &&
         this.depthState.status === "idle" &&
-        this.depthState.asks.length === 0,
-      "sign-out clears the depth state",
+        this.depthState.asks.length === 0 &&
+        this.depthCache.size === 0,
+      "sign-out clears the depth state and the prior authenticated session's cache",
     );
     check(
       this.tradesState.symbol === null &&

@@ -745,6 +745,20 @@ fn retained_price_chart_owns_its_indicator_and_dated_tooltip(cx: &mut TestAppCon
         "{candles}"
     );
     assert!(candles.contains("price-chart-candles"), "{candles}");
+    assert!(
+        candles.contains("03-09 09:30") && candles.contains("03-09 09:31"),
+        "candlestick charts need market-local date/time references along the bottom axis:\n{candles}"
+    );
+    assert!(
+        candles.contains("2026-03-09 09:30"),
+        "candlestick tooltips need a full market-local date and time:\n{candles}"
+    );
+    assert!(
+        candles.contains("candlestick-axis-tick-")
+            && candles.contains(r#".left[Number(-40.0)]"#)
+            && candles.contains(r#".w[Number(80.0)]"#),
+        "candlestick labels must stay centred on their wick without overlapping in a narrow Right Dock:\n{candles}"
+    );
 
     context.simulate_click(
         gpui::point(gpui::px(75.), gpui::px(14.)),
@@ -880,6 +894,48 @@ fn retained_price_chart_hover_rebuilds_the_child_without_the_parent(cx: &mut Tes
     assert!(
         tree.contains("Parent renders: 1"),
         "hover rebuilt the parent:\n{tree}"
+    );
+}
+
+#[gpui::test]
+fn a_large_candlestick_publication_does_not_overflow_nested_view_rollback(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("price_chart_large.test.js");
+    let fixture_root = fixture.root.clone();
+    let window = cx.add_window(move |window, cx| {
+        WorkspaceRoot(
+            runtime
+                .try_load(&fixture_root, window, cx)
+                .expect("load large price-chart probe"),
+        )
+    });
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    context.simulate_click(
+        gpui::point(gpui::px(160.), gpui::px(20.)),
+        gpui::Modifiers::default(),
+    );
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    let root = window.root(&mut context).expect("large-chart root");
+    let rendered = root.read_with(&context, |root, cx| {
+        root.0
+            .read(cx)
+            .content()
+            .clone()
+            .downcast::<gpui_shell::ScriptView>()
+            .expect("large-chart script view")
+            .read(cx)
+            .snapshot()
+            .map(gpui_shell::RenderSnapshot::debug_tree)
+            .unwrap_or_default()
+    });
+    assert!(
+        rendered.contains("Publish 12,000 candles · published")
+            && !rendered.contains("rollback limit"),
+        "publishing a full minute window must not cross the nested-view rollback limit:\n{rendered}"
     );
 }
 
@@ -1342,7 +1398,6 @@ fn market_detail_panels_name_loading_empty_and_error_states(cx: &mut TestAppCont
     });
     for expected in [
         "Loading live market data…",
-        "No order book data",
         "Depth entitlement unavailable",
         "No recent trades",
         "Trade feed unavailable",
@@ -1356,6 +1411,12 @@ fn market_detail_panels_name_loading_empty_and_error_states(cx: &mut TestAppCont
             "missing {expected}:\n{rendered}"
         );
     }
+    assert!(
+        !rendered.contains("No order book data")
+            && !rendered.contains("order-book-ask-level-1")
+            && !rendered.contains("order-book-bid-level-1"),
+        "a ready book without valid price/volume levels should collapse instead of drawing fake rows or explanatory filler:\n{rendered}"
+    );
 }
 
 #[gpui::test]

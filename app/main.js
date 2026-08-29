@@ -40,7 +40,7 @@ import {
   watchlistInstruments,
 } from "./market.js";
 import { createQuoteStream } from "./quote_stream.js";
-import { prepareFiveDaySeries } from "./chart.js";
+import { compactFiveDaySeries, prepareFiveDaySeries } from "./chart.js";
 import {
   CHART_MODES,
   chartRequestIdentity,
@@ -50,9 +50,12 @@ import {
   windowCandles,
 } from "./chart_modes.js";
 import { PERIOD, TRADE_SESSION } from "./protocol.js";
-import { depthRatio, mergeTrades, normalizeDepth } from "./market_detail.js";
+import { depthRatio, mergeTrades, normalizeDepth, validDepthLevel } from "./market_detail.js";
 import { allocationInUsd, normalizeUsdRates, portfolioPresentation } from "./portfolio.js";
-import PriceChartView, { PRICE_CHART_LAYOUT } from "./price_chart_view.js";
+import PriceChartView, {
+  PRICE_CHART_LAYOUT,
+  compactIntradaySeriesForView,
+} from "./price_chart_view.js";
 import { loadFpsVisible, saveFpsVisible } from "./fps_preference.js";
 import { omarchyBaseColors, omarchyMarketColors, omarchyTheme } from "./system_theme.js";
 import { setOmarchyAvatarColors, setOmarchyMarketColors, statusColors } from "./palette.js";
@@ -69,6 +72,7 @@ import {
   action,
   allocationChart,
   connectionPill,
+  detailToggle,
   detailGrid,
   emptyPanel,
   kbd,
@@ -76,6 +80,7 @@ import {
   filterInput,
   HOLDING_ROW_HEIGHT,
   PANE_INSET,
+  WATCHLIST_MIN_WIDTH,
   dockDropHint,
   dockFrame,
   dockTabBar,
@@ -121,8 +126,9 @@ async function currentOmarchyColors() {
 // allocation chart reachable above it without a scroll.
 const HOLDINGS_VIEWPORT_ROWS = 10;
 const WORKSPACE_LAYOUT_KEY = "workspace.layout.dock-panels-v1";
-const WORKSPACE_LAYOUT_VERSION = 4;
+const WORKSPACE_LAYOUT_VERSION = 7;
 const DETAIL_DOCK_WIDTH = 660;
+const DEFAULT_DETAIL_DOCK_RATIO = 0.4;
 const panelState = (name) => ({
   panel_name: `shell:com.longbridge.gpui-shell-example/${name}`,
   children: [],
@@ -133,6 +139,11 @@ const tabState = (name) => ({
   children: [panelState(name)],
   info: { tabs: { active_index: 0 } },
 });
+const detailStackState = () => ({
+  panel_name: "StackPanel",
+  children: [tabState("quote-details"), tabState("chart"), tabState("market-detail")],
+  info: { stack: { sizes: [220, 300, 0], axis: 1 } },
+});
 const DEFAULT_WORKSPACE_LAYOUT = Object.freeze({
   version: WORKSPACE_LAYOUT_VERSION,
   center: {
@@ -141,16 +152,52 @@ const DEFAULT_WORKSPACE_LAYOUT = Object.freeze({
     info: { stack: { sizes: [0], axis: 0 } },
   },
   right_dock: {
-    panel: {
-      panel_name: "StackPanel",
-      children: [tabState("quote-details"), tabState("chart"), tabState("market-detail")],
-      info: { stack: { sizes: [220, 300, 0], axis: 1 } },
-    },
+    panel: detailStackState(),
     placement: "right",
     size: DETAIL_DOCK_WIDTH,
     open: true,
   },
 });
+
+function defaultWorkspaceLayout() {
+  const layout = JSON.parse(JSON.stringify(DEFAULT_WORKSPACE_LAYOUT));
+  const viewportWidth = Number(window.viewport_size().width);
+  if (viewportWidth > 0) {
+    layout.right_dock.size =
+      Math.max(0, viewportWidth - PANE_INSET * 2) * DEFAULT_DETAIL_DOCK_RATIO;
+  }
+  return clampWorkspaceLayout(layout);
+}
+
+function clampWorkspaceLayout(layout) {
+  const viewportWidth = Number(window.viewport_size().width);
+  if (viewportWidth > 0 && layout.right_dock) {
+    layout.right_dock.size = Math.min(
+      Number(layout.right_dock.size) || DETAIL_DOCK_WIDTH,
+      Math.max(0, viewportWidth - PANE_INSET * 2 - WATCHLIST_MIN_WIDTH),
+    );
+  }
+  return layout;
+}
+
+function panelWidthInTree(node, panelName, inheritedWidth) {
+  if (!node || typeof node !== "object") return null;
+  const bare = String(node.panel_name ?? "")
+    .split("/")
+    .at(-1);
+  if (bare === panelName) return inheritedWidth;
+  const children = Array.isArray(node.children) ? node.children : [];
+  const stack = node.info?.stack;
+  for (let index = 0; index < children.length; index += 1) {
+    const width =
+      stack?.axis === 0 && Number(stack.sizes?.[index]) > 0
+        ? Number(stack.sizes[index])
+        : inheritedWidth;
+    const found = panelWidthInTree(children[index], panelName, width);
+    if (found !== null) return found;
+  }
+  return null;
+}
 /**
  * How long the steps before the stream exists may take before the window says
  * so. Generous: it covers a token refresh, the watchlist read and the account
@@ -700,18 +747,14 @@ export default class LongbridgeApp extends View {
       this.chartState.symbol === symbol ? this.chartState.state : symbol ? "loading" : "idle";
     const chartSeries =
       mode === "intraday"
-        ? prepareIntradaySeries(candles)
+        ? compactIntradaySeriesForView(prepareIntradaySeries(candles), PRICE_CHART_LAYOUT)
         : mode === "5D"
-          ? prepareFiveDaySeries(symbol, candles)
+          ? compactFiveDaySeries(prepareFiveDaySeries(symbol, candles), PRICE_CHART_LAYOUT)
           : prepareCandleSeries(windowCandles(candles));
     return {
       symbol,
       mode,
       chartSeries,
-      // Task 5 switches the retained child to `chartSeries`. Until then it
-      // receives a five-day-compatible fallback so changing mode cannot make
-      // the existing retained boundary throw during this state-only task.
-      series: prepareFiveDaySeries(symbol, candles),
       state,
       layout: PRICE_CHART_LAYOUT,
       themeRevision: this.chartThemeRevision,
@@ -731,7 +774,6 @@ export default class LongbridgeApp extends View {
       previous?.symbol === next.symbol &&
       previous?.mode === next.mode &&
       previous?.chartSeries === next.chartSeries &&
-      previous?.series === next.series &&
       previous?.state === next.state &&
       previous?.layout === next.layout &&
       previous?.themeRevision === next.themeRevision
@@ -866,6 +908,7 @@ export default class LongbridgeApp extends View {
 
   /** Initializes data which belongs only to the selected instrument's detail panels. */
   initDetailMarketState() {
+    this.depthCache = new Map();
     this.depthState = emptyDepthState();
     this.tradesState = emptyTradesState();
     this.detailMarketGeneration = 0;
@@ -888,7 +931,8 @@ export default class LongbridgeApp extends View {
     const selected = typeof symbol === "string" && symbol ? symbol : null;
     const generation = ++this.detailMarketGeneration;
     this.selectedSymbol = selected;
-    this.depthState = emptyDepthState(selected);
+    const cachedDepth = selected ? this.depthCache?.get(selected) : null;
+    this.depthState = cachedDepth ?? emptyDepthState(selected);
     this.tradesState = emptyTradesState(selected);
     this.redraw(cx, PANE_DETAIL);
 
@@ -940,13 +984,26 @@ export default class LongbridgeApp extends View {
       return;
     }
     const normalized = normalizeDepth(depth);
-    this.depthState = {
-      symbol: normalized.symbol,
-      status: "ready",
-      asks: normalized.asks,
-      bids: normalized.bids,
-      error: "",
-    };
+    const hasDepth = [...normalized.asks, ...normalized.bids].some(validDepthLevel);
+    this.depthCache ??= new Map();
+    if (hasDepth) {
+      this.depthState = Object.freeze({
+        symbol: normalized.symbol,
+        status: "ready",
+        asks: normalized.asks,
+        bids: normalized.bids,
+        error: "",
+      });
+      this.depthCache.set(normalized.symbol, this.depthState);
+    } else {
+      this.depthState = this.depthCache.get(normalized.symbol) ?? {
+        symbol: normalized.symbol,
+        status: "ready",
+        asks: normalized.asks,
+        bids: normalized.bids,
+        error: "",
+      };
+    }
     this.scheduleRedraw(cx, PANE_MARKET);
   }
 
@@ -1019,7 +1076,7 @@ export default class LongbridgeApp extends View {
     this.workspaceDock = DockArea.new("longbridge-workspace", {
       version: WORKSPACE_LAYOUT_VERSION,
     });
-    let layout = DEFAULT_WORKSPACE_LAYOUT;
+    let layout = defaultWorkspaceLayout();
     try {
       const saved = localStorage.getItem(WORKSPACE_LAYOUT_KEY);
       if (saved) {
@@ -1027,12 +1084,51 @@ export default class LongbridgeApp extends View {
         if (parsed?.version === WORKSPACE_LAYOUT_VERSION) layout = parsed;
       }
     } catch {}
+    layout = clampWorkspaceLayout(layout);
+    this.workspaceLayout = layout;
     this.workspaceDock.load(layout);
     this.workspaceDock.on("layout_changed", () => {
       try {
-        localStorage.setItem(WORKSPACE_LAYOUT_KEY, JSON.stringify(this.workspaceDock.dump()));
+        this.workspaceLayout = this.workspaceDock.dump();
+        const persisted = JSON.parse(JSON.stringify(this.workspaceLayout));
+        if (persisted.right_dock) persisted.right_dock.open = true;
+        localStorage.setItem(WORKSPACE_LAYOUT_KEY, JSON.stringify(persisted));
       } catch {}
     });
+  }
+
+  /** Reconciles a native Dock drag with the Watchlist's application-level minimum. */
+  queueWorkspaceDockReconcile(cx) {
+    if (!this.workspaceDock || this.workspaceDockReconcileQueued) return;
+    this.workspaceDockReconcileQueued = true;
+    cx.timer.after(0, (cx) => {
+      this.workspaceDockReconcileQueued = false;
+      const viewportWidth = Number(window.viewport_size().width);
+      const maximum = Math.max(0, viewportWidth - PANE_INSET * 2 - WATCHLIST_MIN_WIDTH);
+      const current = Number(this.workspaceDock.dock_size("right")) || 0;
+      if (this.workspaceDock.is_dock_open("right") && current > maximum) {
+        this.workspaceDock.set_dock_size("right", maximum);
+      } else {
+        this.workspaceLayout = this.workspaceDock.dump();
+        try {
+          const persisted = JSON.parse(JSON.stringify(this.workspaceLayout));
+          if (persisted.right_dock) persisted.right_dock.open = true;
+          localStorage.setItem(WORKSPACE_LAYOUT_KEY, JSON.stringify(persisted));
+        } catch {}
+      }
+      this.redraw(cx, 0);
+    });
+  }
+
+  /** Restores the four independent panels to their documented default Dock layout. */
+  resetWorkspace(cx) {
+    const layout = defaultWorkspaceLayout();
+    try {
+      localStorage.removeItem(WORKSPACE_LAYOUT_KEY);
+    } catch {}
+    this.workspaceLayout = layout;
+    this.workspaceDock.load(layout);
+    this.redraw(cx);
   }
 
   /**
@@ -1473,6 +1569,7 @@ export default class LongbridgeApp extends View {
     this.portfolioQuotes = [];
     this.selectedSymbol = null;
     this.clearDetailMarket();
+    this.depthCache?.clear();
     this.candleCache.clear();
     this.chartCache?.clear();
     this.chartGeneration += 1;
@@ -1608,6 +1705,15 @@ export default class LongbridgeApp extends View {
   /** @param {import("gpui").Context} cx */
   render(cx) {
     const tokens = cx.theme();
+    const viewportWidth = Number(window.viewport_size().width);
+    if (
+      this.workspaceDock &&
+      this.page === "watchlist" &&
+      viewportWidth !== this.lastWorkspaceViewportWidth
+    ) {
+      this.lastWorkspaceViewportWidth = viewportWidth;
+      this.queueWorkspaceDockReconcile(cx);
+    }
     return this.workspaceActions(
       div()
         .id("workspace-root")
@@ -1634,7 +1740,9 @@ export default class LongbridgeApp extends View {
             v_flex()
               .flex_1()
               .min_h(0)
-              .p(tokens.spacing.sm)
+              .px(PANE_INSET)
+              .pb(PANE_INSET)
+              .pt(0)
               .gap(tokens.spacing.sm)
               .child(
                 // The performance overlay is anchored in *this* box rather than
@@ -1686,8 +1794,6 @@ export default class LongbridgeApp extends View {
         // came to rest 42 pixels right of centre.
         .px(tokens.spacing.sm)
         .bg(tokens.surface)
-        .border_b(1)
-        .border_color(tokens.border)
         .child(
           h_flex()
             .flex_1()
@@ -1741,6 +1847,18 @@ export default class LongbridgeApp extends View {
             .justify_end()
             .gap(tokens.spacing.sm)
             .child(connectionPill(tokens, this.status.state))
+            .when(
+              this.hasStoredTokens && this.page === "watchlist" && Boolean(this.workspaceDock),
+              (element) => {
+                const open = this.workspaceDock.is_dock_open("right");
+                return element.child(
+                  detailToggle(tokens, open, (_event, cx) => {
+                    this.workspaceDock.toggle_dock("right");
+                    this.redraw(cx, 0);
+                  }),
+                );
+              },
+            )
             // Only on the page that has the pane it folds. Portfolio is one
             // column with no details beside it, so the control there would be a
             // switch for something that is not on screen.
@@ -1848,8 +1966,27 @@ export default class LongbridgeApp extends View {
    * Release throughput while still letting a wide Watchlist show its columns.
    */
   isWatchlistCompact() {
-    const detailWidth = this.workspaceDock?.dock_size("right") ?? DETAIL_DOCK_WIDTH;
-    return window.viewport_size().width - detailWidth < COMPACT_WATCHLIST_WIDTH;
+    const viewportWidth = window.viewport_size().width;
+    if (!this.workspaceLayout) return viewportWidth < NARROW_VIEWPORT;
+    try {
+      const layout = this.workspaceLayout;
+      const regions = [
+        [layout.left_dock, layout.left_dock?.size ?? viewportWidth],
+        [layout.right_dock, layout.right_dock?.size ?? viewportWidth],
+        [layout.bottom_dock, viewportWidth],
+        [
+          { panel: layout.center },
+          viewportWidth -
+            (layout.left_dock?.open ? Number(layout.left_dock.size) || 0 : 0) -
+            (layout.right_dock?.open ? Number(layout.right_dock.size) || 0 : 0),
+        ],
+      ];
+      for (const [region, width] of regions) {
+        const measured = panelWidthInTree(region?.panel, "watchlist", width);
+        if (measured !== null) return measured < COMPACT_WATCHLIST_WIDTH;
+      }
+    } catch {}
+    return viewportWidth < NARROW_VIEWPORT;
   }
 
   /** @param {import("gpui-base").Theme} tokens */
@@ -1933,7 +2070,11 @@ export default class LongbridgeApp extends View {
       .tab_bar((group, cx) => dockTabBar(cx.theme(), group))
       .empty_group((_group, cx) => emptyPanel(cx.theme(), "Empty panel", "Drop a panel here."))
       .drop_indicator((drop, cx) => dockDropHint(cx.theme(), drop))
-      .dock((dock, cx) => dockFrame(cx.theme(), dock, dock_content().flex_1().min_h(0).w_full()));
+      .dock((dock, cx) =>
+        dockFrame(cx.theme(), dock, dock_content().flex_1().min_h(0).w_full(), (cx, final) =>
+          final || this.pointerDown ? this.queueWorkspaceDockReconcile(cx) : undefined,
+        ),
+      );
   }
 
   /** @param {import("gpui-base").Theme} tokens */
@@ -1941,7 +2082,7 @@ export default class LongbridgeApp extends View {
     const status = streamStatusSummary({ state: this.status.state, delay: this.status.delay });
     const rows = filterRows(this.quotes, this.watchlistQuery, ["code", "name", "symbol"]);
     const compact = this.isWatchlistCompact();
-    return this.pane(tokens, "right").child(
+    return (
       panel(tokens)
         .id("watchlist-pane")
         // No top edge: the tab bar above this pane already draws the line, and
@@ -1995,7 +2136,7 @@ export default class LongbridgeApp extends View {
           )
             .flex_1()
             .min_h(0),
-        ),
+        )
     );
   }
 
@@ -2306,9 +2447,10 @@ export default class LongbridgeApp extends View {
       this.detailSections = { ...this.detailSections, [name]: open };
       this.redraw(cx, PANE_QUOTE);
     };
-    return v_flex()
+    return panel(tokens)
       .id("quote-details-panel")
-      .size_full()
+      .border_t(0)
+      .flex_1()
       .min_w(0)
       .min_h(0)
       .bg(tokens.background)
@@ -2352,9 +2494,10 @@ export default class LongbridgeApp extends View {
 
   /** The retained chart has its own tile and is never mounted by market-detail pushes. */
   chartDetailsPanel(tokens) {
-    return v_flex()
+    return panel(tokens)
       .id("chart-panel")
-      .size_full()
+      .border_t(0)
+      .flex_1()
       .min_w(0)
       .min_h(0)
       .bg(tokens.background)
@@ -2364,9 +2507,10 @@ export default class LongbridgeApp extends View {
   /** One market-reading scroll: Order Book then Time & Sales. */
   marketDetailPanel(tokens) {
     const quote = this.selectedQuote();
-    return v_flex()
+    return panel(tokens)
       .id("market-detail-panel")
-      .size_full()
+      .border_t(0)
+      .flex_1()
       .min_w(0)
       .min_h(0)
       .bg(tokens.background)
@@ -2379,10 +2523,8 @@ export default class LongbridgeApp extends View {
               .child(
                 v_flex()
                   .gap(tokens.spacing.xs)
-                  .px(tokens.spacing.md)
                   .py(tokens.spacing.xs)
                   .child(orderBookPanel(tokens, this.depthState, depthRatio(this.depthState)))
-                  .child(rule(tokens))
                   .child(
                     timeSalesPanel(tokens, this.tradesState, {
                       symbol: quote.symbol,
@@ -2535,7 +2677,7 @@ export default class LongbridgeApp extends View {
       .right(tokens.spacing.lg)
       .top(48)
       .w(220)
-      .p(tokens.spacing.sm)
+      .p(PANE_INSET)
       .bg(tokens.surface)
       .border(1)
       .border_color(tokens.border)

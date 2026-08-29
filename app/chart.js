@@ -53,6 +53,13 @@ export function formatMarketTime(symbol, timestamp, includeSeconds = false) {
   return `${hour}:${minute}:${String(local.getUTCSeconds()).padStart(2, "0")}`;
 }
 
+/** Formats a timestamp as the trading market's calendar date. */
+export function formatMarketDate(symbol, timestamp) {
+  const seconds = timestampSeconds(timestamp);
+  if (typeof symbol !== "string" || seconds === null) return "";
+  return dateFromLocalDay(localDayNumber(symbol, seconds));
+}
+
 /**
  * The market-local calendar day a timestamp falls in, as a whole number of days
  * since the epoch. Two timestamps share a market-local date exactly when this
@@ -308,6 +315,41 @@ export function layoutPriceSeries(
   const geometry = computePriceGeometry(series, width, height, dayGap, maxPoints);
   priceGeometry = { series, width, height, dayGap, maxPoints, geometry };
   return geometry;
+}
+
+let compactSeriesCache = null;
+
+/** Bounds the object graph handed across a retained View update to visible plot points. */
+export function compactFiveDaySeries(series, layout) {
+  if (
+    compactSeriesCache?.series === series &&
+    compactSeriesCache?.width === layout.width &&
+    compactSeriesCache?.height === layout.height &&
+    compactSeriesCache?.dayGap === layout.dayGap
+  ) {
+    return compactSeriesCache.result;
+  }
+  const geometry = layoutPriceSeries(series, layout);
+  const byDate = new Map(series.days.map((day) => [day.date, []]));
+  for (const point of geometry.points) byDate.get(point.date)?.push(point);
+  const days = Object.freeze(
+    series.days.map((day) =>
+      Object.freeze({ date: day.date, points: Object.freeze(byDate.get(day.date) ?? []) }),
+    ),
+  );
+  const result = Object.freeze({
+    symbol: series.symbol,
+    days,
+    points: Object.freeze(days.flatMap((day) => day.points)),
+  });
+  compactSeriesCache = {
+    series,
+    width: layout.width,
+    height: layout.height,
+    dayGap: layout.dayGap,
+    result,
+  };
+  return result;
 }
 
 function intradayClose(candle) {

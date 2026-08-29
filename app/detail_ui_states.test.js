@@ -25,6 +25,18 @@ export default class DetailUiStatesProbe extends View {
       .child(
         orderBookPanel(
           tokens,
+          {
+            status: "ready",
+            asks: [{ position: 1, price: null, volume: null }],
+            bids: [{ position: 1, price: "", volume: 0n }],
+            error: "",
+          },
+          { bid: 0, ask: 0 },
+        ),
+      )
+      .child(
+        orderBookPanel(
+          tokens,
           { status: "error", asks: [], bids: [], error: "Depth entitlement unavailable" },
           { bid: 0, ask: 0 },
         ),
