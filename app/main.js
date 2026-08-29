@@ -13,6 +13,7 @@ import {
   TableBody,
   Tab,
   Tabs,
+  VirtualListScrollHandle,
   h_flex,
   set_theme,
   v_flex,
@@ -227,9 +228,9 @@ const TITLE_BAR_LEADING = MACOS ? 96 : 8;
 
 /** The pages the title bar switches between. */
 const PAGES = Object.freeze([
-  { key: "watchlist", caption: "Watchlist" },
-  { key: "portfolio", caption: "Portfolio" },
-  { key: "orders", caption: "Orders" },
+  { key: "watchlist", caption: "Watchlist", shortcut: 1 },
+  { key: "portfolio", caption: "Portfolio", shortcut: 2 },
+  { key: "orders", caption: "Orders", shortcut: 3 },
 ]);
 
 /**
@@ -285,19 +286,96 @@ const ORDER_FILTER_FIELDS = Object.freeze(["symbol", "name", "statusLabel", "sid
 const PRIMARY_MODIFIER = MACOS ? "cmd" : "ctrl";
 
 export const KEY_BINDINGS = Object.freeze([
-  { keystroke: `${PRIMARY_MODIFIER}-1`, action: "workspace::watchlist", context: "Workspace" },
-  { keystroke: `${PRIMARY_MODIFIER}-2`, action: "workspace::portfolio", context: "Workspace" },
-  { keystroke: `${PRIMARY_MODIFIER}-3`, action: "workspace::orders", context: "Workspace" },
-  { keystroke: `${PRIMARY_MODIFIER}-r`, action: "workspace::reconnect", context: "Workspace" },
-  { keystroke: `${PRIMARY_MODIFIER}-t`, action: "workspace::toggle-theme", context: "Workspace" },
+  {
+    keystroke: `${PRIMARY_MODIFIER}-1`,
+    action: "workspace::watchlist",
+    context: "Workspace",
+    caption: "Watchlist",
+  },
+  {
+    keystroke: `${PRIMARY_MODIFIER}-2`,
+    action: "workspace::portfolio",
+    context: "Workspace",
+    caption: "Portfolio",
+  },
+  {
+    keystroke: `${PRIMARY_MODIFIER}-3`,
+    action: "workspace::orders",
+    context: "Workspace",
+    caption: "Orders",
+  },
+  {
+    keystroke: `${PRIMARY_MODIFIER}-k`,
+    action: "workspace::show-shortcuts",
+    context: "Workspace",
+    caption: "Keyboard shortcuts",
+  },
+  {
+    keystroke: `${PRIMARY_MODIFIER}-r`,
+    action: "workspace::reconnect",
+    context: "Workspace",
+    caption: "Reconnect",
+  },
+  {
+    keystroke: `${PRIMARY_MODIFIER}-t`,
+    action: "workspace::toggle-theme",
+    context: "Workspace",
+    caption: "Switch theme",
+  },
   {
     keystroke: `${PRIMARY_MODIFIER}-shift-f`,
     action: "workspace::toggle-fullscreen",
     context: "Workspace",
+    caption: "Full screen",
   },
-  { keystroke: "alt-down", action: "watchlist::next", context: "Workspace" },
-  { keystroke: "alt-up", action: "watchlist::previous", context: "Workspace" },
-  { keystroke: "escape", action: "workspace::dismiss", context: "Workspace" },
+  {
+    keystroke: "down",
+    action: "collection::next",
+    context: "Workspace && !Input",
+    caption: "Next row",
+    display: "Arrow Down / J",
+  },
+  { keystroke: "j", action: "collection::next", context: "Workspace && !Input", caption: "" },
+  {
+    keystroke: "up",
+    action: "collection::previous",
+    context: "Workspace && !Input",
+    caption: "Previous row",
+    display: "Arrow Up / K",
+  },
+  { keystroke: "k", action: "collection::previous", context: "Workspace && !Input", caption: "" },
+  {
+    keystroke: "home",
+    action: "collection::first",
+    context: "Workspace && !Input",
+    caption: "First row",
+    display: "Home / G G",
+  },
+  { keystroke: "g g", action: "collection::first", context: "Workspace && !Input", caption: "" },
+  {
+    keystroke: "end",
+    action: "collection::last",
+    context: "Workspace && !Input",
+    caption: "Last row",
+    display: "End / Shift+G",
+  },
+  { keystroke: "shift-g", action: "collection::last", context: "Workspace && !Input", caption: "" },
+  {
+    keystroke: "enter",
+    action: "collection::activate",
+    context: "Workspace && !Input",
+    caption: "Open row",
+    display: "Enter / O",
+  },
+  { keystroke: "o", action: "collection::activate", context: "Workspace && !Input", caption: "" },
+  { keystroke: "escape", action: "workspace::dismiss", context: "Workspace", caption: "Dismiss" },
+  { keystroke: "tab", action: "shortcut-help::retain-focus", context: "ShortcutHelp", caption: "" },
+  {
+    keystroke: "shift-tab",
+    action: "shortcut-help::retain-focus",
+    context: "ShortcutHelp",
+    caption: "",
+  },
 ]);
 
 /**
@@ -349,18 +427,6 @@ export function chordLabel(keystroke) {
  * the rail draws without touching this table, and adding a caption for an
  * action nothing binds adds nothing to the rail at all.
  */
-const SHORTCUT_CAPTIONS = Object.freeze({
-  "workspace::watchlist": "Watchlist",
-  "workspace::portfolio": "Portfolio",
-  "workspace::orders": "Orders",
-  "workspace::reconnect": "Reconnect",
-  "workspace::toggle-theme": "Switch theme",
-  "workspace::toggle-fullscreen": "Full screen",
-  "watchlist::next": "Next row",
-  "watchlist::previous": "Previous row",
-  "workspace::dismiss": "Dismiss",
-});
-
 /** `YYYY-MM-DD` in local time, which is the spelling `CalendarState` uses. */
 function calendarDay(date) {
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -553,11 +619,14 @@ export default class LongbridgeApp extends View {
    */
   initKeyboard(cx) {
     this.workspaceFocus = cx.focus_handle();
+    this.shortcutHelpFocus = cx.focus_handle();
     /** The last chord the workspace saw, for the footer's readout. */
     this.lastKeystroke = "";
     this.keyDown = false;
     this.keyHeld = false;
+    this.primaryModifierDown = false;
     this.pointerDown = false;
+    this.shortcutHelpOpen = false;
     this.diagnosticsOpen = false;
     this.boundKeys = cx.bind_keys([...KEY_BINDINGS]);
     cx.spawn(async (cx) => {
@@ -989,6 +1058,16 @@ export default class LongbridgeApp extends View {
    * fields are where the answer lives.
    */
   initInteractionState() {
+    this.selectedWatchlistSymbol = null;
+    this.selectedHoldingSymbol = null;
+    this.selectedOrderRowId = null;
+    this.activeOrdersList = "today";
+    this.collectionScrollHandles = {
+      watchlist: VirtualListScrollHandle.new(),
+      holdings: VirtualListScrollHandle.new(),
+      "today-orders": VirtualListScrollHandle.new(),
+      "history-orders": VirtualListScrollHandle.new(),
+    };
     this.userMenuOpen = false;
     this.allocationHelpOpen = false;
     /** Which allocation wedge the pointer is over, by symbol. */
@@ -1427,6 +1506,7 @@ export default class LongbridgeApp extends View {
     this.ordersState = { status: "idle", today: [], history: [], error: "" };
     /** The order whose sheet the right-hand panel is showing, if any. */
     this.selectedOrderId = null;
+    this.selectedOrderRowId = null;
   }
 
   /** The order the detail panel is showing, or null once a reload drops it. */
@@ -1449,6 +1529,7 @@ export default class LongbridgeApp extends View {
    * @param {string} orderId @param {import("gpui").Context} cx
    */
   selectOrder(orderId, cx) {
+    this.selectedOrderRowId = orderId;
     this.selectedOrderId = this.selectedOrderId === orderId ? null : orderId;
     this.redraw(cx);
   }
@@ -1816,6 +1897,11 @@ export default class LongbridgeApp extends View {
       .on_action("workspace::watchlist", (_event, cx) => this.showPage("watchlist", cx))
       .on_action("workspace::portfolio", (_event, cx) => this.showPage("portfolio", cx))
       .on_action("workspace::orders", (_event, cx) => this.showPage("orders", cx))
+      .on_action("workspace::show-shortcuts", (_event, cx) => {
+        this.shortcutHelpOpen = true;
+        this.shortcutHelpFocus.focus();
+        this.redraw(cx);
+      })
       .on_action("workspace::reconnect", (_event, cx) => this.resume(cx))
       .when(!this.followsSystemTheme, (workspace) =>
         workspace.on_action("workspace::toggle-theme", (_event, cx) =>
@@ -1823,8 +1909,11 @@ export default class LongbridgeApp extends View {
         ),
       )
       .on_action("workspace::toggle-fullscreen", () => window.toggle_fullscreen())
-      .on_action("watchlist::next", (_event, cx) => this.stepSelection(1, cx))
-      .on_action("watchlist::previous", (_event, cx) => this.stepSelection(-1, cx))
+      .on_action("collection::next", (_event, cx) => this.stepSelection(1, cx))
+      .on_action("collection::previous", (_event, cx) => this.stepSelection(-1, cx))
+      .on_action("collection::first", (_event, cx) => this.selectCollectionBoundary(false, cx))
+      .on_action("collection::last", (_event, cx) => this.selectCollectionBoundary(true, cx))
+      .on_action("collection::activate", (_event, cx) => this.activateCollection(cx))
       .on_action("workspace::dismiss", (_event, cx) => this.dismiss(cx));
   }
 
@@ -1839,6 +1928,12 @@ export default class LongbridgeApp extends View {
    * @param {import("gpui").Context} cx
    */
   dismiss(cx) {
+    if (this.shortcutHelpOpen) {
+      this.shortcutHelpOpen = false;
+      this.workspaceFocus.focus();
+      this.redraw(cx);
+      return;
+    }
     if (this.calendarOpen) {
       this.calendarOpen = false;
       this.redraw(cx);
@@ -1918,20 +2013,112 @@ export default class LongbridgeApp extends View {
     this.redraw(cx);
   }
 
-  /**
-   * Moves the selection one row through the Watchlist as it is currently
-   * filtered and sorted, which is the order on screen rather than the order
-   * the API answered in.
-   *
-   * @param {number} delta @param {import("gpui").Context} cx
-   */
+  /** Moves the selection through the active collection's visible ordering. */
   stepSelection(delta, cx) {
-    if (this.page !== "watchlist") return;
-    const rows = filterRows(this.quotes, this.watchlistQuery, ["code", "name", "symbol"]);
+    const collection = this.activeCollection();
+    const { rows } = collection;
     if (rows.length === 0) return;
-    const current = rows.findIndex((row) => row.symbol === this.selectedSymbol);
+    const current = rows.findIndex((row) => collection.key(row) === collection.selected);
     const next = current < 0 ? 0 : Math.min(rows.length - 1, Math.max(0, current + delta));
-    this.selectQuote(rows[next].symbol, cx);
+    collection.select(collection.key(rows[next]), cx);
+    collection.scroll.scroll_to_item(next);
+  }
+
+  /** Selects the first or last row in the active visible collection. */
+  selectCollectionBoundary(last, cx) {
+    const collection = this.activeCollection();
+    const { rows } = collection;
+    if (rows.length === 0) return;
+    const index = last ? rows.length - 1 : 0;
+    const row = rows[index];
+    collection.select(collection.key(row), cx);
+    if (last) collection.scroll.scroll_to_bottom();
+    else collection.scroll.scroll_to_item(0, "top");
+  }
+
+  /** The visible rows and selection owner for the page currently on screen. */
+  activeCollection() {
+    if (this.page === "portfolio") {
+      const rows = filterRows(
+        portfolioPresentation(
+          this.holdings,
+          [...this.quotes, ...this.portfolioQuotes],
+          this.fxRates,
+        ).holdings,
+        this.holdingsQuery,
+        ["symbol", "name"],
+      );
+      return {
+        rows,
+        selected: this.selectedHoldingSymbol,
+        key: (row) => row.symbol,
+        scroll: this.collectionScrollHandles.holdings,
+        select: (symbol, cx) => {
+          this.selectedHoldingSymbol = symbol;
+          this.redraw(cx);
+        },
+      };
+    }
+    if (this.page === "orders") {
+      const today = filterRows(this.ordersState.today, this.todayOrdersQuery, ORDER_FILTER_FIELDS);
+      const history = filterRows(
+        this.ordersState.history,
+        this.historyOrdersQuery,
+        ORDER_FILTER_FIELDS,
+      );
+      const selectedInToday = today.some((row) => row.orderId === this.selectedOrderRowId);
+      const selectedInHistory = history.some((row) => row.orderId === this.selectedOrderRowId);
+      const list = selectedInHistory
+        ? "history"
+        : selectedInToday
+          ? "today"
+          : today.length
+            ? "today"
+            : "history";
+      this.activeOrdersList = list;
+      const rows = list === "today" ? today : history;
+      return {
+        rows,
+        selected: this.selectedOrderRowId,
+        key: (row) => row.orderId,
+        scroll: this.collectionScrollHandles[`${list}-orders`],
+        select: (orderId, cx) => {
+          this.selectedOrderRowId = orderId;
+          this.redraw(cx);
+        },
+      };
+    }
+    return {
+      rows: filterRows(this.quotes, this.watchlistQuery, ["code", "name", "symbol"]),
+      selected: this.selectedWatchlistSymbol ?? this.selectedSymbol,
+      key: (row) => row.symbol,
+      scroll: this.collectionScrollHandles.watchlist,
+      select: (symbol, cx) => {
+        this.selectedWatchlistSymbol = symbol;
+        this.redraw(cx);
+      },
+    };
+  }
+
+  /** Activates the selected row's primary command. */
+  activateCollection(cx) {
+    const collection = this.activeCollection();
+    const selected = collection.selected;
+    if (!selected || !collection.rows.some((row) => collection.key(row) === selected)) return;
+    if (this.page === "portfolio") {
+      if (!this.quotes.some((quote) => quote.symbol === selected)) return;
+      this.selectQuote(selected, cx);
+      this.showPage("watchlist", cx);
+      return;
+    }
+    if (this.page === "orders") {
+      this.selectedOrderRowId = selected;
+      this.selectedOrderId = selected;
+      this.redraw(cx);
+      return;
+    }
+    this.selectedWatchlistSymbol = selected;
+    this.selectQuote(selected, cx);
   }
 
   /**
@@ -1956,6 +2143,16 @@ export default class LongbridgeApp extends View {
     this.lastKeystroke = event.keystroke;
     this.keyDown = down;
     this.keyHeld = held;
+    this.redraw(cx);
+  }
+
+  /** @param {import("gpui").ModifiersChangedEvent} event @param {import("gpui").Context} cx */
+  observeModifiers(event, cx) {
+    const down = MACOS
+      ? Boolean(event.modifiers.platform)
+      : Boolean(event.modifiers.control);
+    if (down === this.primaryModifierDown) return;
+    this.primaryModifierDown = down;
     this.redraw(cx);
   }
 
@@ -1989,6 +2186,7 @@ export default class LongbridgeApp extends View {
         .track_focus(this.workspaceFocus)
         .on_key_down((event, cx) => this.observeKey(event, true, cx))
         .on_key_up((event, cx) => this.observeKey(event, false, cx))
+        .on_modifiers_changed((event, cx) => this.observeModifiers(event, cx))
         .on_mouse_down("left", (_event, cx) => this.observePointer(true, cx))
         .on_mouse_up("left", (_event, cx) => this.observePointer(false, cx)),
     )
@@ -2028,6 +2226,50 @@ export default class LongbridgeApp extends View {
               )
               .when(this.statusBarVisible, (element) => element.child(this.footer(tokens))),
           ),
+      )
+      .when(this.shortcutHelpOpen, (element) => element.child(this.shortcutHelp(tokens)));
+  }
+
+  /** The discoverable view of the same records installed by `initKeyboard`. */
+  shortcutHelp(tokens) {
+    return div()
+      .id("keyboard-shortcuts-overlay")
+      .key_context("ShortcutHelp")
+      .tab_index(0)
+      .track_focus(this.shortcutHelpFocus)
+      .on_action("shortcut-help::retain-focus", (_event, cx) => {
+        this.shortcutHelpFocus.focus();
+        cx.stop_propagation();
+      })
+      .absolute()
+      .inset_0()
+      .flex()
+      .items_center()
+      .justify_center()
+      .bg(tokens.background)
+      .child(
+        v_flex()
+          .id("keyboard-shortcuts")
+          .w(420)
+          .max_h(560)
+          .gap(tokens.spacing.sm)
+          .p(tokens.spacing.md)
+          .bg(tokens.surface)
+          .border(1)
+          .border_color(tokens.border)
+          .rounded(tokens.radius.md)
+          .child(label(tokens, "Keyboard shortcuts", 15).font_weight(700))
+          .children(
+            KEY_BINDINGS.filter((binding) => Boolean(binding.caption)).map((binding) =>
+              h_flex()
+                .items_center()
+                .justify_between()
+                .gap(tokens.spacing.md)
+                .child(label(tokens, binding.caption))
+                .child(kbd(tokens, binding.display ?? chordLabel(binding.keystroke))),
+            ),
+          )
+          .child(muted(tokens, "Press Escape to close")),
       );
   }
 
@@ -2172,6 +2414,7 @@ export default class LongbridgeApp extends View {
               .selected(selected)
               .on_click((_event, cx) => this.showPage(item.key, cx))
               .flex()
+              .relative()
               .items_center()
               .justify_center()
               .h(24)
@@ -2189,7 +2432,20 @@ export default class LongbridgeApp extends View {
           )
             .hover((style) => style.text_color(tokens.foreground))
             .focus((style) => style.text_color(tokens.foreground))
-            .child(item.caption);
+            .child(item.caption)
+            .when(this.primaryModifierDown, (tab) =>
+              tab.child(
+                div()
+                  .id(`page-${item.key}-shortcut`)
+                  .absolute()
+                  .top(1)
+                  .right(3)
+                  .text_size(9)
+                  .line_height(1)
+                  .text_color(selected ? tokens.accent_foreground : tokens.muted_foreground)
+                  .child(String(item.shortcut)),
+              ),
+            );
         }),
       );
   }
@@ -2300,8 +2556,11 @@ export default class LongbridgeApp extends View {
       "Chart",
       this.chartDetailsPanel(tokens),
       this.chartModeTabs(tokens),
+      { grow: false },
     );
-    const market = workspacePanel(tokens, "Market Detail", this.marketDetailPanel(tokens));
+    const market = workspacePanel(tokens, "Market Detail", this.marketDetailPanel(tokens), null, {
+      grow: false,
+    });
     if (!sideBySide) {
       return v_flex()
         .id("watchlist-panels-stacked")
@@ -2311,8 +2570,8 @@ export default class LongbridgeApp extends View {
         .overflow_y_scrollbar()
         .child(watchlist.h(440).flex_none())
         .child(quote.flex_none())
-        .child(chart.h(320).flex_none())
-        .child(market.h(360).flex_none());
+        .child(chart.min_h(320).flex_none())
+        .child(market.min_h(360).flex_none());
     }
 
     return h_flex()
@@ -2333,8 +2592,8 @@ export default class LongbridgeApp extends View {
           .gap(WORKSPACE_PANEL_GAP)
           .overflow_y_scrollbar()
           .child(quote.flex_none())
-          .child(chart.flex_basis(290).flex_grow(1).min_h(290))
-          .child(market.flex_basis(240).flex_grow(1).min_h(200)),
+          .child(chart.min_h(290).flex_none())
+          .child(market.min_h(200).flex_none()),
       );
   }
 
@@ -2631,12 +2890,15 @@ export default class LongbridgeApp extends View {
               quoteRow(
                 tokens,
                 quote,
-                quote.symbol === this.selectedSymbol,
+                quote.symbol === (this.selectedWatchlistSymbol ?? this.selectedSymbol),
                 index,
                 this.lastTick,
                 compact,
               ),
-            (symbol, cx) => this.selectQuote(symbol, cx),
+            (symbol, cx) => {
+              this.selectedWatchlistSymbol = symbol;
+              this.selectQuote(symbol, cx);
+            },
             this.watchlistQuery
               ? emptyPanel(tokens, "No matches", "Nothing in the watchlist matches that filter.")
               : emptyPanel(
@@ -2710,6 +2972,7 @@ export default class LongbridgeApp extends View {
               .slice(range.start, range.end)
               .map((row, offset) => renderRow(row, range.start + offset)),
         )
+          .track_scroll(this.collectionScrollHandles[id])
           .size_full()
           .when(Boolean(onSelect), (list) => list.on_item_click(onSelect)),
       )
@@ -2999,7 +3262,7 @@ export default class LongbridgeApp extends View {
       .min_w(0)
       .min_h(0)
       .bg(tokens.background)
-      .child(v_flex().flex_1().min_h(0).overflow_y_scrollbar().child(this.chartSection(tokens)));
+      .child(v_flex().child(this.chartSection(tokens)));
   }
 
   /** Compact underline interval tabs carried by the Chart Panel TitleBar. */
@@ -3054,12 +3317,10 @@ export default class LongbridgeApp extends View {
         );
     }
     return Tabs.new("chart-mode-tabs")
-      .id("chart-mode-selector")
       .axis("horizontal")
       .accessibility_label("Chart interval")
       .flex_none()
       .min_w(0)
-      .overflow_x_scroll()
       .child(
         h_flex()
           .flex_none()
@@ -3096,9 +3357,6 @@ export default class LongbridgeApp extends View {
       .child(
         quote
           ? v_flex()
-              .flex_1()
-              .min_h(0)
-              .overflow_y_scrollbar()
               .child(
                 v_flex()
                   .gap(tokens.spacing.xs)
@@ -3348,8 +3606,12 @@ export default class LongbridgeApp extends View {
               holdingRows,
               HOLDING_ROW_HEIGHT,
               holdingsHeader(tokens),
-              (holding, index) => holdingRow(tokens, holding, index),
-              null,
+              (holding, index) =>
+                holdingRow(tokens, holding, holding.symbol === this.selectedHoldingSymbol, index),
+              (symbol, cx) => {
+                this.selectedHoldingSymbol = symbol;
+                this.redraw(cx);
+              },
               this.holdingsQuery
                 ? emptyPanel(tokens, "No matches", "No holding matches that filter.")
                 : emptyPanel(
@@ -3558,7 +3820,12 @@ export default class LongbridgeApp extends View {
             ORDER_ROW_HEIGHT,
             ordersHeader(tokens, id),
             (order, index) =>
-              orderRow(tokens, order, index, order.orderId === this.selectedOrderId),
+              orderRow(
+                tokens,
+                order,
+                index,
+                order.orderId === (this.selectedOrderRowId ?? this.selectedOrderId),
+              ),
             (orderId, cx) => this.selectOrder(orderId, cx),
             this.ordersEmpty(tokens, empty),
             6,
@@ -3871,8 +4138,8 @@ export default class LongbridgeApp extends View {
    * binding deletes its hint. `chordLabel` is what turns the keymap's spelling
    * into the reader's.
    *
-   * Only what is available *here*. The two selection chords step through the
-   * Watchlist and return immediately on any other page, and Escape is only
+   * Only what is available *here*. Collection chords operate on the page on
+   * screen, and Escape is only
    * Escape while something is open to put away -- `dismiss` hands the action
    * onward when there is not. Listing either unconditionally would be listing a
    * command that does nothing, which is the one thing a hint rail must not do.
@@ -3889,9 +4156,12 @@ export default class LongbridgeApp extends View {
           return this.hasStoredTokens;
         case "workspace::toggle-theme":
           return !this.followsSystemTheme;
-        case "watchlist::next":
-        case "watchlist::previous":
-          return this.hasStoredTokens && this.page === "watchlist";
+        case "collection::next":
+        case "collection::previous":
+        case "collection::first":
+        case "collection::last":
+        case "collection::activate":
+          return this.hasStoredTokens;
         case "workspace::dismiss":
           return this.hasSomethingToDismiss();
         default:
@@ -3900,9 +4170,7 @@ export default class LongbridgeApp extends View {
           return true;
       }
     };
-    const hints = KEY_BINDINGS.filter(
-      (binding) => SHORTCUT_CAPTIONS[binding.action] && available(binding.action),
-    );
+    const hints = KEY_BINDINGS.filter((binding) => binding.caption && available(binding.action));
     return (
       h_flex()
         .items_center()
@@ -3918,8 +4186,8 @@ export default class LongbridgeApp extends View {
               .flex_none()
               .items_center()
               .gap(tokens.spacing.xs)
-              .child(kbd(tokens, chordLabel(binding.keystroke)))
-              .child(muted(tokens, SHORTCUT_CAPTIONS[binding.action])),
+              .child(kbd(tokens, binding.display ?? chordLabel(binding.keystroke)))
+              .child(muted(tokens, binding.caption)),
           ),
         )
     );
@@ -3927,7 +4195,8 @@ export default class LongbridgeApp extends View {
 
   /** Whether Escape has something of this application's to put away. */
   hasSomethingToDismiss() {
-    if (this.calendarOpen || this.userMenuOpen || this.allocationHelpOpen) return true;
+    if (this.calendarOpen || this.userMenuOpen || this.allocationHelpOpen || this.shortcutHelpOpen)
+      return true;
     if (this.rowMenu || this.addSymbolOpen) return true;
     if (this.page === "orders" && this.selectedOrderId) return true;
     return Boolean(this.pageFilter().query);

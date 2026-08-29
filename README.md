@@ -186,17 +186,26 @@ binding solves, it is what solves it.
 | `window.viewport_size`                                       | Stacks the two panes in a short window, which a resizable group cannot do by wrapping |
 | Every other `Window` read and command                        | The diagnostics popover in the footer's right corner                                  |
 
-The keymap is nine chords. Linux uses `ctrl` for application commands; macOS
-uses the corresponding `cmd` chords:
+Linux and Windows use `ctrl` for application commands; macOS uses the
+corresponding `cmd` chords. `Super` remains available to Omarchy and the window
+manager. Press `ctrl-k` (or `cmd-k`) to open the in-app shortcut reference.
 
 | Chord                            | Action                                                             |
 | -------------------------------- | ------------------------------------------------------------------ |
 | `ctrl-1` / `ctrl-2` / `ctrl-3`   | `workspace::watchlist` / `workspace::portfolio` / `workspace::orders` |
+| `ctrl-k`              | Open keyboard shortcut help                                        |
 | `ctrl-r`              | `workspace::reconnect`                                             |
 | `ctrl-t`              | `workspace::toggle-theme`                                          |
 | `ctrl-shift-f`        | `workspace::toggle-fullscreen`                                     |
-| `alt-up` / `alt-down` | `watchlist::previous` / `watchlist::next`                          |
+| `up` / `k`            | Select the previous visible row                                    |
+| `down` / `j`          | Select the next visible row                                        |
+| `home` / `g g`        | Select the first visible row                                       |
+| `end` / `shift-g`     | Select the last visible row                                        |
+| `enter` / `o`         | Open the selected row's primary view                               |
 | `escape`              | `workspace::dismiss`, handed back when there is nothing to dismiss |
+
+Keyboard row navigation scrolls only as needed to reveal the selected virtualized item;
+Home and End move the list to its corresponding boundary.
 
 ## Run
 
@@ -214,13 +223,20 @@ the API it actually exposes.
 ## Verify
 
 ```sh
-cargo test
+cargo test --locked
+cargo build --locked --release
 ```
 
 The tests execute application modules through the same QuickJS runtime used by
 the desktop host. They cover protocol codecs, stream lifecycle, market-state
 reduction, ordering invariants, capability policy, and native GPUI
 materialization.
+
+The keyboard-only acceptance probes are in `tests/app_vectors.rs`; run them on
+their own with `cargo test --test app_vectors --locked`. They dispatch real
+keystrokes through a GPUI window and cover shortcut help, page switching,
+collection navigation and activation, row actions, Tab traversal, and text
+input isolation.
 
 The surfaces in the table above are covered behaviorally rather than by
 inspection: a chord is delivered to a real window and the page changes, a right

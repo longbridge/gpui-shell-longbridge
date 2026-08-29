@@ -566,15 +566,15 @@ fn details_column_prioritizes_quote_chart_then_market() {
             // grid of readings and a disclosure -- rather than for the three
             // metric columns it used to be.
             && main.matches(".child(quote.flex_none())").count() == 2
-            && main.contains(".child(chart.flex_basis(290)")
-            && main.contains(".child(market.flex_basis(240)"),
+            && main.contains(".child(chart.min_h(290).flex_none())")
+            && main.contains(".child(market.min_h(200).flex_none())"),
         "the 6:4 layout must keep Quote, Chart and Market as ordered independent Panels"
     );
     assert!(
         main.contains("marketDetailPanel(tokens)")
-            && main.contains("overflow_y_scrollbar()")
+            && main.matches("overflow_y_scrollbar()").count() == 4
             && main.contains(".child(this.priceChart)"),
-        "Market Detail owns its tape/book scroll while Chart remains retained"
+        "only page and collection owners may scroll; detail panels delegate to their outer column"
     );
 }
 
