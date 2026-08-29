@@ -1676,6 +1676,18 @@ fn stock_details_lead_with_the_price_and_fold_their_secondary_readings(cx: &mut 
             && rendered.contains(":on_scroll_wheel(fn)"),
         "{rendered}"
     );
+    // A new interval or a new instrument replaces every point at once, so the
+    // plot fades between them rather than switching: held back while the
+    // request is out, brought up when it lands, on the one curve.
+    let plot = rendered
+        .split_once("div :id[Str(\"price-chart-wheel\")]")
+        .map(|(_, section)| section.lines().next().unwrap_or_default())
+        .expect("the plot");
+    assert!(
+        plot.contains(".opacity[Number(1.0)]")
+            && plot.contains(":transition(opacity, 150ms, 0ms, ease-out)"),
+        "a settled plot is drawn at full strength, and animates:\n{plot}"
+    );
 
     // The retained chart child is still a child, and still not rebuilt here.
     assert!(rendered.contains("child_view #"), "{rendered}");

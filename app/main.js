@@ -710,13 +710,25 @@ export default class LongbridgeApp extends View {
     this.priceChart = cx.new(PriceChartView, props);
   }
 
+  /**
+   * What the chart is doing about the instrument now selected.
+   *
+   * The retained child is told this, and the panel around it reads the same
+   * answer -- a plot showing yesterday's symbol while today's is on the way is
+   * the one case the two of them must agree about.
+   */
+  chartActivity() {
+    const symbol = this.selectedSymbol ?? "";
+    if (this.chartState.symbol === symbol) return this.chartState.state;
+    return symbol ? "loading" : "idle";
+  }
+
   /** The complete immutable input snapshot the child needs to render the chart. */
   chartProps() {
     const symbol = this.selectedSymbol ?? "";
     const mode = this.activeChartMode();
     const candles = symbol ? this.cachedChartSeries(symbol) : EMPTY_CANDLES;
-    const state =
-      this.chartState.symbol === symbol ? this.chartState.state : symbol ? "loading" : "idle";
+    const state = this.chartActivity();
     const chartSeries =
       mode === "intraday"
         ? compactIntradaySeriesForView(prepareIntradaySeries(candles), PRICE_CHART_LAYOUT)
@@ -1027,9 +1039,13 @@ export default class LongbridgeApp extends View {
     this.symbolInput = InputState.new({ placeholder: "AAPL.US" });
     this.symbolInput.on("change", (_event, cx) => {
       this.symbolQuery = this.symbolInput.value();
-      if (this.addSymbolError) this.addSymbolError = "";
+      if (this.addSymbolError) {
+        this.addSymbolError = "";
+        this.refreshDialog();
+      }
+      // The field draws its own value from its retained state, so what needs a
+      // redraw is what is said about the value, not the value.
       this.previewSymbol(cx);
-      this.redraw(cx);
     });
   }
 
@@ -1514,20 +1530,21 @@ export default class LongbridgeApp extends View {
   previewSymbol(cx) {
     const { symbol } = symbolFromInput(this.symbolQuery);
     if (!symbol) {
+      if (this.symbolPreview.status === "idle") return;
       this.symbolPreviewGeneration += 1;
-      this.symbolPreview = { status: "idle", symbol: "", error: "" };
+      this.setSymbolPreview({ status: "idle", symbol: "", error: "" });
       return;
     }
     if (this.symbolPreview.symbol === symbol && this.symbolPreview.status !== "error") return;
     const generation = ++this.symbolPreviewGeneration;
-    this.symbolPreview = { status: "loading", symbol, error: "" };
+    this.setSymbolPreview({ status: "loading", symbol, error: "" });
     const stream = this.stream;
     if (!stream) {
-      this.symbolPreview = {
+      this.setSymbolPreview({
         status: "error",
         symbol,
         error: "Not connected. Reconnect to look this symbol up.",
-      };
+      });
       return;
     }
     cx.spawn(async (cx) => {
@@ -1539,19 +1556,18 @@ export default class LongbridgeApp extends View {
         if (generation !== this.symbolPreviewGeneration) return;
         const info = statics.find((entry) => entry.symbol === symbol) ?? statics[0];
         if (!info || !info.symbol) {
-          this.symbolPreview = {
+          this.setSymbolPreview({
             status: "error",
             symbol,
             error: `No security is called ${symbol}.`,
-          };
-          this.redraw(cx);
+          });
           return;
         }
         const quote = quotes.find((entry) => entry.symbol === symbol) ?? quotes[0] ?? {};
         const [row] = applyQuotes(initialQuotes([{ symbol, code: symbol.split(".")[0] }]), [
           { ...quote, symbol },
         ]);
-        this.symbolPreview = {
+        this.setSymbolPreview({
           status: "ready",
           symbol,
           name: info.nameEn || info.nameCn || info.nameHk || symbol,
@@ -1561,16 +1577,15 @@ export default class LongbridgeApp extends View {
           change: row?.change ?? "--",
           changePercent: row?.changePercent ?? "--",
           error: "",
-        };
+        });
       } catch (failure) {
         if (generation !== this.symbolPreviewGeneration) return;
-        this.symbolPreview = {
+        this.setSymbolPreview({
           status: "error",
           symbol,
           error: failure instanceof Error ? failure.message : String(failure),
-        };
+        });
       }
-      this.redraw(cx);
     });
   }
 
@@ -1597,12 +1612,12 @@ export default class LongbridgeApp extends View {
           : "This account has no watchlist group to add to.";
     if (refused) {
       this.addSymbolError = refused;
-      this.redraw(cx);
+      this.refreshDialog();
       return;
     }
     this.addSymbolPending = true;
     this.addSymbolError = "";
-    this.redraw(cx);
+    this.refreshDialog();
     cx.spawn(async (cx) => {
       try {
         await put("/v1/watchlist/groups", {
@@ -1629,7 +1644,7 @@ export default class LongbridgeApp extends View {
       } catch (failure) {
         this.addSymbolPending = false;
         this.addSymbolError = failure instanceof Error ? failure.message : String(failure);
-        this.redraw(cx);
+        this.refreshDialog();
       }
     });
   }
@@ -2374,6 +2389,27 @@ export default class LongbridgeApp extends View {
     this.redraw(cx);
   }
 
+  /**
+   * Redraws the open dialog.
+   *
+   * A dialog is its own view, built from a function the shell calls when *it*
+   * renders -- so `cx.notify()` here reaches the workspace and never the
+   * dialog, which is how a typed symbol could be previewed into a panel nobody
+   * was drawing. There is no handle to notify instead: `open_dialog` answers a
+   * depth, not a view. `window.refresh()` is the case its own documentation
+   * names, and it is called on a change to what the dialog says -- three times
+   * for a typed symbol, not once per keystroke.
+   */
+  refreshDialog() {
+    if (this.addSymbolOpen) window.refresh();
+  }
+
+  /** Publishes a preview, and redraws the dialog that is showing it. */
+  setSymbolPreview(preview) {
+    this.symbolPreview = preview;
+    this.refreshDialog();
+  }
+
   /** Drops what the dialog was holding, without touching the shell's stack. */
   forgetAddSymbol() {
     this.addSymbolOpen = false;
@@ -3108,20 +3144,29 @@ export default class LongbridgeApp extends View {
         .py(tokens.spacing.sm)
         .gap(tokens.spacing.sm)
         .child(
-          div()
-            .id("price-chart-wheel")
-            .flex_1()
-            .min_h(244)
-            // A wheel over the chart walks the window a day at a time. The
-            // handler reads `delta.y` in pixels, which is what every device
-            // reports; `delta_lines` is only there when one reported lines.
-            .on_scroll_wheel((event, cx) => {
-              const step = event.delta.y > 0 ? -1 : event.delta.y < 0 ? 1 : 0;
-              if (step === 0) return;
-              const next = shiftDay(end, step);
-              this.setChartEnd(next > today ? null : next, cx);
-            })
-            .child(this.priceChart),
+          // The plot fades rather than switching. A new interval or a new
+          // instrument replaces every point on it at once, and a plot that
+          // snapped from one series to another read as a glitch rather than as
+          // an answer; held back while the request is out and brought up when
+          // it lands, the same 150ms as everything else, it reads as one.
+          motion(
+            div()
+              .id("price-chart-wheel")
+              .flex_1()
+              .min_h(244)
+              .opacity(this.chartActivity() === "ready" ? 1 : 0.45)
+              // A wheel over the chart walks the window a day at a time. The
+              // handler reads `delta.y` in pixels, which is what every device
+              // reports; `delta_lines` is only there when one reported lines.
+              .on_scroll_wheel((event, cx) => {
+                const step = event.delta.y > 0 ? -1 : event.delta.y < 0 ? 1 : 0;
+                if (step === 0) return;
+                const next = shiftDay(end, step);
+                this.setChartEnd(next > today ? null : next, cx);
+              })
+              .child(this.priceChart),
+            "opacity",
+          ),
         )
     );
   }
