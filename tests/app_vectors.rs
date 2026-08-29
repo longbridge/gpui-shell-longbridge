@@ -1405,9 +1405,22 @@ fn allocation_donut_folds_past_the_available_theme_palette(cx: &mut TestAppConte
     // Pointing at a legend row lights its wedge and fades the others back. A
     // wedge cannot be pointed at directly -- every one of them is painted into
     // the same square -- so the row is the handle, and it carries the handler.
+    // The handler is on a plain element covering the row rather than on the
+    // row: a table part carries its click and its hover styles, and an
+    // `on_hover` written on one is dropped on the way through.
     assert!(
-        rendered.contains(":on_hover(fn)") && rendered.contains("allocation-row-USD-A.US"),
+        rendered.contains(
+            r#"div :id[Str("allocation-hover-USD-A.US")] .absolute .inset_0 :on_hover(fn)"#
+        ),
         "a legend row is the wedge's handle:\n{rendered}"
+    );
+    // The ring is a handle too, and the only one that can answer for a wedge:
+    // every wedge is painted into this same box, so what the box reports is
+    // where the pointer is, and `allocationSliceAt` says which wedge that is.
+    assert!(
+        rendered.contains(r#":id[Str("allocation-ring-USD")]"#)
+            && rendered.contains(":on_mouse_move(fn)"),
+        "the ring answers the pointer directly:\n{rendered}"
     );
     assert_eq!(
         rendered.matches(".opacity[Number(0.4)]").count(),

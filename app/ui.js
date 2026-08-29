@@ -34,7 +34,7 @@ import { formatMarketDate, formatMarketTime } from "./chart.js";
 import { validDepthLevel } from "./market_detail.js";
 import { tradeIdentity, tradeVolumeRatio } from "./market_detail.js";
 import { allocationColor, avatarColor, changeTone, statusColors, valueTone } from "./palette.js";
-import { foldAllocationSlices } from "./portfolio.js";
+import { allocationSliceAt, foldAllocationSlices } from "./portfolio.js";
 
 /**
  * The one transition this interface uses. A terminal answers immediately; the
@@ -490,17 +490,22 @@ export function popoverSurface(tokens, options = {}) {
  * @param {number} [width]
  */
 export function filterInput(tokens, state, width = 180) {
-  return Input.new(state)
-    .w(width)
-    .h(26)
-    .px(tokens.spacing.sm)
-    .rounded(tokens.radius.sm)
-    .border(1)
-    .border_color(tokens.border)
-    .bg(tokens.surface)
-    .text_size(11)
-    .text_color(tokens.foreground)
-    .focus((style) => style.border_color(tokens.ring));
+  return (
+    Input.new(state)
+      .w(width)
+      // The height of every other control a title row carries -- the interval
+      // tabs, the icon buttons -- because that row is 30px and a 26px field in it
+      // sat on both its edges at once.
+      .h(22)
+      .px(tokens.spacing.xs)
+      .rounded(tokens.radius.sm)
+      .border(1)
+      .border_color(tokens.border)
+      .bg(tokens.surface)
+      .text_size(11)
+      .text_color(tokens.foreground)
+      .focus((style) => style.border_color(tokens.ring))
+  );
 }
 
 /**
@@ -1102,6 +1107,9 @@ export function quoteDetail(tokens, quote, now = Date.now(), pulseOpacity = 1, d
 // ring, which would otherwise leave a gap in a solid circle.
 const WEDGE_GAP_RADIANS = 0.02;
 
+/** The ring's drawn size. `allocationSliceAt` measures the pointer against it. */
+const RING_SIZE = 148;
+
 /**
  * One wedge.
  *
@@ -1173,7 +1181,7 @@ export function allocationChart(tokens, group, pointer = {}) {
       TableBody.new(`allocation-${group.currency}-body`).children(
         slices.map((slice, index) =>
           TableRow.new(`allocation-${group.currency}-${slice.symbol}`, index + 1)
-            .id(`allocation-row-${group.currency}-${slice.symbol}`)
+            .relative()
             .flex()
             .items_center()
             .py(tokens.spacing.xs)
@@ -1183,9 +1191,6 @@ export function allocationChart(tokens, group, pointer = {}) {
             .border_color(tokens.border)
             .bg(hovered === slice.symbol ? tokens.accent : tokens.surface)
             .transition("opacity", MOTION)
-            .when(Boolean(onHover), (row) =>
-              row.on_hover((over, cx) => onHover(over ? slice.symbol : null, cx)),
-            )
             .child(
               TableCell.new(`allocation-name-${slice.symbol}`, 1)
                 .flex()
@@ -1212,6 +1217,20 @@ export function allocationChart(tokens, group, pointer = {}) {
                 .w(64)
                 .text_right()
                 .child(numeric(tokens, `${slice.percent.toFixed(1)}%`, 11)),
+            )
+            // The handler is on a plain element covering the row, not on the
+            // row: a table part carries its click and its hover *styles*, and
+            // an `on_hover` written on one is dropped on the way through. The
+            // sheet is transparent and takes nothing away from the cells under
+            // it, which answer to nothing.
+            .when(Boolean(onHover), (row) =>
+              row.child(
+                div()
+                  .id(`allocation-hover-${group.currency}-${slice.symbol}`)
+                  .absolute()
+                  .inset_0()
+                  .on_hover((over, cx) => onHover(over ? slice.symbol : null, cx)),
+              ),
             ),
         ),
       ),
@@ -1232,10 +1251,30 @@ export function allocationChart(tokens, group, pointer = {}) {
         .gap(tokens.spacing.lg)
         .child(
           div()
+            .id(`allocation-ring-${group.currency}`)
             .relative()
-            .w(148)
-            .h(148)
+            .w(RING_SIZE)
+            .h(RING_SIZE)
             .flex_none()
+            .when(Boolean(onHover), (ring) =>
+              ring
+                // A wedge cannot carry the handler -- every wedge is painted
+                // into this same box, so all of them would report themselves
+                // at once. The box carries it, and `allocationSliceAt` says
+                // which wedge the pointer is actually over.
+                .on_mouse_move((event, cx) =>
+                  onHover(
+                    allocationSliceAt(slices, group.total, event.local_position, {
+                      width: RING_SIZE,
+                      height: RING_SIZE,
+                    }),
+                    cx,
+                  ),
+                )
+                .on_hover((over, cx) => {
+                  if (!over) onHover(null, cx);
+                }),
+            )
             .children(
               slices.map((slice, index) =>
                 donutSlice(

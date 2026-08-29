@@ -1,6 +1,7 @@
 import { View } from "gpui";
 import {
   allocationInUsd,
+  allocationSliceAt,
   foldAllocationSlices,
   normalizeUsdRates,
   portfolioPresentation,
@@ -149,5 +150,64 @@ if (
   JSON.stringify(allocationInUsd(indexedHoldings, concatenated, rates))
 )
   throw new Error("a shared quote index allocates identically");
+
+// Three wedges -- a quarter, a quarter and a half -- drawn from twelve
+// o'clock. The point of these is that where the pointer says it is matches
+// where the path was drawn: a wedge cannot be hovered by asking the runtime,
+// because every wedge is painted into the same square.
+const ringSlices = [
+  { symbol: "A.US", value: 25 },
+  { symbol: "B.US", value: 25 },
+  { symbol: "C.US", value: 50 },
+];
+const ringBox = { width: 148, height: 148 };
+const quarterTurn = Math.PI / 2;
+const ringPoint = (angle, radius) => ({
+  x: 74 + Math.cos(angle - Math.PI / 2) * ((radius / 50) * 74),
+  y: 74 + Math.sin(angle - Math.PI / 2) * ((radius / 50) * 74),
+});
+const ringCases = [
+  [
+    allocationSliceAt(ringSlices, 100, ringPoint(quarterTurn * 0.5, 40), ringBox) === "A.US",
+    "the first wedge starts at twelve o'clock and runs clockwise",
+  ],
+  [
+    allocationSliceAt(ringSlices, 100, ringPoint(quarterTurn * 1.5, 40), ringBox) === "B.US",
+    "the second quarter is the second wedge",
+  ],
+  [
+    allocationSliceAt(ringSlices, 100, ringPoint(Math.PI * 1.5, 40), ringBox) === "C.US",
+    "the half that closes the ring is the third wedge",
+  ],
+  [
+    allocationSliceAt(ringSlices, 100, { x: 74, y: 74 }, ringBox) === null,
+    "the hole in the middle is not a wedge",
+  ],
+  [
+    // The rim reaches the box's edges, so past it is a corner.
+    allocationSliceAt(ringSlices, 100, { x: 2, y: 2 }, ringBox) === null,
+    "past the rim is not a wedge",
+  ],
+  [
+    allocationSliceAt(ringSlices, 100, ringPoint(0.5, 40), { width: 0, height: 0 }) === null &&
+      allocationSliceAt([], 100, ringPoint(0.5, 40), ringBox) === null &&
+      allocationSliceAt(ringSlices, 0, ringPoint(0.5, 40), ringBox) === null,
+    "a ring with no size, no slices or no total is under nothing",
+  ],
+  [
+    allocationSliceAt(
+      [
+        { symbol: "A.US", value: 25 },
+        { symbol: "Z.US", value: 0 },
+        { symbol: "C.US", value: 75 },
+      ],
+      100,
+      ringPoint(quarterTurn * 1.5, 40),
+      ringBox,
+    ) === "C.US",
+    "a wedge with no value is not drawn and cannot be pointed at",
+  ],
+];
+for (const [held, message] of ringCases) if (!held) throw new Error(message);
 
 export default class PortfolioVectorProbe extends View {}
