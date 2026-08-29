@@ -141,6 +141,66 @@ export function portfolioPresentation(holdings, quotes, rates = new Map([["USD",
 }
 
 /**
+ * The ring's geometry, as a share of the box it is painted in.
+ *
+ * Held here rather than in the drawing, because a wedge is now two things: a
+ * path, and an answer to where the pointer is. Both have to agree, and one
+ * definition is how they do.
+ */
+export const ALLOCATION_RING = Object.freeze({ inner: 29, outer: 50, start: -Math.PI / 2 });
+
+/**
+ * Which wedge a point falls in, or `null` for none.
+ *
+ * A wedge cannot be hovered by asking the runtime: every wedge is painted into
+ * the same square, so the box a pointer is over is the whole ring and every
+ * wedge would report itself at once. What the ring can be asked is where the
+ * pointer *is*, and the wedge under it is arithmetic from there -- the same
+ * arithmetic the paths are drawn from, which is why the radii and the starting
+ * angle are shared rather than repeated.
+ *
+ * The hole in the middle and everything past the rim are not wedges, which is
+ * what makes a ring drawn inside a square hoverable at all.
+ *
+ * @param {readonly { symbol: string, value: number }[]} slices In drawing order.
+ * @param {number} total
+ * @param {{ x: number, y: number }} point Element-local, in pixels.
+ * @param {{ width: number, height: number }} bounds The ring's own box.
+ * @returns {string | null}
+ */
+export function allocationSliceAt(slices, total, point, bounds) {
+  const width = Number(bounds?.width);
+  const height = Number(bounds?.height);
+  const x = Number(point?.x);
+  const y = Number(point?.y);
+  if (![width, height, x, y].every(Number.isFinite) || width <= 0 || height <= 0) return null;
+  if (!Array.isArray(slices) || slices.length === 0 || !(total > 0)) return null;
+
+  // Percentages of the half-box, which is what the path builder works in.
+  const dx = ((x - width / 2) / (width / 2)) * 50;
+  const dy = ((y - height / 2) / (height / 2)) * 50;
+  const radius = Math.hypot(dx, dy);
+  if (radius < ALLOCATION_RING.inner || radius > ALLOCATION_RING.outer) return null;
+
+  const turn = Math.PI * 2;
+  let angle = Math.atan2(dy, dx) - ALLOCATION_RING.start;
+  angle = ((angle % turn) + turn) % turn;
+  const reached = (angle / turn) * total;
+  let offset = 0;
+  for (const slice of slices) {
+    const value = Number(slice?.value);
+    if (!Number.isFinite(value) || value <= 0) continue;
+    offset += value;
+    if (reached < offset) return typeof slice.symbol === "string" ? slice.symbol : null;
+  }
+  // Rounding at the very end of the last wedge: the pointer is on the ring, so
+  // it is on the wedge that closes it.
+  const last = [...slices].reverse().find((slice) => Number(slice?.value) > 0);
+  return typeof last?.symbol === "string" ? last.symbol : null;
+}
+
+/**
+ * Ranks an allocation by market value and folds the tail into one "Other"./**
  * Ranks an allocation by market value and folds the tail into one "Other".
  *
  * A donut says which holding a wedge is with color alone, so the palette has to

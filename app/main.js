@@ -28,7 +28,7 @@ import {
   loadTokens,
   pollDeviceAuthorization,
 } from "./auth.js";
-import { get } from "./http.js";
+import { get, put } from "./http.js";
 import {
   applyQuotes,
   filterRows,
@@ -49,14 +49,28 @@ import {
 } from "./chart_modes.js";
 import { PERIOD, TRADE_SESSION } from "./protocol.js";
 import { depthRatio, mergeTrades, normalizeDepth, validDepthLevel } from "./market_detail.js";
+import { HISTORY_WINDOW_DAYS, historyRange, normalizeOrders } from "./orders.js";
+import {
+  addTargetGroup,
+  groupRequestId,
+  groupsHolding,
+  symbolFromInput,
+  watchlistGroups,
+} from "./watchlist_edit.js";
 import { allocationInUsd, normalizeUsdRates, portfolioPresentation } from "./portfolio.js";
 import PriceChartView, {
   PRICE_CHART_LAYOUT,
   compactIntradaySeriesForView,
 } from "./price_chart_view.js";
 import { loadFpsVisible, saveFpsVisible } from "./fps_preference.js";
+import { DEFAULT_CHART_MODE, loadChartMode, saveChartMode } from "./chart_mode_preference.js";
 import { omarchyBaseColors, omarchyMarketColors, omarchyTheme } from "./system_theme.js";
-import { setOmarchyAvatarColors, setOmarchyMarketColors, statusColors } from "./palette.js";
+import {
+  changeTone,
+  setOmarchyAvatarColors,
+  setOmarchyMarketColors,
+  statusColors,
+} from "./palette.js";
 import {
   action,
   allocationChart,
@@ -77,8 +91,14 @@ import {
   step,
   menuItem,
   menuTrigger,
+  iconAction,
+  ORDER_ROW_HEIGHT,
+  orderDetail,
+  orderRow,
+  ordersHeader,
   calendarGrid,
   muted,
+  numeric,
   panel,
   popoverSurface,
   sessionAvatar,
@@ -134,13 +154,6 @@ function responsivePanelWidths(viewportWidth) {
  * finishes at all -- see `armConnectDeadline`.
  */
 const CONNECT_DEADLINE_MS = 30_000;
-
-/**
- * Every card heading is this tall, so two side by side line up whatever is in
- * them. A 24px control in one and a line of text in the other is otherwise two
- * different heights.
- */
-const CARD_HEADER_HEIGHT = 38;
 
 /** How often the chart's live tail may cross the nested-view bridge. */
 const CHART_PUBLISH_INTERVAL_MS = 500;
@@ -216,6 +229,7 @@ const TITLE_BAR_LEADING = MACOS ? 96 : 8;
 const PAGES = Object.freeze([
   { key: "watchlist", caption: "Watchlist" },
   { key: "portfolio", caption: "Portfolio" },
+  { key: "orders", caption: "Orders" },
 ]);
 
 /**
@@ -238,6 +252,23 @@ function motion(element, property) {
 const NARROW_VIEWPORT = 960;
 const COMPACT_WATCHLIST_WIDTH = 440;
 
+/**
+ * How tall Today Orders is: its own rows, to a ceiling of five of them.
+ *
+ * The list is short by nature -- what is working right now -- and most days it
+ * is empty. Given a fixed share of the page it spent that share on nothing,
+ * and then gave it all back the moment the day's orders arrived, which is a
+ * page that jumps. Sized from its rows it is only ever as tall as it has
+ * something to say, and the history underneath keeps the rest.
+ */
+const TODAY_ORDERS_VISIBLE_ROWS = 5;
+
+/** A panel's toolbar, hairline, column heads and its own border. */
+const ORDERS_PANEL_CHROME = 69;
+
+/** What the Orders filter narrows on: the instrument, and how an order went. */
+const ORDER_FILTER_FIELDS = Object.freeze(["symbol", "name", "statusLabel", "sideLabel"]);
+
 /** How many holdings one page of the Holdings panel shows. */
 
 /**
@@ -256,6 +287,7 @@ const PRIMARY_MODIFIER = MACOS ? "cmd" : "ctrl";
 export const KEY_BINDINGS = Object.freeze([
   { keystroke: `${PRIMARY_MODIFIER}-1`, action: "workspace::watchlist", context: "Workspace" },
   { keystroke: `${PRIMARY_MODIFIER}-2`, action: "workspace::portfolio", context: "Workspace" },
+  { keystroke: `${PRIMARY_MODIFIER}-3`, action: "workspace::orders", context: "Workspace" },
   { keystroke: `${PRIMARY_MODIFIER}-r`, action: "workspace::reconnect", context: "Workspace" },
   { keystroke: `${PRIMARY_MODIFIER}-t`, action: "workspace::toggle-theme", context: "Workspace" },
   {
@@ -320,6 +352,7 @@ export function chordLabel(keystroke) {
 const SHORTCUT_CAPTIONS = Object.freeze({
   "workspace::watchlist": "Watchlist",
   "workspace::portfolio": "Portfolio",
+  "workspace::orders": "Orders",
   "workspace::reconnect": "Reconnect",
   "workspace::toggle-theme": "Switch theme",
   "workspace::toggle-fullscreen": "Full screen",
@@ -425,6 +458,8 @@ export default class LongbridgeApp extends View {
       this.redraw(cx);
     });
     this.instruments = [];
+    /** The account's editable watchlist groups, as the list was last read. */
+    this.groups = [];
     this.quotes = [];
     this.portfolioQuotes = [];
     this.selectedSymbol = null;
@@ -438,6 +473,7 @@ export default class LongbridgeApp extends View {
     this.fxRates = new Map([["USD", 1]]);
     /** @type {LongbridgeHoldingRow[]} */
     this.holdings = [];
+    this.initOrdersState();
     this.error = "";
     this.streamError = "";
     this.stream = null;
@@ -555,18 +591,20 @@ export default class LongbridgeApp extends View {
     });
   }
 
-  /** Initializes session-only chart selection and its bounded response cache. */
+  /** Restores the chosen chart interval, and opens its bounded response cache. */
   initChartModeState() {
-    // This deliberately never reads or writes localStorage: a chosen chart
-    // mode belongs to this running application session, not the login session.
-    this.chartMode = "5D";
+    // The interval is remembered; the responses are not. An interval is how
+    // someone reads a market -- the same choice for every symbol and every
+    // session -- so it survives a restart, while the candles behind it are a
+    // cache belonging to this running application.
+    this.chartMode = loadChartMode();
     this.chartModeMenuOpen = false;
     this.chartCache = new Map();
   }
 
   /** @returns {keyof typeof CHART_MODES} */
   activeChartMode() {
-    return CHART_MODES[this.chartMode] ? this.chartMode : "5D";
+    return CHART_MODES[this.chartMode] ? this.chartMode : DEFAULT_CHART_MODE;
   }
 
   chartIdentityEndDate() {
@@ -618,8 +656,12 @@ export default class LongbridgeApp extends View {
   setChartMode(mode, cx) {
     if (!CHART_MODES[mode] || mode === this.activeChartMode()) return;
     this.chartMode = mode;
+    // Written after the paint is asked for, not before it: the choice is on
+    // screen at the next frame whatever the store does, and a slow flush
+    // cannot hold up the chart it selected.
     this.loadSelectedChart(cx);
     this.redraw(cx);
+    cx.spawn(async () => saveChartMode(mode));
   }
 
   /** Invalidates only the currently visible request from the session cache. */
@@ -668,13 +710,25 @@ export default class LongbridgeApp extends View {
     this.priceChart = cx.new(PriceChartView, props);
   }
 
+  /**
+   * What the chart is doing about the instrument now selected.
+   *
+   * The retained child is told this, and the panel around it reads the same
+   * answer -- a plot showing yesterday's symbol while today's is on the way is
+   * the one case the two of them must agree about.
+   */
+  chartActivity() {
+    const symbol = this.selectedSymbol ?? "";
+    if (this.chartState.symbol === symbol) return this.chartState.state;
+    return symbol ? "loading" : "idle";
+  }
+
   /** The complete immutable input snapshot the child needs to render the chart. */
   chartProps() {
     const symbol = this.selectedSymbol ?? "";
     const mode = this.activeChartMode();
     const candles = symbol ? this.cachedChartSeries(symbol) : EMPTY_CANDLES;
-    const state =
-      this.chartState.symbol === symbol ? this.chartState.state : symbol ? "loading" : "idle";
+    const state = this.chartActivity();
     const chartSeries =
       mode === "intraday"
         ? compactIntradaySeriesForView(prepareIntradaySeries(candles), PRICE_CHART_LAYOUT)
@@ -937,7 +991,22 @@ export default class LongbridgeApp extends View {
   initInteractionState() {
     this.userMenuOpen = false;
     this.allocationHelpOpen = false;
+    /** Which allocation wedge the pointer is over, by symbol. */
+    this.hoveredAllocation = null;
+    this.todayOrdersQuery = "";
+    this.historyOrdersQuery = "";
+    this.symbolQuery = "";
+    /** The add-a-security surface, and the row menu, are the view's own. */
+    this.addSymbolOpen = false;
+    this.addSymbolPending = false;
+    this.addSymbolError = "";
+    /** @type {{ status: "idle" | "loading" | "ready" | "error", symbol: string, name: string, exchange: string, currency: string, last: string, change: string, changePercent: string, error: string }} */
+    this.symbolPreview = { status: "idle", symbol: "", error: "" };
+    this.symbolPreviewGeneration = 0;
+    /** @type {{ symbol: string, x: number, y: number } | null} */
+    this.rowMenu = null;
     /** Which stock-detail sections are expanded. */
+    this.detailSections = { more: false };
     this.watchlistQuery = "";
     this.holdingsQuery = "";
     this.watchlistFilter = InputState.new({ placeholder: "Filter watchlist" });
@@ -949,6 +1018,34 @@ export default class LongbridgeApp extends View {
     this.holdingsFilter.on("change", (_event, cx) => {
       this.holdingsQuery = this.holdingsFilter.value();
       this.redraw(cx);
+    });
+    // A filter each, rather than one serving both. The two lists answer
+    // different questions -- what is working now, and what an account has done
+    // -- and a shared box made narrowing the long one hide the short one at
+    // the same time. It is also one `InputState` per `Input`: a single state
+    // drawn in two panels is one control rendered twice.
+    this.todayOrdersFilter = InputState.new({ placeholder: "Filter orders" });
+    this.todayOrdersFilter.on("change", (_event, cx) => {
+      this.todayOrdersQuery = this.todayOrdersFilter.value();
+      this.redraw(cx);
+    });
+    this.historyOrdersFilter = InputState.new({ placeholder: "Filter orders" });
+    this.historyOrdersFilter.on("change", (_event, cx) => {
+      this.historyOrdersQuery = this.historyOrdersFilter.value();
+      this.redraw(cx);
+    });
+    // The one text state that is not a filter: what a filter narrows is
+    // already here, and this names something that is not yet.
+    this.symbolInput = InputState.new({ placeholder: "AAPL.US" });
+    this.symbolInput.on("change", (_event, cx) => {
+      this.symbolQuery = this.symbolInput.value();
+      if (this.addSymbolError) {
+        this.addSymbolError = "";
+        this.refreshDialog();
+      }
+      // The field draws its own value from its retained state, so what needs a
+      // redraw is what is said about the value, not the value.
+      this.previewSymbol(cx);
     });
   }
 
@@ -998,6 +1095,10 @@ export default class LongbridgeApp extends View {
     this.status = { state: "restoring_token" };
     this.error = "";
     this.streamError = "";
+    // Orders are read rather than streamed, so a reconnect has to ask for them
+    // again -- but only where they are on screen, since the page asks for them
+    // itself on the way in.
+    if (this.page === "orders") this.loadOrders(cx);
     this.redraw(cx);
     cx.spawn(async (cx) => {
       try {
@@ -1073,8 +1174,10 @@ export default class LongbridgeApp extends View {
     this.armConnectDeadline(cx, generation);
     this.redraw(cx);
 
-    const instruments = watchlistInstruments(await get("/v1/watchlist/groups"));
+    const watchlist = await get("/v1/watchlist/groups");
+    const instruments = watchlistInstruments(watchlist);
     if (generation !== this.streamGeneration) return;
+    this.groups = watchlistGroups(watchlist);
     this.instruments = instruments;
     this.quotes = sortLikeTerminal(initialQuotes(instruments), Date.now());
     this.selectedSymbol = instruments[0]?.symbol ?? null;
@@ -1309,6 +1412,294 @@ export default class LongbridgeApp extends View {
     this.redraw(cx);
   }
 
+  /**
+   * The orders the account has, and how the reading of them went.
+   *
+   * Held as one value rather than three fields because a panel draws all of
+   * it at once: a list that is loading, one that failed, and one that is
+   * simply empty are three different things to say and the status is what
+   * separates them. Bumping the generation invalidates whatever is in flight,
+   * which is what makes signing out safe while a read is outstanding.
+   */
+  initOrdersState() {
+    this.ordersGeneration = (this.ordersGeneration ?? 0) + 1;
+    /** @type {LongbridgeOrdersState} */
+    this.ordersState = { status: "idle", today: [], history: [], error: "" };
+    /** The order whose sheet the right-hand panel is showing, if any. */
+    this.selectedOrderId = null;
+  }
+
+  /** The order the detail panel is showing, or null once a reload drops it. */
+  selectedOrder() {
+    if (!this.selectedOrderId) return null;
+    return (
+      [...this.ordersState.today, ...this.ordersState.history].find(
+        (order) => order.orderId === this.selectedOrderId,
+      ) ?? null
+    );
+  }
+
+  /**
+   * Opens an order's sheet, or closes the one already open for it.
+   *
+   * A second click on the row that opened the panel closes it, so the row is
+   * the control for its own detail rather than something that can only ever
+   * open one.
+   *
+   * @param {string} orderId @param {import("gpui").Context} cx
+   */
+  selectOrder(orderId, cx) {
+    this.selectedOrderId = this.selectedOrderId === orderId ? null : orderId;
+    this.redraw(cx);
+  }
+
+  /**
+   * Reads both order lists, on the page that shows them.
+   *
+   * Orders are not streamed -- there is no push channel for them in the quote
+   * protocol -- so this is a read, and the page asks for it when it opens and
+   * when the session reconnects rather than on a timer nobody asked for.
+   *
+   * @param {import("gpui").Context} cx
+   */
+  loadOrders(cx) {
+    if (!this.hasStoredTokens) return;
+    const generation = (this.ordersGeneration ?? 0) + 1;
+    this.ordersGeneration = generation;
+    this.ordersState = { ...this.ordersState, status: "loading", error: "" };
+    this.redraw(cx);
+    cx.spawn(async (cx) => {
+      try {
+        const { today, history } = await this.refreshOrders();
+        if (generation !== this.ordersGeneration) return;
+        this.ordersState = { status: "ready", today, history, error: "" };
+      } catch (error) {
+        if (generation !== this.ordersGeneration) return;
+        this.ordersState = {
+          ...this.ordersState,
+          status: "error",
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+      this.redraw(cx);
+    });
+  }
+
+  async refreshOrders() {
+    // Sequential for the same reason the portfolio reads are: two requests
+    // that discover an expired access token together would rotate the refresh
+    // token twice.
+    const today = normalizeOrders(await get("/v1/trade/order/today"));
+    const history = normalizeOrders(await get("/v1/trade/order/history", historyRange()));
+    return { today, history };
+  }
+
+  /**
+   * Reads the watchlist again, keeping the prices already on screen.
+   *
+   * A quote is a running value, not a property of the list, so a row that was
+   * already there keeps the one it has: rebuilding from `initialQuotes` alone
+   * would blank every price on the screen each time a security was added.
+   */
+  async refreshWatchlist() {
+    const watchlist = await get("/v1/watchlist/groups");
+    const instruments = watchlistInstruments(watchlist);
+    const previous = new Map(this.quotes.map((quote) => [quote.symbol, quote]));
+    this.groups = watchlistGroups(watchlist);
+    this.instruments = instruments;
+    this.quotes = sortLikeTerminal(
+      initialQuotes(instruments).map((quote) => previous.get(quote.symbol) ?? quote),
+      Date.now(),
+    );
+  }
+
+  /**
+   * Looks up whatever has been typed, as soon as it is the shape of a symbol.
+   *
+   * A watchlist is a list of securities, and `NVDA.US` is a string until
+   * something says what it names. So the moment the field holds a symbol this
+   * asks the socket what that symbol is, and the answer -- a name, an
+   * exchange, a price -- is what the reader confirms rather than the spelling
+   * they just typed.
+   *
+   * The generation is what makes a fast typist safe: every keystroke starts a
+   * lookup and only the newest one is allowed to publish.
+   *
+   * @param {import("gpui").Context} cx
+   */
+  previewSymbol(cx) {
+    const { symbol } = symbolFromInput(this.symbolQuery);
+    if (!symbol) {
+      if (this.symbolPreview.status === "idle") return;
+      this.symbolPreviewGeneration += 1;
+      this.setSymbolPreview({ status: "idle", symbol: "", error: "" });
+      return;
+    }
+    if (this.symbolPreview.symbol === symbol && this.symbolPreview.status !== "error") return;
+    const generation = ++this.symbolPreviewGeneration;
+    this.setSymbolPreview({ status: "loading", symbol, error: "" });
+    const stream = this.stream;
+    if (!stream) {
+      this.setSymbolPreview({
+        status: "error",
+        symbol,
+        error: "Not connected. Reconnect to look this symbol up.",
+      });
+      return;
+    }
+    cx.spawn(async (cx) => {
+      try {
+        const [statics, quotes] = await Promise.all([
+          stream.queryStaticInfo([symbol]),
+          stream.queryQuotes([symbol]).catch(() => []),
+        ]);
+        if (generation !== this.symbolPreviewGeneration) return;
+        const info = statics.find((entry) => entry.symbol === symbol) ?? statics[0];
+        if (!info || !info.symbol) {
+          this.setSymbolPreview({
+            status: "error",
+            symbol,
+            error: `No security is called ${symbol}.`,
+          });
+          return;
+        }
+        const quote = quotes.find((entry) => entry.symbol === symbol) ?? quotes[0] ?? {};
+        const [row] = applyQuotes(initialQuotes([{ symbol, code: symbol.split(".")[0] }]), [
+          { ...quote, symbol },
+        ]);
+        this.setSymbolPreview({
+          status: "ready",
+          symbol,
+          name: info.nameEn || info.nameCn || info.nameHk || symbol,
+          exchange: info.exchange || symbol.split(".")[1] || "",
+          currency: info.currency || "",
+          last: row?.last ?? "--",
+          change: row?.change ?? "--",
+          changePercent: row?.changePercent ?? "--",
+          error: "",
+        });
+      } catch (failure) {
+        if (generation !== this.symbolPreviewGeneration) return;
+        this.setSymbolPreview({
+          status: "error",
+          symbol,
+          error: failure instanceof Error ? failure.message : String(failure),
+        });
+      }
+    });
+  }
+
+  /**
+   * Adds the typed security to the account's first watchlist group.
+   *
+   * The list is read back rather than assumed: Longbridge answers a refused
+   * addition with a code in a 200, and a symbol that named nothing comes back
+   * as a list that does not contain it. So what says the change happened is
+   * the change being there afterwards.
+   *
+   * @param {import("gpui").Context} cx
+   */
+  addSymbol(cx) {
+    if (this.addSymbolPending || this.symbolPreview.status !== "ready") return;
+    const { symbol, error } = symbolFromInput(this.symbolQuery);
+    const group = addTargetGroup(this.groups);
+    const refused = error
+      ? error
+      : this.quotes.some((quote) => quote.symbol === symbol)
+        ? `${symbol} is already on the watchlist.`
+        : group
+          ? ""
+          : "This account has no watchlist group to add to.";
+    if (refused) {
+      this.addSymbolError = refused;
+      this.refreshDialog();
+      return;
+    }
+    this.addSymbolPending = true;
+    this.addSymbolError = "";
+    this.refreshDialog();
+    cx.spawn(async (cx) => {
+      try {
+        await put("/v1/watchlist/groups", {
+          id: groupRequestId(group),
+          securities: [symbol],
+          mode: "add",
+        });
+        await this.refreshWatchlist();
+        if (!this.instruments.some((instrument) => instrument.symbol === symbol)) {
+          throw new Error(`Longbridge did not add ${symbol}. Check the symbol.`);
+        }
+        await this.stream?.watchSymbols([symbol]);
+        this.symbolInput.set_value("");
+        this.symbolQuery = "";
+        this.forgetAddSymbol();
+        window.close_dialog();
+        this.selectQuote(symbol, cx);
+        this.redraw(cx);
+        window.push_toast({
+          title: `${symbol} added to ${group.name}`,
+          level: "success",
+          id: "watchlist-add",
+        });
+      } catch (failure) {
+        this.addSymbolPending = false;
+        this.addSymbolError = failure instanceof Error ? failure.message : String(failure);
+        this.refreshDialog();
+      }
+    });
+  }
+
+  /**
+   * Takes a security out of every group that holds it.
+   *
+   * Out of every one, because the account's groups overlap -- the whole list
+   * and the market's own group both hold it -- and taking it out of one of
+   * them leaves it on screen, put there by the other.
+   *
+   * @param {string} symbol @param {import("gpui").Context} cx
+   */
+  dropSymbol(symbol, cx) {
+    const holders = groupsHolding(this.groups, symbol);
+    this.rowMenu = null;
+    this.redraw(cx);
+    if (holders.length === 0) return;
+    cx.spawn(async (cx) => {
+      try {
+        for (const group of holders) {
+          await put("/v1/watchlist/groups", {
+            id: groupRequestId(group),
+            securities: [symbol],
+            mode: "remove",
+          });
+        }
+        await this.refreshWatchlist();
+        if (this.instruments.some((instrument) => instrument.symbol === symbol)) {
+          throw new Error(`Longbridge is still watching ${symbol}.`);
+        }
+        // A holding is streamed for the Portfolio page whether or not the
+        // watchlist names it, so only a symbol nothing else needs is dropped.
+        if (!this.holdings.some((holding) => holding.symbol === symbol)) {
+          await this.stream?.unwatchSymbols([symbol]);
+        }
+        if (this.selectedSymbol === symbol) {
+          this.selectedSymbol = null;
+          const next = this.quotes[0]?.symbol ?? null;
+          if (next) this.selectQuote(next, cx);
+          else this.clearDetailMarket();
+        }
+        this.redraw(cx);
+        window.push_toast({
+          title: `${symbol} removed from the watchlist`,
+          level: "success",
+          id: "watchlist-drop",
+        });
+      } catch (failure) {
+        this.error = failure instanceof Error ? failure.message : String(failure);
+        this.redraw(cx);
+      }
+    });
+  }
+
   /** @param {import("gpui").Context} cx */
   loadPortfolio(cx) {
     cx.spawn(async (cx) => {
@@ -1390,6 +1781,7 @@ export default class LongbridgeApp extends View {
     this.account = null;
     this.fxRates = new Map([["USD", 1]]);
     this.holdings = [];
+    this.initOrdersState();
     this.status = { state: "offline" };
     this.streamError = "";
     this.hasStoredTokens = false;
@@ -1423,6 +1815,7 @@ export default class LongbridgeApp extends View {
     return element
       .on_action("workspace::watchlist", (_event, cx) => this.showPage("watchlist", cx))
       .on_action("workspace::portfolio", (_event, cx) => this.showPage("portfolio", cx))
+      .on_action("workspace::orders", (_event, cx) => this.showPage("orders", cx))
       .on_action("workspace::reconnect", (_event, cx) => this.resume(cx))
       .when(!this.followsSystemTheme, (workspace) =>
         workspace.on_action("workspace::toggle-theme", (_event, cx) =>
@@ -1457,16 +1850,63 @@ export default class LongbridgeApp extends View {
       this.redraw(cx);
       return;
     }
-    const filter = this.page === "portfolio" ? this.holdingsFilter : this.watchlistFilter;
-    const query = this.page === "portfolio" ? this.holdingsQuery : this.watchlistQuery;
-    if (query) {
-      filter.set_value("");
-      if (this.page === "portfolio") this.holdingsQuery = "";
-      else this.watchlistQuery = "";
+    if (this.rowMenu) {
+      this.rowMenu = null;
+      this.redraw(cx);
+      return;
+    }
+    if (this.addSymbolOpen) {
+      this.closeAddSymbol(cx);
+      return;
+    }
+    if (this.page === "orders" && this.selectedOrderId) {
+      this.selectedOrderId = null;
+      this.redraw(cx);
+      return;
+    }
+    const filter = this.pageFilter();
+    if (filter.query) {
+      filter.clear();
       this.redraw(cx);
       return;
     }
     cx.propagate();
+  }
+
+  /**
+   * The list filter belonging to the page on screen: the handle, what it
+   * currently holds, and how to empty the copy this view renders from.
+   */
+  pageFilter() {
+    if (this.page === "portfolio") {
+      return {
+        query: this.holdingsQuery,
+        clear: () => {
+          this.holdingsFilter.set_value("");
+          this.holdingsQuery = "";
+        },
+      };
+    }
+    if (this.page === "orders") {
+      // Both, because Escape puts away what the page is narrowed by and the
+      // page is narrowed by either of them.
+      return {
+        query: this.todayOrdersQuery || this.historyOrdersQuery,
+        clear: () => {
+          this.todayOrdersFilter.set_value("");
+          this.todayOrdersQuery = "";
+          this.historyOrdersFilter.set_value("");
+          this.historyOrdersQuery = "";
+        },
+      };
+    }
+    return {
+      query: this.watchlistQuery,
+      clear: () => {
+        this.watchlistFilter.set_value("");
+        this.watchlistQuery = "";
+      },
+    };
   }
 
   /** @param {LongbridgePage} page @param {import("gpui").Context} cx */
@@ -1474,6 +1914,7 @@ export default class LongbridgeApp extends View {
     if (this.page === page) return;
     this.page = page;
     if (page === "portfolio") this.loadPortfolio(cx);
+    if (page === "orders") this.loadOrders(cx);
     this.redraw(cx);
   }
 
@@ -1534,6 +1975,12 @@ export default class LongbridgeApp extends View {
   /** @param {import("gpui").Context} cx */
   render(cx) {
     const tokens = cx.theme();
+    // A dialog outlives the render that opened it and is handed no context of
+    // its own, so the palette it draws in is the one this pass resolved.
+    this.tokens = tokens;
+    // The shell owns a dialog once it is up -- Escape and the backdrop close
+    // it without telling anyone -- so the view reconciles rather than assumes.
+    if (this.addSymbolOpen && !window.has_active_dialog()) this.forgetAddSymbol();
     return this.workspaceActions(
       div()
         .id("workspace-root")
@@ -1784,7 +2231,9 @@ export default class LongbridgeApp extends View {
     const page =
       this.page === "portfolio"
         ? this.portfolioPage(tokens).id("workspace-page")
-        : this.watchlistPage(tokens);
+        : this.page === "orders"
+          ? this.ordersPage(tokens).id("workspace-page")
+          : this.watchlistPage(tokens);
     return v_flex()
       .flex_1()
       .min_h(0)
@@ -1839,7 +2288,13 @@ export default class LongbridgeApp extends View {
   watchlistPage(tokens) {
     const { sideBySide } = responsivePanelWidths(window.viewport_size().width);
     const watchlist = workspacePanel(tokens, "Watchlist", this.watchlist(tokens));
-    const quote = workspacePanel(tokens, "Quote Details", this.quoteDetailsPanel(tokens));
+    // Quote Details is a fixed block of readings, so it takes its own height
+    // in both layouts and the column around it does the scrolling. Grown to
+    // fill a tall window it drew a band of empty panel under its last row;
+    // pinned to a stated height it clipped the disclosure when that opened.
+    const quote = workspacePanel(tokens, "Quote Details", this.quoteDetailsPanel(tokens), null, {
+      grow: false,
+    });
     const chart = workspacePanel(
       tokens,
       "Chart",
@@ -1847,7 +2302,6 @@ export default class LongbridgeApp extends View {
       this.chartModeTabs(tokens),
     );
     const market = workspacePanel(tokens, "Market Detail", this.marketDetailPanel(tokens));
-
     if (!sideBySide) {
       return v_flex()
         .id("watchlist-panels-stacked")
@@ -1856,8 +2310,8 @@ export default class LongbridgeApp extends View {
         .gap(WORKSPACE_PANEL_GAP)
         .overflow_y_scrollbar()
         .child(watchlist.h(440).flex_none())
-        .child(quote.h(250).flex_none())
-        .child(chart.h(290).flex_none())
+        .child(quote.flex_none())
+        .child(chart.h(320).flex_none())
         .child(market.h(360).flex_none());
     }
 
@@ -1878,9 +2332,251 @@ export default class LongbridgeApp extends View {
           .min_h(0)
           .gap(WORKSPACE_PANEL_GAP)
           .overflow_y_scrollbar()
-          .child(quote.flex_basis(180).flex_grow(1).min_h(160))
-          .child(chart.h(290).flex_none())
-          .child(market.flex_basis(220).flex_grow(1).min_h(180)),
+          .child(quote.flex_none())
+          .child(chart.flex_basis(290).flex_grow(1).min_h(290))
+          .child(market.flex_basis(240).flex_grow(1).min_h(200)),
+      );
+  }
+
+  /**
+   * The way to put something on the watchlist: a symbol, typed.
+   *
+   * There is no search behind it because there is no search endpoint on this
+   * boundary, and a client that guessed at what was meant would be adding
+   * securities nobody asked for. What it does instead is state the shape --
+   * code, dot, market -- refuse anything that is not that shape before the
+   * request, and say what Longbridge said when the request is refused.
+   *
+   * @param {import("gpui-base").Theme} tokens
+   */
+  addSymbolTrigger(tokens) {
+    return iconAction(
+      tokens,
+      "add-symbol-trigger",
+      "Add a security",
+      "assets/plus.svg",
+      (_event, cx) => this.openAddSymbol(cx),
+    );
+  }
+
+  /**
+   * The add-a-security dialog.
+   *
+   * A dialog rather than a popover: this is a short task with a decision at
+   * the end of it -- type, read what it turned out to be, confirm or think
+   * again -- and a surface that closes when the pointer wanders is the wrong
+   * shape for one. It is also the only thing on screen while it is open, which
+   * is what lets the keyboard go straight into the field.
+   *
+   * `open_dialog` takes a function, not an element: the dialog outlives the
+   * pass that opened it and redraws from this on every notify.
+   *
+   * @param {import("gpui").Context} cx
+   */
+  openAddSymbol(cx) {
+    if (this.addSymbolOpen) return;
+    this.addSymbolOpen = true;
+    this.addSymbolError = "";
+    this.addSymbolPending = false;
+    this.symbolQuery = "";
+    this.symbolInput.set_value("");
+    this.symbolPreviewGeneration += 1;
+    this.symbolPreview = { status: "idle", symbol: "", error: "" };
+    window.open_dialog(() => this.addSymbolDialog(this.tokens), {
+      escape_dismissable: true,
+      backdrop_dismissable: true,
+    });
+    this.redraw(cx);
+  }
+
+  /**
+   * Redraws the open dialog.
+   *
+   * A dialog is its own view, built from a function the shell calls when *it*
+   * renders -- so `cx.notify()` here reaches the workspace and never the
+   * dialog, which is how a typed symbol could be previewed into a panel nobody
+   * was drawing. There is no handle to notify instead: `open_dialog` answers a
+   * depth, not a view. `window.refresh()` is the case its own documentation
+   * names, and it is called on a change to what the dialog says -- three times
+   * for a typed symbol, not once per keystroke.
+   */
+  refreshDialog() {
+    if (this.addSymbolOpen) window.refresh();
+  }
+
+  /** Publishes a preview, and redraws the dialog that is showing it. */
+  setSymbolPreview(preview) {
+    this.symbolPreview = preview;
+    this.refreshDialog();
+  }
+
+  /** Drops what the dialog was holding, without touching the shell's stack. */
+  forgetAddSymbol() {
+    this.addSymbolOpen = false;
+    this.addSymbolPending = false;
+    this.addSymbolError = "";
+    this.symbolPreviewGeneration += 1;
+    this.symbolPreview = { status: "idle", symbol: "", error: "" };
+  }
+
+  /** @param {import("gpui").Context} cx */
+  closeAddSymbol(cx) {
+    if (!this.addSymbolOpen) return;
+    this.forgetAddSymbol();
+    window.close_dialog();
+    this.redraw(cx);
+  }
+
+  /** @param {import("gpui-base").Theme} tokens */
+  addSymbolDialog(tokens) {
+    const pending = this.addSymbolPending;
+    const ready = this.symbolPreview.status === "ready";
+    return v_flex()
+      .id("add-symbol-dialog")
+      .w(360)
+      .gap(tokens.spacing.md)
+      .p(tokens.spacing.lg)
+      .rounded(tokens.radius.md)
+      .border(1)
+      .border_color(tokens.border)
+      .bg(tokens.surface)
+      .child(
+        v_flex()
+          .gap(tokens.spacing.xxs)
+          .child(label(tokens, "Add to watchlist", 14).font_weight(700))
+          .child(muted(tokens, "A code, a dot and its market: AAPL.US, 700.HK, 000001.SZ.")),
+      )
+      .child(filterInput(tokens, this.symbolInput, 320))
+      .child(this.symbolPreviewCard(tokens))
+      .when(Boolean(this.addSymbolError), (element) =>
+        element.child(errorMessage(tokens, this.addSymbolError)),
+      )
+      .child(
+        h_flex()
+          .justify_end()
+          .gap(tokens.spacing.sm)
+          .child(
+            action(tokens, "add-symbol-cancel", "Cancel", (_event, cx) => this.closeAddSymbol(cx)),
+          )
+          .child(
+            action(
+              tokens,
+              "add-symbol-confirm",
+              pending ? "Adding…" : "Add",
+              (_event, cx) => this.addSymbol(cx),
+              { variant: "primary", disabled: pending || !ready },
+            ),
+          ),
+      );
+  }
+
+  /**
+   * What the typed symbol turned out to be.
+   *
+   * Four things can be true of a field someone is typing into -- it is not a
+   * symbol yet, it is one and is being looked up, it named a security, or it
+   * named nothing -- and each of them is a different thing to say. The last
+   * two are why this exists: `NVDA.US` and `NVDA.HK` are both well-formed, and
+   * only one of them is a company.
+   *
+   * @param {import("gpui-base").Theme} tokens
+   */
+  symbolPreviewCard(tokens) {
+    const preview = this.symbolPreview;
+    if (preview.status === "idle") return muted(tokens, "Nothing typed yet.");
+    if (preview.status === "loading") return muted(tokens, `Looking up ${preview.symbol}…`);
+    if (preview.status === "error") return errorMessage(tokens, preview.error);
+    const held = this.quotes.some((quote) => quote.symbol === preview.symbol);
+    return v_flex()
+      .id("add-symbol-preview")
+      .gap(tokens.spacing.xs)
+      .p(tokens.spacing.sm)
+      .rounded(tokens.radius.sm)
+      .bg(tokens.background)
+      .child(
+        h_flex()
+          .items_start()
+          .justify_between()
+          .gap(tokens.spacing.sm)
+          .child(
+            v_flex()
+              .flex_1()
+              .min_w(0)
+              .gap(tokens.spacing.xxs)
+              .child(label(tokens, preview.name, 13).font_weight(700).truncate())
+              .child(
+                muted(
+                  tokens,
+                  [preview.symbol, preview.exchange, preview.currency].filter(Boolean).join(" · "),
+                ).truncate(),
+              ),
+          )
+          .child(
+            v_flex()
+              .flex_none()
+              .items_end()
+              .gap(tokens.spacing.xxs)
+              .child(numeric(tokens, preview.last, 15))
+              .child(
+                numeric(tokens, preview.changePercent, 11).text_color(
+                  changeTone(tokens, preview.changePercent),
+                ),
+              ),
+          ),
+      )
+      .when(held, (element) => element.child(muted(tokens, "Already on the watchlist.")));
+  }
+
+  /**
+   * The menu a right press opens, at the pointer.
+   *
+   * It acts on the selected instrument rather than on whatever the pointer
+   * happens to be over: a virtual list rebuilds its rows every frame it
+   * scrolls, so a row carries no handler of its own and there is nothing to
+   * ask which one was pressed. The menu names the instrument it will act on,
+   * which is what keeps that honest.
+   *
+   * @param {import("gpui").MouseButtonEvent} event @param {import("gpui").Context} cx
+   */
+  openRowMenu(event, cx) {
+    if (!this.selectedSymbol) return;
+    const local = event.local_position ?? { x: 0, y: 0 };
+    this.rowMenu = {
+      symbol: this.selectedSymbol,
+      x: Math.max(0, local.x),
+      y: Math.max(0, local.y),
+    };
+    this.redraw(cx);
+  }
+
+  /** @param {import("gpui-base").Theme} tokens */
+  rowMenuSurface(tokens) {
+    const menu = this.rowMenu;
+    return popoverSurface(tokens, { width: 200, menu: true })
+      .absolute()
+      .left(menu.x)
+      .top(menu.y)
+      .on_mouse_down_out((_event, cx) => {
+        this.rowMenu = null;
+        this.redraw(cx);
+      })
+      .child(muted(tokens, menu.symbol).px(tokens.spacing.sm).py(tokens.spacing.xxs))
+      .child(
+        menuItem(tokens, "row-menu-copy", "Copy symbol", (_event, cx) => {
+          this.rowMenu = null;
+          this.copySelectedSymbol(cx);
+        }),
+      )
+      .child(
+        menuItem(
+          tokens,
+          "row-menu-drop",
+          "Remove",
+          (_event, cx) => this.dropSymbol(menu.symbol, cx),
+          {
+            destructive: true,
+          },
+        ),
       );
   }
 
@@ -1898,17 +2594,26 @@ export default class LongbridgeApp extends View {
         .border_t(0)
         .flex_1()
         .min_h(0)
+        // The row menu is drawn inside this pane, at the pointer, so the pane
+        // is what its coordinates are measured from.
+        .relative()
         // On the pane rather than on whatever holds it: the pane is now a dock
         // panel's whole body, and there is no wrapper left to carry this.
-        .on_mouse_down("right", (_event, cx) => this.copySelectedSymbol(cx))
+        .on_mouse_down("right", (event, cx) => this.openRowMenu(event, cx))
         .child(
           tableToolbar(tokens)
             // No title here. The tab above this row already says "Watchlist",
             // and a pane that names itself twice is two headers wearing one
-            // pane. What is left is what the tab cannot carry: the filter and
-            // the feed's state.
+            // pane. What is left is what the tab cannot carry: the filter, the
+            // way to add to the list, and the feed's state.
             .child(filterInput(tokens, this.watchlistFilter))
-            .child(muted(tokens, status)),
+            .child(
+              h_flex()
+                .items_center()
+                .gap(tokens.spacing.sm)
+                .child(muted(tokens, status))
+                .child(this.addSymbolTrigger(tokens)),
+            ),
         )
         .child(rule(tokens))
         .when(Boolean(this.streamError), (element) =>
@@ -1937,13 +2642,14 @@ export default class LongbridgeApp extends View {
               : emptyPanel(
                   tokens,
                   "Watchlist is empty",
-                  "Add securities in Longbridge, then reconnect to refresh this read-only view.",
+                  "Add a security with the + beside the filter, or in Longbridge.",
                 ),
             2,
           )
             .flex_1()
             .min_h(0),
         )
+        .when(Boolean(this.rowMenu), (element) => element.child(this.rowMenuSurface(tokens)))
     );
   }
 
@@ -1964,6 +2670,9 @@ export default class LongbridgeApp extends View {
    * @param {(row: any, index: number) => import("gpui").Element} renderRow
    * @param {((key: string, cx: import("gpui").Context) => void) | null} onSelect
    * @param {import("gpui").Element} empty
+   * @param {number} [columnCount]
+   * @param {(row: any, index: number) => string} [rowKey] The identity a row is
+   *   reported by, which is what `onSelect` is handed.
    */
   instrumentTable(
     tokens,
@@ -1976,6 +2685,7 @@ export default class LongbridgeApp extends View {
     onSelect,
     empty,
     columnCount = 5,
+    rowKey = (row, index) => String(row?.symbol ?? index),
   ) {
     const body = TableBody.new(`${id}-body`)
       .relative()
@@ -1994,7 +2704,7 @@ export default class LongbridgeApp extends View {
           // reorder under it — the watchlist by session, holdings by market
           // value — and a key taken from the index would move a click onto
           // whatever slid into that slot.
-          (index) => String(rows[index]?.symbol ?? index),
+          (index) => rowKey(rows[index], index),
           (range) =>
             rows
               .slice(range.start, range.end)
@@ -2256,17 +2966,22 @@ export default class LongbridgeApp extends View {
     return panel(tokens)
       .id("quote-details-panel")
       .border_t(0)
-      .flex_1()
+      .flex_none()
       .min_w(0)
-      .min_h(0)
       .bg(tokens.background)
       .child(
         quote
           ? v_flex()
-              .flex_1()
-              .min_h(0)
-              .overflow_y_scrollbar()
-              .child(quoteDetail(tokens, quote, this.lastTick, this.quotePulse ?? 1))
+              .flex_none()
+              .child(
+                quoteDetail(tokens, quote, this.lastTick, this.quotePulse ?? 1, {
+                  open: this.detailSections.more,
+                  onToggle: (open, cx) => {
+                    this.detailSections = { ...this.detailSections, more: open };
+                    this.redraw(cx);
+                  },
+                }),
+              )
           : emptyPanel(
               tokens,
               "Watchlist is empty",
@@ -2429,20 +3144,29 @@ export default class LongbridgeApp extends View {
         .py(tokens.spacing.sm)
         .gap(tokens.spacing.sm)
         .child(
-          div()
-            .id("price-chart-wheel")
-            .flex_1()
-            .min_h(244)
-            // A wheel over the chart walks the window a day at a time. The
-            // handler reads `delta.y` in pixels, which is what every device
-            // reports; `delta_lines` is only there when one reported lines.
-            .on_scroll_wheel((event, cx) => {
-              const step = event.delta.y > 0 ? -1 : event.delta.y < 0 ? 1 : 0;
-              if (step === 0) return;
-              const next = shiftDay(end, step);
-              this.setChartEnd(next > today ? null : next, cx);
-            })
-            .child(this.priceChart),
+          // The plot fades rather than switching. A new interval or a new
+          // instrument replaces every point on it at once, and a plot that
+          // snapped from one series to another read as a glitch rather than as
+          // an answer; held back while the request is out and brought up when
+          // it lands, the same 150ms as everything else, it reads as one.
+          motion(
+            div()
+              .id("price-chart-wheel")
+              .flex_1()
+              .min_h(244)
+              .opacity(this.chartActivity() === "ready" ? 1 : 0.45)
+              // A wheel over the chart walks the window a day at a time. The
+              // handler reads `delta.y` in pixels, which is what every device
+              // reports; `delta_lines` is only there when one reported lines.
+              .on_scroll_wheel((event, cx) => {
+                const step = event.delta.y > 0 ? -1 : event.delta.y < 0 ? 1 : 0;
+                if (step === 0) return;
+                const next = shiftDay(end, step);
+                this.setChartEnd(next > today ? null : next, cx);
+              })
+              .child(this.priceChart),
+            "opacity",
+          ),
         )
     );
   }
@@ -2560,134 +3284,347 @@ export default class LongbridgeApp extends View {
             .items_stretch()
             .gap(tokens.spacing.md)
             .child(
-              panel(tokens)
+              workspacePanel(
+                tokens,
+                "Portfolio summary",
+                account
+                  ? portfolioSummary(tokens, account, presentation.summaries)
+                  : emptyPanel(
+                      tokens,
+                      "No account snapshot",
+                      "Waiting for Longbridge account assets.",
+                    ),
+                null,
+                { note: account ? `Risk level ${account.risk}` : "Read only" },
+              )
                 .flex_basis(0)
                 .flex_grow(4)
-                .min_w(320)
-                .child(
-                  h_flex()
-                    .items_center()
-                    .justify_between()
-                    // A stated height, not one that falls out of the contents:
-                    // the card beside this one carries a 24px control in its
-                    // header and this one carries only text, so left to their
-                    // contents the two headings sat at different heights.
-                    .h(CARD_HEADER_HEIGHT)
-                    .px(tokens.spacing.md)
-                    .child(
-                      h_flex()
-                        .items_baseline()
-                        .gap(tokens.spacing.xs)
-                        .child(label(tokens, "Portfolio summary", 14).font_weight(700))
-                        .child(muted(tokens, account ? `Risk level ${account.risk}` : "Read only")),
-                    ),
-                )
-                .child(rule(tokens))
-                .child(
-                  account
-                    ? portfolioSummary(tokens, account, presentation.summaries)
-                    : emptyPanel(
-                        tokens,
-                        "No account snapshot",
-                        "Waiting for Longbridge account assets.",
-                      ),
-                ),
+                .min_w(320),
             )
             .when(allocation.slices.length > 0 || allocation.unpriced.length > 0, (element) =>
               element.child(
-                panel(tokens)
+                workspacePanel(
+                  tokens,
+                  "Asset allocation",
+                  h_flex()
+                    .flex_wrap()
+                    .items_start()
+                    .gap(tokens.spacing.xl)
+                    .p(tokens.spacing.md)
+                    .child(
+                      v_flex()
+                        .flex_basis(360)
+                        .flex_grow(1)
+                        .child(
+                          allocationChart(tokens, allocation, {
+                            hovered: this.hoveredAllocation,
+                            onHover: (symbol, cx) => {
+                              if (this.hoveredAllocation === symbol) return;
+                              this.hoveredAllocation = symbol;
+                              this.redraw(cx);
+                            },
+                          }),
+                        ),
+                    ),
+                  // The control stays opposite the heading; only the words
+                  // that describe the card sit next to its name.
+                  this.allocationHelp(tokens, allocation),
+                  { note: "Market value in USD" },
+                )
                   .flex_basis(0)
                   .flex_grow(6)
-                  .min_w(380)
-                  .child(
-                    h_flex()
-                      .items_center()
-                      .justify_between()
-                      .h(CARD_HEADER_HEIGHT)
-                      .px(tokens.spacing.md)
-                      .child(
-                        h_flex()
-                          .items_baseline()
-                          .gap(tokens.spacing.xs)
-                          .child(label(tokens, "Asset allocation", 14).font_weight(700))
-                          .child(muted(tokens, "Market value in USD")),
-                      )
-                      // The control stays opposite the heading; only the words
-                      // that describe the card moved next to its name.
-                      .child(this.allocationHelp(tokens, allocation)),
-                  )
-                  .child(rule(tokens))
-                  .child(
-                    h_flex()
-                      .flex_wrap()
-                      .items_start()
-                      .gap(tokens.spacing.xl)
-                      .p(tokens.spacing.md)
-                      .child(
-                        v_flex()
-                          .flex_basis(360)
-                          .flex_grow(1)
-                          .child(allocationChart(tokens, allocation)),
-                      ),
-                  ),
+                  .min_w(380),
               ),
             ),
         )
         .child(
-          panel(tokens)
-            .flex_1()
-            .min_h(0)
-            .child(
-              tableToolbar(tokens)
-                .flex_none()
-                // The count sits with the title, not across the row from it. It
-                // says how much of *this* is here, so it reads as part of the
-                // heading; opposite the filter it read as a second control.
-                .child(
-                  h_flex()
-                    .items_baseline()
-                    .gap(tokens.spacing.xs)
-                    .child(label(tokens, "Holdings", 14).font_weight(700))
-                    .child(
-                      muted(
-                        tokens,
-                        holdingRows.length === this.holdings.length
-                          ? `${this.holdings.length} positions`
-                          : `${holdingRows.length} of ${this.holdings.length} positions`,
-                      ),
-                    ),
-                )
-                .child(filterInput(tokens, this.holdingsFilter, 160)),
+          workspacePanel(
+            tokens,
+            "Holdings",
+            this.instrumentTable(
+              tokens,
+              "holdings",
+              "Holdings",
+              holdingRows,
+              HOLDING_ROW_HEIGHT,
+              holdingsHeader(tokens),
+              (holding, index) => holdingRow(tokens, holding, index),
+              null,
+              this.holdingsQuery
+                ? emptyPanel(tokens, "No matches", "No holding matches that filter.")
+                : emptyPanel(
+                    tokens,
+                    "No stock positions",
+                    "This account currently reports no stock holdings.",
+                  ),
             )
-            .child(rule(tokens))
-            .child(
-              this.instrumentTable(
-                tokens,
-                "holdings",
-                "Holdings",
-                holdingRows,
-                HOLDING_ROW_HEIGHT,
-                holdingsHeader(tokens),
-                (holding, index) => holdingRow(tokens, holding, index),
-                null,
-                this.holdingsQuery
-                  ? emptyPanel(tokens, "No matches", "No holding matches that filter.")
-                  : emptyPanel(
-                      tokens,
-                      "No stock positions",
-                      "This account currently reports no stock holdings.",
-                    ),
-              )
-                // A definite height is what makes virtualization possible at all,
-                // and this page is a scrolling column with no leftover height to
-                // claim -- so it takes the leftover height of a page that no
-                // longer scrolls, rather than being sized from a row count and
-                // letting the page scroll past it.
-                .flex_1()
-                .min_h(0),
-            ),
+              // A definite height is what makes virtualization possible at all,
+              // and this page is a scrolling column with no leftover height to
+              // claim -- so it takes the leftover height of a page that no
+              // longer scrolls, rather than being sized from a row count and
+              // letting the page scroll past it.
+              .flex_1()
+              .min_h(0),
+            filterInput(tokens, this.holdingsFilter, 160),
+            {
+              note:
+                holdingRows.length === this.holdings.length
+                  ? `${this.holdings.length} positions`
+                  : `${holdingRows.length} of ${this.holdings.length} positions`,
+            },
+          )
+            .flex_1()
+            .min_h(0),
         )
     );
+  }
+
+  /**
+   * Today's orders over the account's history, which is how the Longbridge
+   * terminal stacks them: what is working now is read first and is the shorter
+   * list, and the record underneath it is the one worth scrolling.
+   *
+   * One filter serves both. They are two windows onto the same collection --
+   * the same instruments, the same statuses -- and a filter per table would
+   * ask a reader to say "AAPL" twice to answer one question.
+   *
+   * @param {import("gpui-base").Theme} tokens
+   */
+  ordersPage(tokens) {
+    const state = this.ordersState;
+    const today = filterRows(state.today, this.todayOrdersQuery, ORDER_FILTER_FIELDS);
+    const history = filterRows(state.history, this.historyOrdersQuery, ORDER_FILTER_FIELDS);
+    const selected = this.selectedOrder();
+    // An account with nothing working is the ordinary case, not an error, and
+    // most days Today is empty: a panel that still reserved a table's height
+    // for it spent a third of the page saying so and took that height from the
+    // history underneath, which is the list actually being read. So a list
+    // with no rows to draw keeps its heading -- which is where the count and
+    // the filter live -- and gives everything below it back.
+    const todayPanel = this.ordersPanel(tokens, {
+      id: "today-orders",
+      title: "Today Orders",
+      rows: today,
+      total: state.today.length,
+      filter: this.todayOrdersFilter,
+      query: this.todayOrdersQuery,
+      empty: "No orders today.",
+    });
+    const historyPanel = this.ordersPanel(tokens, {
+      id: "history-orders",
+      title: "History Orders",
+      note: `last ${HISTORY_WINDOW_DAYS} days`,
+      rows: history,
+      total: state.history.length,
+      filter: this.historyOrdersFilter,
+      query: this.historyOrdersQuery,
+      empty: `No orders in the last ${HISTORY_WINDOW_DAYS} days.`,
+    });
+    const sheet = selected ? this.orderDetailPanel(tokens, selected) : null;
+    const todayCollapsed = this.ordersCollapsed(today);
+    const historyCollapsed = this.ordersCollapsed(history);
+    const todayHeight =
+      ORDERS_PANEL_CHROME + Math.min(today.length, TODAY_ORDERS_VISIBLE_ROWS) * ORDER_ROW_HEIGHT;
+
+    // A narrow window scrolls the panels at stated heights rather than sharing
+    // one height between them, which is what the stacked Watchlist does and
+    // for the same reason: three panels dividing a short window leaves each of
+    // them too short to read, and a sheet opening under them takes the height
+    // out of the lists that were being read.
+    if (this.isNarrow()) {
+      return v_flex()
+        .id("orders-page-stacked")
+        .flex_1()
+        .min_h(0)
+        .gap(tokens.spacing.md)
+        .overflow_y_scrollbar()
+        .child(todayCollapsed ? todayPanel.flex_none() : todayPanel.h(todayHeight).flex_none())
+        .child(historyCollapsed ? historyPanel.flex_none() : historyPanel.h(400).flex_none())
+        .when(Boolean(sheet), (element) => element.child(sheet.h(460).flex_none()));
+    }
+
+    const lists = v_flex()
+      .id("orders-lists")
+      .flex_1()
+      .min_h(0)
+      .min_w(0)
+      .gap(tokens.spacing.md)
+      .child(todayCollapsed ? todayPanel.flex_none() : todayPanel.h(todayHeight).flex_none())
+      .child(historyCollapsed ? historyPanel.flex_none() : historyPanel.flex_1().min_h(200));
+    if (!sheet) return lists;
+    // Beside the lists, where there is room for a column of its own.
+    return (
+      h_flex()
+        .id("orders-page-split")
+        .flex_1()
+        .min_h(0)
+        // `h_flex` centres its children, and a centred panel is one as tall as
+        // its own content: the lists collapsed to their headers and the sheet
+        // drew a title over nothing.
+        .items_stretch()
+        .gap(tokens.spacing.md)
+        .child(lists)
+        .child(sheet.w(320).flex_none())
+    );
+  }
+
+  /**
+   * The right-hand sheet: one order in full, with the way out of it.
+   *
+   * The close control is the panel's, not the row's -- a reader who opened
+   * this by clicking a row that has since scrolled away still has to be able
+   * to put it back. Escape does the same thing, which is what `dismiss` is
+   * for.
+   *
+   * @param {import("gpui-base").Theme} tokens
+   * @param {LongbridgeOrderRow} order
+   */
+  orderDetailPanel(tokens, order) {
+    const known = this.quotes.some((quote) => quote.symbol === order.symbol);
+    return workspacePanel(
+      tokens,
+      "Order",
+      v_flex().flex_1().min_h(0).overflow_y_scrollbar().child(orderDetail(tokens, order)),
+      h_flex()
+        .items_center()
+        .gap(tokens.spacing.xs)
+        .when(known, (element) =>
+          element.child(
+            iconAction(
+              tokens,
+              "order-detail-quote",
+              "Open this instrument",
+              "assets/chart-line.svg",
+              (_event, cx) => this.showOrderInstrument(order.orderId, cx),
+            ),
+          ),
+        )
+        .child(
+          iconAction(
+            tokens,
+            "order-detail-close",
+            "Close order detail",
+            "assets/x.svg",
+            (_e, cx) => {
+              this.selectedOrderId = null;
+              this.redraw(cx);
+            },
+          ),
+        ),
+    )
+      .id("order-detail-panel")
+      .min_h(0);
+  }
+
+  /**
+   * One order table, with the state of the read written where the rows would
+   * be. A list that is loading, one that failed and one that is simply empty
+   * are three different things to say, and saying none of them would leave a
+   * failed request looking like an account that has never traded.
+   *
+   * @param {import("gpui-base").Theme} tokens
+   * @param {{
+   *   id: string,
+   *   title: string,
+   *   note?: string,
+   *   rows: readonly LongbridgeOrderRow[],
+   *   total: number,
+   *   filter: import("gpui-base").InputStateHandle,
+   *   query: string,
+   *   empty: string,
+   * }} options
+   */
+  ordersPanel(tokens, options) {
+    const { id, title, note = "", rows, total, filter, query, empty } = options;
+    const counted = total === 1 ? "1 order" : `${total} orders`;
+    const summary = query ? `${rows.length} of ${counted}` : counted;
+    return workspacePanel(
+      tokens,
+      title,
+      this.ordersCollapsed(rows)
+        ? // No column heads over no rows: what is left to say is one line, and
+          // the heading above it already says whose line it is.
+          h_flex()
+            .id(`${id}-state`)
+            .items_center()
+            .px(tokens.spacing.sm)
+            .py(tokens.spacing.sm)
+            .child(muted(tokens, this.ordersEmptyLine(query, empty)))
+        : this.instrumentTable(
+            tokens,
+            id,
+            title,
+            rows,
+            ORDER_ROW_HEIGHT,
+            ordersHeader(tokens, id),
+            (order, index) =>
+              orderRow(tokens, order, index, order.orderId === this.selectedOrderId),
+            (orderId, cx) => this.selectOrder(orderId, cx),
+            this.ordersEmpty(tokens, empty),
+            6,
+            (order, index) => String(order?.orderId ?? index),
+          )
+            .flex_1()
+            .min_h(0),
+      // Both lists carry a filter, because each narrows itself: they answer
+      // different questions, and one box for the two of them hid the short
+      // list every time the long one was narrowed.
+      filterInput(tokens, filter, 160),
+      { note: note ? `${summary} · ${note}` : summary, grow: !this.ordersCollapsed(rows) },
+    )
+      .id(id)
+      .flex_1()
+      .min_h(0);
+  }
+
+  /**
+   * Whether a list has nothing to draw and should give its height back.
+   *
+   * Not while the read is in flight: a panel that shrank on the way to its
+   * rows and grew again when they arrived would move the list underneath it
+   * twice per page open.
+   *
+   * @param {readonly LongbridgeOrderRow[]} rows
+   */
+  ordersCollapsed(rows) {
+    return rows.length === 0 && this.ordersState.status !== "loading";
+  }
+
+  /** The one line a collapsed list says instead of its rows. */
+  ordersEmptyLine(query, empty) {
+    if (this.ordersState.status === "error") return this.ordersState.error;
+    if (query) return "No order matches that filter.";
+    return empty;
+  }
+
+  /** @param {import("gpui-base").Theme} tokens @param {string} empty */
+  ordersEmpty(tokens, empty) {
+    const state = this.ordersState;
+    if (state.status === "loading") {
+      return emptyPanel(tokens, "Loading orders", "Reading this account's orders from Longbridge.");
+    }
+    if (state.status === "error") {
+      return emptyPanel(tokens, "Orders unavailable", state.error);
+    }
+    return emptyPanel(tokens, "Nothing to show", empty);
+  }
+
+  /**
+   * An order names an instrument, and the instrument is what the rest of the
+   * application is about -- so clicking one opens it, the way Return does in
+   * the terminal. Only when the Watchlist holds it: the detail panes are drawn
+   * from a streamed quote, and selecting a symbol that has none would leave
+   * them showing another instrument's readings under this one's name.
+   *
+   * @param {string} orderId @param {import("gpui").Context} cx
+   */
+  showOrderInstrument(orderId, cx) {
+    const order = [...this.ordersState.today, ...this.ordersState.history].find(
+      (row) => row.orderId === orderId,
+    );
+    if (!order || !this.quotes.some((quote) => quote.symbol === order.symbol)) return;
+    this.selectQuote(order.symbol, cx);
+    this.showPage("watchlist", cx);
   }
 
   /**
@@ -2947,6 +3884,7 @@ export default class LongbridgeApp extends View {
       switch (action) {
         case "workspace::watchlist":
         case "workspace::portfolio":
+        case "workspace::orders":
         case "workspace::reconnect":
           return this.hasStoredTokens;
         case "workspace::toggle-theme":
@@ -2990,7 +3928,9 @@ export default class LongbridgeApp extends View {
   /** Whether Escape has something of this application's to put away. */
   hasSomethingToDismiss() {
     if (this.calendarOpen || this.userMenuOpen || this.allocationHelpOpen) return true;
-    return Boolean(this.page === "portfolio" ? this.holdingsQuery : this.watchlistQuery);
+    if (this.rowMenu || this.addSymbolOpen) return true;
+    if (this.page === "orders" && this.selectedOrderId) return true;
+    return Boolean(this.pageFilter().query);
   }
 
   /**

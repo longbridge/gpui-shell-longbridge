@@ -79,14 +79,20 @@ fn debug_builds_watch_application_sources() {
 }
 
 #[test]
-fn application_exposes_api_backed_read_only_views() {
+fn the_only_change_this_application_makes_is_to_the_watchlist() {
     let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
     let ui = fs::read_to_string(app_dir().join("ui.js")).expect("ui.js");
     let market = fs::read_to_string(app_dir().join("market.js")).expect("market.js");
+    let orders = fs::read_to_string(app_dir().join("orders.js")).expect("orders.js");
+    let http = fs::read_to_string(app_dir().join("http.js")).expect("http.js");
 
     assert!(
         main.contains("/v1/watchlist/groups"),
-        "watchlist must load from the read-only API"
+        "watchlist must load from the API"
+    );
+    assert!(
+        main.contains("/v1/trade/order/today") && main.contains("/v1/trade/order/history"),
+        "the Orders page must read both order lists from the read-only API"
     );
     assert!(
         market.contains("sortLikeTerminal"),
@@ -101,6 +107,9 @@ fn application_exposes_api_backed_read_only_views() {
         "Market Detail",
         "Portfolio",
         "Holdings",
+        "Orders",
+        "Today Orders",
+        "History Orders",
     ] {
         assert!(
             main.contains(expected) || ui.contains(expected),
@@ -111,16 +120,39 @@ fn application_exposes_api_backed_read_only_views() {
         main.contains("priceChart") && main.contains("allocationChart"),
         "read-only market and allocation charts must remain wired"
     );
-    // The forbidden list is about edit controls. Read-only market-detail
-    // panels may now use bid, ask, and time-and-sales terminology; `InputState`
-    // remains limited to the two list filters, which narrow what is already on
-    // screen and never mutate the watchlist.
-    for forbidden in ["Add symbol", "Remove", "Place order", "Cancel order"] {
+    // The application changes exactly one thing about an account: which
+    // securities it watches. That is one path, one method, and the HTTP
+    // boundary is where it is enforced rather than remembered -- a second
+    // writable path would have to be added here before it could be added
+    // there.
+    assert!(
+        http.contains(r#"const EDITABLE_PATHS = new Set(["/v1/watchlist/groups"]);"#)
+            && http.contains("assertEditablePath(path);")
+            && http.matches(r#"method: "#).count() == 1
+            && http.contains(r#"method: "PUT","#),
+        "the only write this boundary can make is to the watchlist's own groups"
+    );
+    // Everything else stays a reading. An order is something an account
+    // already placed; nothing here submits, amends or withdraws one.
+    for forbidden in [
+        "Place order",
+        "Cancel order",
+        "/v1/trade/order/submit",
+        "/v1/trade/order/replace",
+        "/v1/trade/order/withdraw",
+    ] {
         assert!(
-            !main.contains(forbidden) && !ui.contains(forbidden) && !market.contains(forbidden),
-            "forbidden editing or trading surface {forbidden}"
+            !main.contains(forbidden)
+                && !ui.contains(forbidden)
+                && !market.contains(forbidden)
+                && !orders.contains(forbidden),
+            "forbidden trading surface {forbidden}"
         );
     }
+    // The two side captions exist in exactly one place, `orders.js`, and only
+    // as the reading of an order the account already placed. Nothing that
+    // draws a control may name them: a caption in `ui.js` or `main.js` would
+    // be a button that trades, which this application does not have.
     for forbidden in ["Buy", "Sell"] {
         assert!(
             !main.contains(&format!("\"{forbidden}\""))
@@ -129,6 +161,10 @@ fn application_exposes_api_backed_read_only_views() {
             "forbidden trading control label {forbidden}"
         );
     }
+    assert!(
+        !orders.contains("fetch(") && !orders.contains("POST"),
+        "the order reader normalizes an answer and never sends one"
+    );
     for forbidden in [
         "trade::buy",
         "trade::sell",
@@ -136,15 +172,23 @@ fn application_exposes_api_backed_read_only_views() {
         "trade::cancel-order",
     ] {
         assert!(
-            !main.contains(forbidden) && !ui.contains(forbidden) && !market.contains(forbidden),
+            !main.contains(forbidden)
+                && !ui.contains(forbidden)
+                && !market.contains(forbidden)
+                && !orders.contains(forbidden),
             "forbidden trading action {forbidden}"
         );
     }
+    // Retained text state is the four list filters, which narrow what is
+    // already on screen, and the one field that names a security to add.
+    // Nothing composes an order.
     assert!(
-        main.matches("InputState.new({ placeholder:").count() == 2
+        main.matches("InputState.new({ placeholder:").count() == 5
             && main.contains("Filter watchlist")
-            && main.contains("Filter holdings"),
-        "the only retained text state may be the two list filters"
+            && main.contains("Filter holdings")
+            && main.matches("Filter orders").count() == 2
+            && main.contains(r#"placeholder: "AAPL.US""#),
+        "the only retained text state may be the list filters and the symbol to add"
     );
     assert!(
         market.contains("export function filterRows"),
@@ -477,7 +521,9 @@ fn responsive_workspace_uses_plain_panel_chrome() {
     let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
     let ui = fs::read_to_string(app_dir().join("ui.js")).expect("ui.js");
     assert!(
-        ui.contains("export function workspacePanel(tokens, title, content, accessory = null)")
+        ui.contains(
+            "export function workspacePanel(tokens, title, content, accessory = null, options = {})",
+        )
             && main.matches("workspacePanel(").count() >= 4
             && !main.contains("dockFrame")
             && !main.contains("dockTabBar"),
@@ -516,9 +562,12 @@ fn details_column_prioritizes_quote_chart_then_market() {
 
     assert!(
         main.contains(".id(\"detail-panels\")")
-            && main.contains(".child(quote.flex_basis(180)")
-            && main.matches(".child(chart.h(290).flex_none())").count() == 2
-            && main.contains(".child(market.flex_basis(220)"),
+            // Quote Details is sized for what it now holds -- a heading, a
+            // grid of readings and a disclosure -- rather than for the three
+            // metric columns it used to be.
+            && main.matches(".child(quote.flex_none())").count() == 2
+            && main.contains(".child(chart.flex_basis(290)")
+            && main.contains(".child(market.flex_basis(240)"),
         "the 6:4 layout must keep Quote, Chart and Market as ordered independent Panels"
     );
     assert!(
@@ -534,10 +583,14 @@ fn plain_panel_title_has_one_title_and_one_content_region() {
     let ui = fs::read_to_string(app_dir().join("ui.js")).expect("ui.js");
 
     assert!(
-        ui.contains("export function workspacePanel(tokens, title, content, accessory = null)")
-            && ui.contains(".child(label(tokens, title, 13).font_weight(700))")
+        ui.contains(
+            "export function workspacePanel(tokens, title, content, accessory = null, options = {})",
+        ) && ui.contains(".child(label(tokens, title, 13).font_weight(700))")
+            && ui.contains(".when(Boolean(note), (element) => element.child(muted(tokens, note).truncate()))")
             && ui.contains(".when(accessory, (element) => element.child(accessory))")
-            && ui.contains(".child(content.border(0).flex_1().min_h(0))")
+            && ui.contains(
+                ".child(grow ? content.border(0).flex_1().min_h(0) : content.border(0).flex_none())",
+            )
             && !ui.contains("drag_tab("),
         "plain Panel must contain one title region and one content region"
     );

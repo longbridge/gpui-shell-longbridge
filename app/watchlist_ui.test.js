@@ -39,7 +39,10 @@ export default class WatchlistUiProbe extends View {
             .child(watchlistHeader(tokens))
             .child(quoteRow(tokens, quote, true, 0, quote.receivedAt + 5_000)),
         )
-        .child(quoteDetail(tokens, quote, quote.receivedAt + 5_000))
+        // Open, so the probe draws every reading the pane can show. The
+        // closed half of the disclosure is `detail_ui.test.js`, which is where
+        // the pane owns the state.
+        .child(quoteDetail(tokens, quote, quote.receivedAt + 5_000, 1, { open: true }))
         // The compact pair is the narrow dock contract: never squeeze the
         // secondary columns into the Instrument/Last lanes.
         .child(

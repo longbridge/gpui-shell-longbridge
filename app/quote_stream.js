@@ -19,6 +19,7 @@ import {
   decodeSecurityDepthResponse,
   decodeSecurityIntradayResponse,
   decodeSecurityQuoteResponse,
+  decodeSecurityStaticInfoResponse,
   decodeSecurityTradeResponse,
   encodeAuthRequest,
   encodeFrame,
@@ -139,7 +140,10 @@ export function createQuoteStream(options) {
     "accept-language": API_LANGUAGE,
     "x-dc-region": accessToken.startsWith("us_") ? "us" : "ap",
   };
-  const symbols = requireSymbols(options.symbols);
+  // Mutable, because the watchlist is: what is subscribed now and what a
+  // reconnect resubscribes have to be the same list, and that list grows and
+  // shrinks while the session is up.
+  let symbols = requireSymbols(options.symbols);
   const onQuote = requireCallback(options.onQuote, "onQuote");
   const onDepth = requireCallback(options.onDepth, "onDepth");
   const onTrades = requireCallback(options.onTrades, "onTrades");
@@ -366,7 +370,8 @@ export function createQuoteStream(options) {
     }
     if (
       (packet.command === COMMAND.PUSH_DEPTH || packet.command === COMMAND.PUSH_TRADE) &&
-      (payload.symbol !== selectedDetailSymbol || activeDetailGeneration !== selectedDetailGeneration)
+      (payload.symbol !== selectedDetailSymbol ||
+        activeDetailGeneration !== selectedDetailGeneration)
     ) {
       return;
     }
@@ -607,7 +612,11 @@ export function createQuoteStream(options) {
       const session = current;
       if (!session || !active(session)) throw new Error("quote stream is not connected");
       return decodeSecurityDepthResponse(
-        await request(session, COMMAND.DEPTH, encodeSecurityRequest(requireString(symbol, "symbol"))),
+        await request(
+          session,
+          COMMAND.DEPTH,
+          encodeSecurityRequest(requireString(symbol, "symbol")),
+        ),
       );
     },
 
@@ -623,6 +632,101 @@ export function createQuoteStream(options) {
             count: requirePositiveInteger(count, "count"),
           }),
         ),
+      );
+    },
+
+    /**
+     * What a security is, before it is anything to this account: its name, the
+     * exchange it trades on and the currency it trades in.
+     *
+     * This is what the add-a-security surface previews. It asks the same
+     * socket the prices come over, because the quote API has no HTTP door --
+     * `openapi-quote` speaks WebSocket and nothing else.
+     *
+     * @param {string[]} wanted
+     */
+    async queryStaticInfo(wanted) {
+      const session = current;
+      if (!session || !active(session)) throw new Error("quote stream is not connected");
+      return decodeSecurityStaticInfoResponse(
+        await request(
+          session,
+          COMMAND.STATIC_INFO,
+          encodeRealtimeQuoteRequest(requireSymbols(wanted)),
+        ),
+      );
+    },
+
+    /** The current quote for symbols this stream may not be subscribed to. */
+    async queryQuotes(wanted) {
+      const session = current;
+      if (!session || !active(session)) throw new Error("quote stream is not connected");
+      return decodeSecurityQuoteResponse(
+        await request(
+          session,
+          COMMAND.REALTIME_QUOTE,
+          encodeRealtimeQuoteRequest(requireSymbols(wanted)),
+        ),
+      );
+    },
+
+    /**
+     * Adds symbols to the quote subscription, and to what a reconnect will ask
+     * for again.
+     *
+     * The snapshot is requested for the new symbols alone: a row added to a
+     * watchlist has no price until the market sends one, and waiting for the
+     * next push would leave it blank for as long as the instrument is quiet.
+     *
+     * @param {string[]} added
+     */
+    async watchSymbols(added) {
+      const fresh = requireSymbols(added).filter((symbol) => !symbols.includes(symbol));
+      if (fresh.length === 0) return;
+      symbols = [...symbols, ...fresh];
+      const session = current;
+      // Not connected: the list is what matters, and the next handshake
+      // subscribes to all of it.
+      if (!session || !active(session)) return;
+      await request(
+        session,
+        COMMAND.SUBSCRIBE,
+        encodeSubscribeRequest({ symbols: fresh, subTypes: [SUB_TYPE.QUOTE], isFirstPush: true }),
+      );
+      if (!active(session)) return;
+      const snapshot = await request(
+        session,
+        COMMAND.REALTIME_QUOTE,
+        encodeRealtimeQuoteRequest(fresh),
+      );
+      for (const quote of decodeSecurityQuoteResponse(snapshot)) {
+        try {
+          onQuote(quote);
+        } catch (error) {
+          emitStatus("callback_error", { error: String(error?.message ?? error) });
+        }
+      }
+    },
+
+    /**
+     * Drops symbols from the quote subscription and from the reconnect list.
+     *
+     * The selected instrument's depth and tape are a separate subscription
+     * under their own sub-types, so this cannot take them away from an
+     * instrument that is still being read.
+     *
+     * @param {string[]} dropped
+     */
+    async unwatchSymbols(dropped) {
+      const stale = requireSymbols(dropped).filter((symbol) => symbols.includes(symbol));
+      if (stale.length === 0) return;
+      symbols = symbols.filter((symbol) => !stale.includes(symbol));
+      const session = current;
+      if (!session || !active(session)) return;
+      await request(
+        session,
+        COMMAND.UNSUBSCRIBE,
+        encodeUnsubscribeRequest({ symbols: stale, subTypes: [SUB_TYPE.QUOTE] }),
       );
     },
 

@@ -21,6 +21,14 @@ const group = {
 
 export default class AllocationUiProbe extends View {
   render(cx) {
-    return v_flex().child(allocationChart(cx.theme(), group));
+    const tokens = cx.theme();
+    return (
+      v_flex()
+        .child(allocationChart(tokens, group))
+        // The same ring with a wedge under the pointer: one lit, the rest
+        // faded back. Drawn beside the resting one so the difference between
+        // them is what the test reads.
+        .child(allocationChart(tokens, group, { hovered: "A.US", onHover: () => {} }))
+    );
   }
 }

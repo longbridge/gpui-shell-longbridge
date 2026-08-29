@@ -4,6 +4,7 @@
 import { h_flex, v_flex } from "gpui-base";
 
 import LongbridgeApp from "./main.js";
+import { normalizeOrders } from "./orders.js";
 
 const QUOTE = Object.freeze({
   symbol: "AAPL.US",
@@ -50,6 +51,32 @@ export default class KeymapUiProbe extends LongbridgeApp {
     this.account = null;
     this.fxRates = new Map([["USD", 1]]);
     this.holdings = [];
+    this.initOrdersState();
+    this.ordersState = {
+      status: "ready",
+      today: normalizeOrders({
+        data: {
+          orders: [
+            {
+              order_id: "884955210000",
+              status: "FilledStatus",
+              stock_name: "Apple Inc.",
+              quantity: "10",
+              executed_quantity: "10",
+              price: "188.500",
+              executed_price: "188.480",
+              submitted_at: "1700000000",
+              side: "Buy",
+              symbol: "AAPL.US",
+              order_type: "LO",
+              currency: "USD",
+            },
+          ],
+        },
+      }),
+      history: [],
+      error: "",
+    };
     this.error = "";
     this.streamError = "";
     this.stream = null;
@@ -71,6 +98,9 @@ export default class KeymapUiProbe extends LongbridgeApp {
 
   /** The probe reaches no network: what is under test is the dispatch. */
   loadPortfolio() {}
+
+  /** Nor for orders, which the page would otherwise read on the way in. */
+  loadOrders() {}
 
   /** Neither does reconnecting; the status is what says the action arrived. */
   resume(cx) {
