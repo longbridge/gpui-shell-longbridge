@@ -1,7 +1,7 @@
 // A standalone, read-only Longbridge desktop client. OAuth uses direct HTTP,
 // quotes use the documented WebSocket protocol, and no trading API is exposed.
 
-import { View, div } from "gpui";
+import { View, div, svg } from "gpui";
 import { holdContext } from "./context.js";
 import {
   CalendarState,
@@ -1888,6 +1888,7 @@ export default class LongbridgeApp extends View {
    * @param {import("gpui-base").Theme} tokens
    */
   titleBar(tokens) {
+    const status = statusColors(tokens);
     return (
       h_flex()
         .id("window-title-bar")
@@ -1931,9 +1932,12 @@ export default class LongbridgeApp extends View {
                 .h(20)
                 .flex_none()
                 .accessibility_label("Longbridge")
-                .child(div().absolute().left(1).bottom(1).w(3).h(18).bg(statusColors(tokens).info))
-                .child(div().absolute().left(7).bottom(1).w(5).h(12).bg(statusColors(tokens).info))
-                .child(div().absolute().left(15).bottom(1).w(3).h(7).bg(statusColors(tokens).info)),
+                .child(svg("assets/logo-info.svg").absolute().inset_0().text_color(status.info))
+                .child(
+                  svg("assets/logo-warning.svg").absolute().inset_0().text_color(status.warning),
+                )
+                .child(svg("assets/logo-danger.svg").absolute().inset_0().text_color(status.down))
+                .child(svg("assets/logo-success.svg").absolute().inset_0().text_color(status.up)),
             )
             .child(label(tokens, "Longbridge", 13).font_weight(700)),
         )

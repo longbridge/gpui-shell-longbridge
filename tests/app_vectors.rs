@@ -791,6 +791,29 @@ fn retained_price_chart_owns_its_indicator_and_dated_tooltip(cx: &mut TestAppCon
         "the full-session line names every provider-labelled session:\n{intraday}"
     );
     assert!(intraday.contains("Previous close 98.5"), "{intraday}");
+    assert!(
+        intraday.contains("intraday-current-marker"),
+        "the current price must remain visible even before the pointer enters the plot:\n{intraday}"
+    );
+    for (x, session) in [
+        (75., "Overnight"),
+        (220., "Pre-market"),
+        (350., "Regular"),
+        (460., "Post-market"),
+    ] {
+        context.simulate_mouse_move(
+            gpui::point(gpui::px(x), gpui::px(100.)),
+            None,
+            gpui::Modifiers::default(),
+        );
+        context.run_until_parked();
+        context.update(|window, cx| window.draw(cx).clear(cx));
+        let tooltip = tree(&mut context);
+        assert!(
+            tooltip.contains(&format!("Session {session}")),
+            "the Intraday tooltip must retain the provider session name {session}:\n{tooltip}"
+        );
+    }
 }
 
 #[gpui::test]
@@ -1862,5 +1885,46 @@ fn an_avatar_draws_its_image_when_it_has_one_and_its_fallback_otherwise(cx: &mut
     assert!(
         rendered.contains("text \"LB\"") && rendered.contains("text \"US\""),
         "{rendered}"
+    );
+}
+
+#[gpui::test]
+fn title_bar_draws_the_themed_official_svg_mark(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    grant_app_capabilities();
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("title_bar_ui.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let (_root, view) = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+    context.run_until_parked();
+    let draw_view = view.clone();
+    context.draw(
+        gpui::Point::default(),
+        gpui::size(gpui::px(640.), gpui::px(48.)),
+        move |_, _| draw_view.into_any_element(),
+    );
+    let rendered = context.update(|_, cx| {
+        view.read(cx)
+            .snapshot()
+            .map(gpui_shell::RenderSnapshot::debug_tree)
+            .unwrap_or_default()
+    });
+
+    assert!(
+        [
+            "assets/logo-info.svg",
+            "assets/logo-warning.svg",
+            "assets/logo-danger.svg",
+            "assets/logo-success.svg",
+        ]
+        .iter()
+        .all(|asset| {
+            rendered.contains(&format!(
+                "svg \"{asset}\" .absolute .inset_0 .text_color[Str(\"#000000\")]"
+            ))
+        })
+            && !rendered.contains(".absolute .left[Number(1.0)]"),
+        "the title bar must layer the semantic official SVG marks rather than reconstructing bars:\n{rendered}"
     );
 }

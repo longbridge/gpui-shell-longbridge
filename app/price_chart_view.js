@@ -96,12 +96,23 @@ function candleWickPath(candle) {
     .build();
 }
 
-function retainIntradayExtrema(points, budget) {
+function retainIntradayExtrema(points, budget, hasSessionBoundary) {
   if (points.length <= budget) return points;
-  // Two extrema per bucket preserve the visible vertical range. Keeping the
-  // first and last point makes each session connector land on real trades.
-  const bucketCount = Math.max(1, Math.floor((budget - 2) / 2));
-  const retained = [];
+  // Later segments overlap the preceding session by one connector point. The
+  // real first trade of the newly labelled session is index 1, so it remains
+  // mandatory alongside the connector, final trade, and bucket extrema.
+  const mandatory = new Set([0, points.length - 1]);
+  if (hasSessionBoundary && points.length > 1) mandatory.add(1);
+  let overallLow = 0;
+  let overallHigh = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    if (points[index].close < points[overallLow].close) overallLow = index;
+    if (points[index].close > points[overallHigh].close) overallHigh = index;
+  }
+  mandatory.add(overallLow);
+  mandatory.add(overallHigh);
+  const bucketCount = Math.max(0, Math.floor((budget - mandatory.size) / 2));
+  const extrema = new Set();
   for (let bucket = 0; bucket < bucketCount; bucket += 1) {
     const first = Math.floor((bucket * points.length) / bucketCount);
     const last = Math.max(first + 1, Math.floor(((bucket + 1) * points.length) / bucketCount));
@@ -111,13 +122,18 @@ function retainIntradayExtrema(points, budget) {
       if (points[index].close < points[low].close) low = index;
       if (points[index].close > points[high].close) high = index;
     }
-    if (low === high) retained.push(low);
-    else if (low < high) retained.push(low, high);
-    else retained.push(high, low);
+    extrema.add(low);
+    extrema.add(high);
   }
-  if (retained[0] !== 0) retained.unshift(0);
-  if (retained.at(-1) !== points.length - 1) retained.push(points.length - 1);
-  return retained.map((index) => points[index]);
+  return [
+    ...mandatory,
+    ...[...extrema]
+      .sort((left, right) => left - right)
+      .filter((index) => !mandatory.has(index))
+      .slice(0, Math.max(0, budget - mandatory.size)),
+  ]
+    .sort((left, right) => left - right)
+    .map((index) => points[index]);
 }
 
 /**
@@ -128,18 +144,18 @@ export function layoutIntradayForView(series, layout) {
   const geometry = layoutIntradaySeries(series, layout);
   const total = geometry.sessionSegments.reduce((sum, segment) => sum + segment.points.length, 0);
   if (total <= INTRADAY_POINT_LIMIT) return geometry;
-  let remaining = INTRADAY_POINT_LIMIT;
+  const minimums = geometry.sessionSegments.map((_segment, index) => (index === 0 ? 4 : 5));
+  let remaining = INTRADAY_POINT_LIMIT - minimums.reduce((sum, minimum) => sum + minimum, 0);
   let remainingPoints = total;
   const sessionSegments = geometry.sessionSegments.map((segment, index) => {
     const segmentsAfter = geometry.sessionSegments.length - index - 1;
-    const budget = Math.max(
-      2,
+    const extra =
       segmentsAfter === 0
         ? remaining
-        : Math.floor((remaining * segment.points.length) / remainingPoints),
-    );
-    const points = Object.freeze(retainIntradayExtrema(segment.points, budget));
-    remaining -= points.length;
+        : Math.floor((remaining * segment.points.length) / remainingPoints);
+    const budget = minimums[index] + Math.max(0, extra);
+    const points = Object.freeze(retainIntradayExtrema(segment.points, budget, index > 0));
+    remaining -= budget - minimums[index];
     remainingPoints -= segment.points.length;
     return Object.freeze({ ...segment, points });
   });
@@ -311,7 +327,7 @@ export default class PriceChartView extends View {
     return null;
   }
 
-  lineTooltip(tokens, point, geometry, date, time, tone) {
+  lineTooltip(tokens, point, geometry, date, time, tone, session = "") {
     return v_flex()
       .absolute()
       .top(4)
@@ -326,7 +342,8 @@ export default class PriceChartView extends View {
       .bg(tokens.surface)
       .transition("opacity", { duration: 150, easing: "ease-out" })
       .child(numeric(tokens, point.close.toFixed(3), TYPE.body).text_color(tone))
-      .child(muted(tokens, `${date} ${time}`));
+      .child(muted(tokens, `${date} ${time}`))
+      .when(Boolean(session), (element) => element.child(muted(tokens, `Session ${session}`)));
   }
 
   renderFiveDay(tokens, chart, geometry) {
@@ -395,6 +412,8 @@ export default class PriceChartView extends View {
           .dash_array([3, 3])
           .build()
       : null;
+    const current = geometry.points.at(-1);
+    const currentMarker = current ? markerBlock(current, geometry) : null;
     const date = typeof point?.marketDay === "string" ? point.marketDay : "";
     const time = point ? formatMarketTime(this.symbol, point.timestamp) : "";
     return chart
@@ -409,6 +428,20 @@ export default class PriceChartView extends View {
           .when(previousLine, (element) =>
             element.child(
               window.paint_path(previousLine, tokens.muted_foreground).absolute().inset_0(),
+            ),
+          )
+          .when(currentMarker, (element) =>
+            element.child(
+              div()
+                .id("intraday-current-marker")
+                .absolute()
+                .inset_0()
+                .child(
+                  window
+                    .paint_path(currentMarker, sessionTone(tokens, current.tradeSession))
+                    .absolute()
+                    .inset_0(),
+                ),
             ),
           )
           .children(
@@ -445,11 +478,13 @@ export default class PriceChartView extends View {
           .when(indicator, (element) =>
             element
               .child(window.paint_path(indicator, tokens.muted_foreground).absolute().inset_0())
-              .child(
-                window
-                  .paint_path(marker, sessionTone(tokens, point.tradeSession))
-                  .absolute()
-                  .inset_0(),
+              .when(point.timestamp !== current?.timestamp, (hover) =>
+                hover.child(
+                  window
+                    .paint_path(marker, sessionTone(tokens, point.tradeSession))
+                    .absolute()
+                    .inset_0(),
+                ),
               )
               .child(
                 this.lineTooltip(
@@ -459,6 +494,7 @@ export default class PriceChartView extends View {
                   date,
                   time,
                   sessionTone(tokens, point.tradeSession),
+                  SESSION_LABELS[point.tradeSession] ?? "Session",
                 ),
               ),
           ),

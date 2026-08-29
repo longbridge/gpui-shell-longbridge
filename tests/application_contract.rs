@@ -477,15 +477,83 @@ fn dock_tab_bar_hides_one_tab_but_keeps_multi_tab_navigation() {
 }
 
 #[test]
-fn title_mark_uses_the_live_semantic_info_token() {
-    let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
+fn title_mark_preserves_official_multicolor_roles_with_live_semantic_tokens() {
+    let root = app_dir();
+    let main = fs::read_to_string(root.join("main.js")).expect("main.js");
+    let official = fs::read_to_string(root.join("assets/logo-light.svg")).expect("official light logo");
+    let layers = [
+        ("logo-info.svg", "info", 3),
+        ("logo-warning.svg", "warning", 1),
+        ("logo-danger.svg", "down", 2),
+        ("logo-success.svg", "up", 1),
+    ];
 
     assert!(
-        main.contains("bg(statusColors(tokens).info)")
+        layers.iter().all(|(asset, token, _)| {
+            main.contains(&format!("svg(\"assets/{asset}\")"))
+                && main.contains(&format!(".text_color(status.{token})"))
+        })
+            && main.contains("const status = statusColors(tokens);")
+            && main.contains("this.titleBar(tokens)")
+            && !main.contains(".child(div().absolute().left(1)")
             && !main.contains("assets/logo-dark.svg")
             && !main.contains("assets/logo-light.svg"),
-        "the title mark must follow the theme's semantic info token rather than a fixed SVG palette"
+        "the title mark must resolve semantic layer colours from the current render theme, rather than a hand-built or fixed-palette glyph"
     );
+
+    assert!(
+        official.contains("width=\"69px\" height=\"69px\" viewBox=\"0 0 69 69\"")
+            && layers.iter().all(|(asset, _, expected_count)| {
+                let layer = fs::read_to_string(root.join("assets").join(asset))
+                    .unwrap_or_else(|_| panic!("themed title logo layer {asset}"));
+                layer.contains("width=\"69px\" height=\"69px\" viewBox=\"0 0 69 69\"")
+                    && layer.matches("<rect").count() == *expected_count
+                    && layer.matches("fill=\"currentColor\"").count() == *expected_count
+                    && !layer.contains("#00")
+                    && !layer.contains("#FC")
+                    && !layer.contains("#FF")
+            }),
+        "every logo layer must preserve the official 69x69 frame and inherit its semantic colour"
+    );
+
+    let all_layer_rects = layers
+        .iter()
+        .flat_map(|(asset, _, _)| {
+            let layer = fs::read_to_string(root.join("assets").join(asset)).expect("title logo layer");
+            [
+                "x=\"0\" y=\"0\" width=\"3\" height=\"69\"",
+                "x=\"21\" y=\"60\" width=\"9\" height=\"9\"",
+                "x=\"33\" y=\"60\" width=\"3\" height=\"9\"",
+                "x=\"53\" y=\"43\" width=\"9\" height=\"26\"",
+                "x=\"66\" y=\"26\" width=\"3\" height=\"43\"",
+                "x=\"40\" y=\"52\" width=\"10\" height=\"17\"",
+                "x=\"7\" y=\"0\" width=\"10\" height=\"69\"",
+            ]
+            .into_iter()
+            .filter(move |rect| layer.contains(rect))
+            .map(str::to_owned)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        all_layer_rects.len(),
+        7,
+        "the seven official rectangles must be distributed across the themed layers exactly once"
+    );
+    for rect in [
+        "x=\"0\" y=\"0\" width=\"3\" height=\"69\"",
+        "x=\"21\" y=\"60\" width=\"9\" height=\"9\"",
+        "x=\"33\" y=\"60\" width=\"3\" height=\"9\"",
+        "x=\"53\" y=\"43\" width=\"9\" height=\"26\"",
+        "x=\"66\" y=\"26\" width=\"3\" height=\"43\"",
+        "x=\"40\" y=\"52\" width=\"10\" height=\"17\"",
+        "x=\"7\" y=\"0\" width=\"10\" height=\"69\"",
+    ] {
+        assert_eq!(
+            all_layer_rects.iter().filter(|candidate| candidate.as_str() == rect).count(),
+            1,
+            "official rectangle {rect} must appear in exactly one semantic layer"
+        );
+    }
 }
 
 #[test]

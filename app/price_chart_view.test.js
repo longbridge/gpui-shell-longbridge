@@ -59,9 +59,14 @@ if (
   compactIntraday.points.length > 240 ||
   compactIntraday.sessionSegments.some((segment) => segment.points.length === 0) ||
   !compactIntraday.points.some((point) => point.close === 116) ||
-  !compactIntraday.points.some((point) => point.close === 100)
+  !compactIntraday.points.some((point) => point.close === 100) ||
+  ![0, 300, 600, 990].every((index) =>
+    compactIntraday.points.some((point) => point.timestamp === denseIntraday[index].timestamp),
+  )
 ) {
-  throw new Error("intraday paint geometry caps point cost without hiding extrema or sessions");
+  throw new Error(
+    "intraday paint geometry caps point cost without hiding extrema or session starts",
+  );
 }
 
 function propsFor(mode) {
