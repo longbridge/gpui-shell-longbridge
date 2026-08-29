@@ -1913,10 +1913,10 @@ fn title_bar_draws_the_themed_official_svg_mark(cx: &mut TestAppContext) {
 
     assert!(
         [
+            "assets/logo-foreground.svg",
             "assets/logo-info.svg",
             "assets/logo-warning.svg",
             "assets/logo-danger.svg",
-            "assets/logo-success.svg",
         ]
         .iter()
         .all(|asset| {

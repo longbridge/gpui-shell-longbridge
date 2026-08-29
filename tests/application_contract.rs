@@ -481,17 +481,40 @@ fn title_mark_preserves_official_multicolor_roles_with_live_semantic_tokens() {
     let root = app_dir();
     let main = fs::read_to_string(root.join("main.js")).expect("main.js");
     let official = fs::read_to_string(root.join("assets/logo-light.svg")).expect("official light logo");
-    let layers = [
-        ("logo-info.svg", "info", 3),
-        ("logo-warning.svg", "warning", 1),
-        ("logo-danger.svg", "down", 2),
-        ("logo-success.svg", "up", 1),
+    let layers: [(&str, &str, &[&str]); 4] = [
+        (
+            "logo-foreground.svg",
+            "tokens.foreground",
+            &[
+                "x=\"0\" y=\"0\" width=\"3\" height=\"69\"",
+                "x=\"33\" y=\"60\" width=\"3\" height=\"9\"",
+                "x=\"53\" y=\"43\" width=\"9\" height=\"26\"",
+            ],
+        ),
+        (
+            "logo-info.svg",
+            "status.info",
+            &["x=\"7\" y=\"0\" width=\"10\" height=\"69\""],
+        ),
+        (
+            "logo-warning.svg",
+            "status.warning",
+            &["x=\"21\" y=\"60\" width=\"9\" height=\"9\""],
+        ),
+        (
+            "logo-danger.svg",
+            "status.down",
+            &[
+                "x=\"40\" y=\"52\" width=\"10\" height=\"17\"",
+                "x=\"66\" y=\"26\" width=\"3\" height=\"43\"",
+            ],
+        ),
     ];
 
     assert!(
         layers.iter().all(|(asset, token, _)| {
             main.contains(&format!("svg(\"assets/{asset}\")"))
-                && main.contains(&format!(".text_color(status.{token})"))
+                && main.contains(&format!(".text_color({token})"))
         })
             && main.contains("const status = statusColors(tokens);")
             && main.contains("this.titleBar(tokens)")
@@ -503,12 +526,13 @@ fn title_mark_preserves_official_multicolor_roles_with_live_semantic_tokens() {
 
     assert!(
         official.contains("width=\"69px\" height=\"69px\" viewBox=\"0 0 69 69\"")
-            && layers.iter().all(|(asset, _, expected_count)| {
+            && layers.iter().all(|(asset, _, rects)| {
                 let layer = fs::read_to_string(root.join("assets").join(asset))
                     .unwrap_or_else(|_| panic!("themed title logo layer {asset}"));
                 layer.contains("width=\"69px\" height=\"69px\" viewBox=\"0 0 69 69\"")
-                    && layer.matches("<rect").count() == *expected_count
-                    && layer.matches("fill=\"currentColor\"").count() == *expected_count
+                    && layer.matches("<rect").count() == rects.len()
+                    && layer.matches("fill=\"currentColor\"").count() == rects.len()
+                    && rects.iter().all(|rect| layer.contains(rect))
                     && !layer.contains("#00")
                     && !layer.contains("#FC")
                     && !layer.contains("#FF")

@@ -1932,12 +1932,17 @@ export default class LongbridgeApp extends View {
                 .h(20)
                 .flex_none()
                 .accessibility_label("Longbridge")
+                .child(
+                  svg("assets/logo-foreground.svg")
+                    .absolute()
+                    .inset_0()
+                    .text_color(tokens.foreground),
+                )
                 .child(svg("assets/logo-info.svg").absolute().inset_0().text_color(status.info))
                 .child(
                   svg("assets/logo-warning.svg").absolute().inset_0().text_color(status.warning),
                 )
-                .child(svg("assets/logo-danger.svg").absolute().inset_0().text_color(status.down))
-                .child(svg("assets/logo-success.svg").absolute().inset_0().text_color(status.up)),
+                .child(svg("assets/logo-danger.svg").absolute().inset_0().text_color(status.down)),
             )
             .child(label(tokens, "Longbridge", 13).font_weight(700)),
         )

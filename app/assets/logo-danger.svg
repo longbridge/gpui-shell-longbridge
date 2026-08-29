@@ -4,8 +4,8 @@
     <g id="Page-1" stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
         <g id="light-icon" transform="translate(-29.000000, -30.000000)" fill-rule="nonzero">
             <g id="light-logo" transform="translate(29.000000, 30.000000)">
-                <rect id="Rectangle" fill="currentColor" x="66" y="26" width="3" height="43"></rect>
                 <rect id="Rectangle" fill="currentColor" x="40" y="52" width="10" height="17"></rect>
+                <rect id="Rectangle" fill="currentColor" x="66" y="26" width="3" height="43"></rect>
             </g>
         </g>
     </g>
