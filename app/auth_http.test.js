@@ -165,6 +165,31 @@ async function permanentOauthErrorTerminates() {
   );
 }
 
+async function cancelledDeviceAuthorizationNeverFetchesOrSaves() {
+  let checks = 0;
+  let fetches = 0;
+  let saves = 0;
+  let error = null;
+  try {
+    await pollDeviceAuthorization(authorization(), {
+      fetch: async () => {
+        fetches += 1;
+        return response(200, { access_token: "new", refresh_token: "new_refresh" });
+      },
+      sleep: async () => {},
+      now: () => 0,
+      shouldCancel: () => ++checks > 1,
+      saveTokens: async () => {
+        saves += 1;
+      },
+    });
+  } catch (caught) {
+    error = caught;
+  }
+  check(error?.message === "authorization_cancelled", "cancel stops device authorization");
+  check(fetches === 0 && saves === 0, "cancelled authorization cannot replace saved credentials");
+}
+
 // Longbridge returns security names in the language the request asks for, so an
 // authenticated read must pin English rather than inherit the account default.
 async function authenticatedReadsRequestEnglish() {
@@ -206,6 +231,7 @@ async function runVectors() {
   await slowDownIsSharedOncePerRound();
   await transientRegionDoesNotAbortItsSibling();
   await permanentOauthErrorTerminates();
+  await cancelledDeviceAuthorizationNeverFetchesOrSaves();
   await authenticatedReadsRequestEnglish();
 }
 

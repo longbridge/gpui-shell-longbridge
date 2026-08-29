@@ -225,6 +225,9 @@ fn application_exposes_api_backed_read_only_views() {
             && main.contains("\"Switch account…\"")
             && main.contains("\"user-menu-sign-out\"")
             && main.contains("\"Sign out\"")
+            && main.contains("cancelAccountSwitch(cx)")
+            && main.contains("Current: ${accountDisplayName(this.account)}")
+            && main.contains("Button.new(\"longbridge-home-link\")")
             && !main.contains("device.verificationUri,\n              device.verificationUri,"),
         "sign-in must open the authorization page rather than print its URL"
     );
