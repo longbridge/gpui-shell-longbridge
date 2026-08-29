@@ -59,7 +59,10 @@ fn host_reads_only_the_materialized_omarchy_palette() {
     .expect("host main.rs");
     assert!(host.contains(".local/state/omarchy/current/theme/colors.toml"));
     assert!(host.contains("HostModule::new(\"omarchy-theme\")"));
-    assert!(host.contains("gpui-shell/plugins"), "existing login storage must remain stable");
+    assert!(
+        host.contains("gpui-shell/plugins"),
+        "existing login storage must remain stable"
+    );
 }
 
 #[test]
@@ -89,13 +92,16 @@ fn application_exposes_api_backed_read_only_views() {
         market.contains("sortLikeTerminal"),
         "watchlist must use terminal-compatible sorting"
     );
-    // Sentence case, per the interface's copy rules: a view's name is a noun,
-    // not a title. `Stock details` was `Stock Details` before the restyle.
-    //
-    // Either file counts. A pane's name is written once, on its tab, and the
-    // tab is drawn by `panelTitle` in `ui.js`; the pane's own header stopped
-    // repeating it, because a pane that names itself twice is two headers.
-    for expected in ["Watchlist", "Stock details", "Portfolio", "Holdings"] {
+    // Each Dock tile names its own reading because a one-tab group hides its
+    // tab strip. The names must remain stable across layout restoration.
+    for expected in [
+        "Watchlist",
+        "Quote Details",
+        "Chart",
+        "Market Detail",
+        "Portfolio",
+        "Holdings",
+    ] {
         assert!(
             main.contains(expected) || ui.contains(expected),
             "missing view copy {expected}"
@@ -105,14 +111,33 @@ fn application_exposes_api_backed_read_only_views() {
         main.contains("priceChart") && main.contains("allocationChart"),
         "read-only market and allocation charts must remain wired"
     );
-    // The forbidden list is about surfaces that would edit a watchlist or reach
-    // the order book -- not about text state as such. `InputState` came off it
-    // when the lists grew filters: a filter narrows what is already on screen,
-    // writes nothing, and asks the API for nothing.
-    for forbidden in ["Add symbol", "Remove", "Trades", "Bid", "Ask"] {
+    // The forbidden list is about edit controls. Read-only market-detail
+    // panels may now use bid, ask, and time-and-sales terminology; `InputState`
+    // remains limited to the two list filters, which narrow what is already on
+    // screen and never mutate the watchlist.
+    for forbidden in ["Add symbol", "Remove", "Place order", "Cancel order"] {
         assert!(
             !main.contains(forbidden) && !ui.contains(forbidden) && !market.contains(forbidden),
             "forbidden editing or trading surface {forbidden}"
+        );
+    }
+    for forbidden in ["Buy", "Sell"] {
+        assert!(
+            !main.contains(&format!("\"{forbidden}\""))
+                && !ui.contains(&format!("\"{forbidden}\""))
+                && !market.contains(&format!("\"{forbidden}\"")),
+            "forbidden trading control label {forbidden}"
+        );
+    }
+    for forbidden in [
+        "trade::buy",
+        "trade::sell",
+        "trade::place-order",
+        "trade::cancel-order",
+    ] {
+        assert!(
+            !main.contains(forbidden) && !ui.contains(forbidden) && !market.contains(forbidden),
+            "forbidden trading action {forbidden}"
         );
     }
     assert!(
@@ -158,52 +183,16 @@ fn application_exposes_api_backed_read_only_views() {
             && main.contains("Scrollbar.vertical(`${id}-rows`)"),
         "both lists must virtualize their rows and pair a scrollbar with them by name"
     );
-    // The panes are dock panels now, which is what makes the layout the user's:
-    // it is a value they edit and the application only draws it. Both halves
-    // have to stay — a panel that nothing registered a class for cannot come
-    // back after a restart.
     assert!(
-        main.contains("dock_area(this.workspaceDock)")
-            && main.contains("DockArea.register_panel(\"watchlist\", WatchlistPanel)")
-            && main.contains("DockArea.register_panel(\"detail\", DetailPanel)"),
-        "the watchlist and detail panes must be panels of the workspace dock"
-    );
-    // Base draws none of this once gpui-shell is in the picture.
-    //
-    // `dockFrame` is on this list for a reason worth writing down, because it
-    // was taken off once. gpui-shell's `ScriptDockSkin::render_dock` replaces
-    // base's `render_dock` whether or not an application supplies chrome, and
-    // the default chrome returns the content bare -- without the box base wraps
-    // a dock in. A side dock with no width is not a column, so it drops into
-    // the flow below the centre and sizes to its content. Removing `dockFrame`
-    // does not restore base's box; it only swaps our missing one for the
-    // shell's.
-    let ui_source = &ui;
-    for chrome in ["dockTabBar", "dockDropHint", "dockFrame"] {
-        assert!(
-            main.contains(chrome) && ui_source.contains(&format!("export function {chrome}")),
-            "the dock's {chrome} must be drawn by the application"
-        );
-    }
-    assert!(
-        main.contains("toggle_dock(\"right\")") && ui.contains("export function detailToggle"),
-        "the details pane must still be collapsible from the window chrome"
-    );
-    // The geometry is remembered; the arrangement is not, and deliberately.
-    // `load` rebuilds every panel through the registry, so the panels this view
-    // created are replaced by two it has no handle on -- and a panel it cannot
-    // address is a panel it cannot repaint. Measured, the pane rendered twice
-    // at startup and never again: the watchlist arrived and the pane went on
-    // showing the empty state it had drawn before the data landed. So the
-    // panels are always seeded here and only the details pane's width and
-    // whether it is folded away are read back.
-    assert!(
-        main.contains("WORKSPACE_LAYOUT_KEY") && main.contains("dock_size(\"right\")"),
-        "the details pane's width must be written back to storage"
-    );
-    assert!(
-        !main.contains("workspaceDock.load("),
-        "restoring panels loses the handles that repaint them; see the note above"
+        main.contains(".id(\"watchlist-panels\")")
+            && main.contains("workspacePanel(tokens, \"Watchlist\"")
+            && main.contains("workspacePanel(tokens, \"Quote Details\"")
+            && main.contains("const chart = workspacePanel(")
+            && main.contains("      \"Chart\",")
+            && main.contains("workspacePanel(tokens, \"Market Detail\"")
+            && !main.contains("DockArea")
+            && !main.contains("dock_area("),
+        "Watchlist and detail readings must be four plain responsive Panels without Dock state"
     );
 
     // A row inside a virtual list cannot register a handler: it is rebuilt on
@@ -230,6 +219,12 @@ fn application_exposes_api_backed_read_only_views() {
     // device code exists, and it is not one anyone reads.
     assert!(
         main.contains("open_url(authorization.verificationUri)")
+            && main.contains("cx.open_url(\"https://longbridge.com\")")
+            && main.contains("cx.open_url(\"https://github.com/longbridge/longbridge-lite\")")
+            && main.contains("\"user-menu-sign-out\"")
+            && main.contains("\"Sign out\"")
+            && !main.contains("user-menu-switch-account")
+            && main.contains("Button.new(\"longbridge-home-link\")")
             && !main.contains("device.verificationUri,\n              device.verificationUri,"),
         "sign-in must open the authorization page rather than print its URL"
     );
@@ -261,32 +256,448 @@ fn price_chart_is_a_retained_child_view() {
 }
 
 #[test]
-fn workspace_repaints_do_not_checkpoint_the_market_model() {
+fn responsive_panels_preserve_watchlist_and_detail_priorities() {
     let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
-    let workspace = fs::read_to_string(app_dir().join("workspace.js")).expect("workspace.js");
-    let panel = workspace
-        .split("class WorkspacePanel extends View")
+    let ui = fs::read_to_string(app_dir().join("ui.js")).expect("ui.js");
+    let watchlist = main
+        .split("  watchlist(tokens) {")
         .nth(1)
-        .and_then(|source| source.split("export class WatchlistPanel").next())
-        .expect("WorkspacePanel source");
+        .and_then(|source| source.split("  /**\n   * A virtualized table").next())
+        .expect("watchlist render method");
+    let detail = main
+        .split("  marketDetailPanel(tokens) {")
+        .nth(1)
+        .and_then(|source| source.split("  /**\n   * The chart").next())
+        .expect("detail section render method");
+
+    assert!(!detail.contains("this.isNarrow()"));
+    assert!(
+        watchlist.contains("const compact = this.isWatchlistCompact()")
+            && watchlist.contains("watchlistHeader(tokens, compact)"),
+        "Watchlist must keep full columns when wide and primary lanes when compact"
+    );
+    assert!(
+        watchlist.contains("quoteRow(")
+            && watchlist.contains("this.lastTick,")
+            && watchlist.contains("compact,"),
+        "virtual Watchlist rows must reuse the pane sizing decision without a host call"
+    );
+    assert_eq!(
+        watchlist.matches("this.isNarrow()").count(),
+        0,
+        "virtual rows must make zero QuickJS-to-host viewport calls"
+    );
+    assert!(
+        detail.contains("orderBookPanel(tokens, this.depthState, depthRatio(this.depthState))")
+            && detail.contains("timeSalesPanel(tokens, this.tradesState, {")
+            && !detail.contains("compact"),
+        "detail lanes must be pane-safe by construction rather than switch from viewport compactness"
+    );
+    assert!(
+        ui.contains("export const WATCHLIST_MIN_WIDTH = 400")
+            && main.contains("watchlist.flex_basis(0).flex_grow(6).min_w(WATCHLIST_MIN_WIDTH)")
+            && main.contains(".flex_grow(4)")
+            && main.contains(".id(\"watchlist-panels-stacked\")")
+            && main.find("workspacePanel(tokens, \"Watchlist\"")
+                < main.find("workspacePanel(tokens, \"Quote Details\"")
+            && main.find("workspacePanel(tokens, \"Quote Details\"")
+                < main.find("const chart = workspacePanel(")
+            && main.find("const chart = workspacePanel(")
+                < main.find("workspacePanel(tokens, \"Market Detail\""),
+        "plain Panels must use 6:4 when wide and stack in Watchlist, Quote, Chart, Market priority"
+    );
+}
+
+#[test]
+fn minimum_watchlist_keeps_symbol_name_last_and_change() {
+    let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
+    let ui = fs::read_to_string(app_dir().join("ui.js")).expect("ui.js");
 
     assert!(
-        !panel.contains("update("),
-        "a panel update makes gpui-shell checkpoint every object reachable through its app; \
-         quote-driven repaints must refresh a panel without journalling the market model"
+        main.contains("const COMPACT_WATCHLIST_WIDTH = 440")
+            && ui.contains(".w(compact ? \"60%\" : \"31%\")")
+            && ui.contains(".w(compact ? \"40%\" : \"19%\")")
+            && ui.contains("quote.symbol")
+            && ui.contains("quote.name")
+            && ui.contains("quote.last")
+            && ui.contains("quote.changePercent"),
+        "compact Watchlist must keep Symbol + Name and Last + Chg"
+    );
+}
+
+#[test]
+fn responsive_breakpoints_use_the_same_gap_and_min_width_math_as_the_panels() {
+    let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
+    assert!(
+        main.contains("function responsivePanelWidths(viewportWidth)")
+            && main.contains("const content = available - WORKSPACE_PANEL_GAP")
+            && main.contains("content - WATCHLIST_MIN_WIDTH")
+            && main.contains("responsivePanelWidths(window.viewport_size().width).watchlist")
+            && main.contains("responsivePanelWidths(window.viewport_size().width).detail")
+            && main.matches(".gap(WORKSPACE_PANEL_GAP)").count() == 3,
+        "Watchlist columns and Chart controls must use the exact widths produced by the 6:4 Panel layout"
+    );
+}
+
+#[test]
+fn minimum_chart_keeps_a_real_plot_below_compact_interval_tabs() {
+    let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
+
+    assert!(
+        main.contains("Tabs.new(\"chart-mode-tabs\")")
+            && main.contains("Tab.new(`chart-mode-${id}`)")
+            && main.contains(".justify_center()")
+            && main.contains(".text_size(11)")
+            && main.contains(".border_b(2)")
+            && main.contains(".id(\"price-chart-wheel\")")
+            && main.contains(".min_h(244)")
+            && main.contains(".child(this.priceChart)"),
+        "the minimum Chart Panel must retain compact underline tabs and a visible plot"
     );
     assert!(
-        panel.contains("this.app = props?.app ?? workspaceApp()"),
-        "the panel must still acquire its application once during initialization"
+        main.contains("if (chartWidth < 440)")
+            && main.contains("Popover.new(\"chart-mode-menu\")")
+            && main.contains("Button.new(\"chart-mode-menu-trigger\")"),
+        "a narrow Chart TitleBar must replace the tabs with a compact interval dropdown"
+    );
+}
+
+#[test]
+fn title_bar_has_no_obsolete_detail_dock_toggle() {
+    let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
+
+    assert!(
+        !main.contains("detailToggle") && !main.contains("workspaceDock"),
+        "plain responsive Panels must not leave a Dock toggle in the TitleBar"
+    );
+}
+
+#[test]
+fn panel_layout_has_no_resize_or_persistence_hot_path() {
+    let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
+    let ui = fs::read_to_string(app_dir().join("ui.js")).expect("ui.js");
+
+    assert!(
+        !main.contains("WORKSPACE_LAYOUT_KEY")
+            && !main.contains("localStorage.setItem(WORKSPACE_LAYOUT_KEY")
+            && !ui.contains("resize_dock("),
+        "responsive Panels must not persist or resize a Dock"
+    );
+}
+
+#[test]
+fn workspace_outer_gap_is_not_double_padded() {
+    let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
+    let render = main
+        .split("  render(cx) {")
+        .nth(1)
+        .expect("application render method");
+
+    assert!(
+        render.contains(".px(PANE_INSET)")
+            && render.contains(".pb(PANE_INSET)")
+            && render.contains(".pt(0)"),
+        "the shell keeps 8px side/bottom gaps while the first panel sits 4px below the TitleBar"
+    );
+}
+
+#[test]
+fn retained_chart_props_do_not_duplicate_the_large_series() {
+    let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
+    let chart_props = main
+        .split("  chartProps() {")
+        .nth(1)
+        .and_then(|source| source.split("  nextPriceChartProps() {").next())
+        .expect("chartProps method");
+
+    assert!(
+        !chart_props.contains("series:")
+            && !main.contains("previous?.series === next.series")
+            && chart_props.contains("compactIntradaySeriesForView"),
+        "the retained chart must receive one mode-specific series, not a duplicate five-day graph"
+    );
+}
+
+#[test]
+fn window_declares_a_minimum_workbench_size() {
+    let host = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("main.rs"),
+    )
+    .expect("src/main.rs");
+    assert!(
+        host.contains("window_min_size: Some(size(px(720.), px(600.)))"),
+        "the native window must preserve the Watchlist and Right Dock minimum widths"
+    );
+}
+
+#[test]
+fn time_sales_volume_markers_use_directional_semantic_tones_and_intensity() {
+    let ui = fs::read_to_string(app_dir().join("ui.js")).expect("ui.js");
+
+    assert!(
+        ui.contains("bg(direction.tone)") && ui.contains("opacity(volumeIntensity(ratio))"),
+        "trade volume fills must use semantic direction tone and bounded depth intensity"
     );
     assert!(
-        main.contains("cx.notify(this.watchlistPanel)")
-            && main.contains("cx.notify(this.detailPanel)"),
-        "shared-state panes must use GPUI-style targeted notification"
+        ui.contains("statusColors(tokens).up")
+            && ui.contains("statusColors(tokens).down")
+            && ui.contains("tokens.muted_foreground"),
+        "up, down, and neutral trade directions require separate semantic tones"
+    );
+}
+
+#[test]
+fn depth_and_trade_pushes_invalidate_only_the_market_detail_panel() {
+    let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
+    for method in [
+        "receiveDetailError(detail, cx)",
+        "receiveDepth(depth, cx, generation)",
+        "receiveTrades(payload, cx, generation)",
+    ] {
+        let body = main
+            .split(method)
+            .nth(1)
+            .and_then(|source| source.split("\n  /**").next())
+            .expect("detail market mutation method");
+        assert!(
+            body.contains("this.scheduleRedraw(cx, PANE_MARKET);"),
+            "{method} must coalesce publication to Market Detail"
+        );
+        assert!(
+            !body.contains("PANE_DETAIL"),
+            "{method} must not notify Quote or the retained Chart"
+        );
+    }
+}
+
+#[test]
+fn responsive_workspace_uses_plain_panel_chrome() {
+    let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
+    let ui = fs::read_to_string(app_dir().join("ui.js")).expect("ui.js");
+    assert!(
+        ui.contains("export function workspacePanel(tokens, title, content, accessory = null)")
+            && main.matches("workspacePanel(").count() >= 4
+            && !main.contains("dockFrame")
+            && !main.contains("dockTabBar"),
+        "all four readings must use the same plain Panel title/content frame"
+    );
+}
+
+#[test]
+fn plain_panels_have_no_tile_hit_geometry() {
+    let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
+
+    assert!(
+        !main.contains("bounds: { x: tile.x")
+            && !main.contains(".move_tile(")
+            && !main.contains(".resize_tile("),
+        "production must not use tile geometry or tile interactions"
+    );
+}
+
+#[test]
+fn responsive_layout_has_no_saved_dock_or_tile_tree() {
+    let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
+
+    assert!(
+        !main.contains("workspaceDock")
+            && !main.contains("tabState(")
+            && !main.contains("detailStackState")
+            && !main.contains("info: { tiles:"),
+        "plain responsive Panels must have no retained Dock or Tile layout tree"
+    );
+}
+
+#[test]
+fn details_column_prioritizes_quote_chart_then_market() {
+    let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
+
+    assert!(
+        main.contains(".id(\"detail-panels\")")
+            && main.contains(".child(quote.flex_basis(180)")
+            && main.matches(".child(chart.h(290).flex_none())").count() == 2
+            && main.contains(".child(market.flex_basis(220)"),
+        "the 6:4 layout must keep Quote, Chart and Market as ordered independent Panels"
+    );
+    assert!(
+        main.contains("marketDetailPanel(tokens)")
+            && main.contains("overflow_y_scrollbar()")
+            && main.contains(".child(this.priceChart)"),
+        "Market Detail owns its tape/book scroll while Chart remains retained"
+    );
+}
+
+#[test]
+fn plain_panel_title_has_one_title_and_one_content_region() {
+    let ui = fs::read_to_string(app_dir().join("ui.js")).expect("ui.js");
+
+    assert!(
+        ui.contains("export function workspacePanel(tokens, title, content, accessory = null)")
+            && ui.contains(".child(label(tokens, title, 13).font_weight(700))")
+            && ui.contains(".when(accessory, (element) => element.child(accessory))")
+            && ui.contains(".child(content.border(0).flex_1().min_h(0))")
+            && !ui.contains("drag_tab("),
+        "plain Panel must contain one title region and one content region"
+    );
+}
+
+#[test]
+fn responsive_panels_own_one_consistent_omarchy_gap_and_the_title_bar_has_no_rule() {
+    let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
+    let ui = fs::read_to_string(app_dir().join("ui.js")).expect("ui.js");
+    let title_bar = main
+        .split("  titleBar(tokens) {")
+        .nth(1)
+        .and_then(|source| source.split("  /**\n   * The session menu").next())
+        .expect("title bar method");
+
+    assert!(
+        !title_bar.contains(".border_b(1)"),
+        "the application TitleBar must not add a rule above the first Panel gap"
+    );
+    assert!(
+        ui.contains("export const PANE_INSET = 4")
+            && main.contains(".gap(tokens.spacing.sm)")
+            && main.contains(".px(PANE_INSET)")
+            && main.contains(".pt(0)"),
+        "all four plain Panels must use the same 8px peer gap and compact shell inset"
+    );
+}
+
+#[test]
+fn title_mark_preserves_official_multicolor_roles_with_live_semantic_tokens() {
+    let root = app_dir();
+    let main = fs::read_to_string(root.join("main.js")).expect("main.js");
+    let official =
+        fs::read_to_string(root.join("assets/logo-light.svg")).expect("official light logo");
+    let layers: [(&str, &str, &[&str]); 4] = [
+        (
+            "logo-foreground.svg",
+            "tokens.foreground",
+            &[
+                "x=\"0\" y=\"0\" width=\"3\" height=\"69\"",
+                "x=\"33\" y=\"60\" width=\"3\" height=\"9\"",
+                "x=\"53\" y=\"43\" width=\"9\" height=\"26\"",
+            ],
+        ),
+        (
+            "logo-info-cyan.svg",
+            "status.info",
+            &["x=\"7\" y=\"0\" width=\"10\" height=\"69\""],
+        ),
+        (
+            "logo-warning.svg",
+            "status.warning",
+            &["x=\"21\" y=\"60\" width=\"9\" height=\"9\""],
+        ),
+        (
+            "logo-danger.svg",
+            "status.down",
+            &[
+                "x=\"40\" y=\"52\" width=\"10\" height=\"17\"",
+                "x=\"66\" y=\"26\" width=\"3\" height=\"43\"",
+            ],
+        ),
+    ];
+
+    assert!(
+        layers.iter().all(|(asset, token, _)| {
+            main.contains(&format!("svg(\"assets/{asset}\")"))
+                && main.contains(&format!(".text_color({token})"))
+        }) && main.contains("const status = statusColors(tokens);")
+            && !main.contains("assets/logo-info.svg")
+            && main.contains("this.titleBar(tokens)")
+            && !main.contains(".child(div().absolute().left(1)")
+            && !main.contains("assets/logo-dark.svg")
+            && !main.contains("assets/logo-light.svg"),
+        "the title mark must resolve semantic layer colours from the current render theme, rather than a hand-built or fixed-palette glyph"
+    );
+
+    assert!(
+        official.contains("width=\"69px\" height=\"69px\" viewBox=\"0 0 69 69\"")
+            && layers.iter().all(|(asset, _, rects)| {
+                let layer = fs::read_to_string(root.join("assets").join(asset))
+                    .unwrap_or_else(|_| panic!("themed title logo layer {asset}"));
+                layer.contains("width=\"69px\" height=\"69px\" viewBox=\"0 0 69 69\"")
+                    && layer.matches("<rect").count() == rects.len()
+                    && layer.matches("fill=\"currentColor\"").count() == rects.len()
+                    && rects.iter().all(|rect| layer.contains(rect))
+                    && !layer.contains("#00")
+                    && !layer.contains("#FC")
+                    && !layer.contains("#FF")
+            }),
+        "every logo layer must preserve the official 69x69 frame and inherit its semantic colour"
+    );
+
+    let all_layer_rects = layers
+        .iter()
+        .flat_map(|(asset, _, _)| {
+            let layer =
+                fs::read_to_string(root.join("assets").join(asset)).expect("title logo layer");
+            [
+                "x=\"0\" y=\"0\" width=\"3\" height=\"69\"",
+                "x=\"21\" y=\"60\" width=\"9\" height=\"9\"",
+                "x=\"33\" y=\"60\" width=\"3\" height=\"9\"",
+                "x=\"53\" y=\"43\" width=\"9\" height=\"26\"",
+                "x=\"66\" y=\"26\" width=\"3\" height=\"43\"",
+                "x=\"40\" y=\"52\" width=\"10\" height=\"17\"",
+                "x=\"7\" y=\"0\" width=\"10\" height=\"69\"",
+            ]
+            .into_iter()
+            .filter(move |rect| layer.contains(rect))
+            .map(str::to_owned)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        all_layer_rects.len(),
+        7,
+        "the seven official rectangles must be distributed across the themed layers exactly once"
+    );
+    for rect in [
+        "x=\"0\" y=\"0\" width=\"3\" height=\"69\"",
+        "x=\"21\" y=\"60\" width=\"9\" height=\"9\"",
+        "x=\"33\" y=\"60\" width=\"3\" height=\"9\"",
+        "x=\"53\" y=\"43\" width=\"9\" height=\"26\"",
+        "x=\"66\" y=\"26\" width=\"3\" height=\"43\"",
+        "x=\"40\" y=\"52\" width=\"10\" height=\"17\"",
+        "x=\"7\" y=\"0\" width=\"10\" height=\"69\"",
+    ] {
+        assert_eq!(
+            all_layer_rects
+                .iter()
+                .filter(|candidate| candidate.as_str() == rect)
+                .count(),
+            1,
+            "official rectangle {rect} must appear in exactly one semantic layer"
+        );
+    }
+}
+
+#[test]
+fn workspace_repaints_do_not_checkpoint_the_market_model() {
+    let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
+    assert!(
+        main.contains("this.repaint = cx.timer.after(100")
+            && !main.contains("cx.notify(this.watchlistPanel)")
+            && !main.contains("cx.notify(this.marketDetailDockPanel)"),
+        "inline responsive panels must coalesce feed repaints without nested panel checkpoints"
     );
     assert!(
         !main.contains("workspaceRevision") && !main.contains("const props = { revision:"),
         "pane repaint must not manufacture props only to cross the nested-view update path"
+    );
+}
+
+#[test]
+fn responsive_panels_do_not_create_nested_application_views() {
+    let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
+    assert!(
+        !app_dir().join("workspace.js").exists()
+            && !main.contains("holdWorkspaceApp")
+            && !main.contains("paneRevisions"),
+        "plain Panels must stay in the root tree without nested views retaining the market graph"
     );
 }
 

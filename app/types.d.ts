@@ -49,6 +49,7 @@ interface LongbridgeHoldingRow {
 }
 
 type LongbridgePage = "watchlist" | "portfolio";
+type PriceChartMode = "intraday" | "5D" | "1m" | "5m" | "15m" | "1D";
 
 interface PriceChartPreparedPoint {
   timestamp: number;
@@ -80,7 +81,14 @@ interface PriceChartGeometry {
 
 interface PriceChartProps {
   symbol: string;
+  mode: PriceChartMode;
   series: PriceChartSeries;
+  chartSeries:
+    | PriceChartSeries
+    | {
+        candles: Array<Record<string, unknown>>;
+        sessionBoundaries?: Array<Record<string, unknown>>;
+      };
   state: "idle" | "loading" | "ready" | "error";
   layout: {
     width: number;
@@ -88,4 +96,42 @@ interface PriceChartProps {
     dayGap: number;
   };
   themeRevision: number;
+}
+
+interface LongbridgeChartCacheEntry {
+  identity: string;
+  candles: Array<Record<string, unknown>>;
+}
+
+type LongbridgeDetailStatus = "idle" | "loading" | "ready" | "error";
+
+interface LongbridgeDepthLevel {
+  position?: number;
+  price?: string;
+  volume?: bigint;
+  orderNum?: bigint;
+}
+
+interface LongbridgeDepthState {
+  symbol: string | null;
+  status: LongbridgeDetailStatus;
+  asks: LongbridgeDepthLevel[];
+  bids: LongbridgeDepthLevel[];
+  error: string;
+}
+
+interface LongbridgeTrade {
+  price?: string;
+  volume?: bigint;
+  timestamp?: bigint;
+  tradeType?: string;
+  direction?: number;
+  tradeSession?: number;
+}
+
+interface LongbridgeTradesState {
+  symbol: string | null;
+  status: LongbridgeDetailStatus;
+  trades: LongbridgeTrade[];
+  error: string;
 }

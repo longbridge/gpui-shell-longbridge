@@ -63,7 +63,7 @@ export default class PriceChartUpdateProbe extends LongbridgeApp {
     this.renders += 1;
     return v_flex()
       .w(500)
-      .h(220)
+      .h(300)
       .child(
         Button.new("unrelated-quote")
           .w(500)

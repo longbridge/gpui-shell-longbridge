@@ -203,6 +203,7 @@ fn window_options(cx: &gpui::App) -> WindowOptions {
             size(px(1120.), px(760.)),
             cx,
         ))),
+        window_min_size: Some(size(px(720.), px(600.))),
         // No system title bar: the application draws its own, and the script
         // owns what is in it. `appears_transparent` keeps the AppKit title bar
         // in place but empty and see-through, so the window still drags from

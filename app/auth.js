@@ -244,13 +244,15 @@ async function pollDeviceRegion(authorization, clientId, region, fetchImpl, now)
 export async function pollDeviceAuthorization(authorization, dependencies = {}) {
   const clientId = configuredClientId();
   const fetchImpl = dependencies.fetch || fetch;
-  const sleepImpl =
-    dependencies.sleep || (/** @param {number} ms */ (ms) => context().sleep(ms));
+  const sleepImpl = dependencies.sleep || /** @param {number} ms */ ((ms) => context().sleep(ms));
   const now = dependencies.now || Date.now;
   const save = dependencies.saveTokens || saveTokens;
+  const shouldCancel = dependencies.shouldCancel || (() => false);
   let intervalMs = authorization.intervalMs || DEFAULT_POLL_INTERVAL_MS;
   while (now() < authorization.expiresAt) {
+    if (shouldCancel()) throw new Error("authorization_cancelled");
     await sleepImpl(intervalMs);
+    if (shouldCancel()) throw new Error("authorization_cancelled");
     const results = await Promise.all([
       pollDeviceRegion(authorization, clientId, "ap", fetchImpl, now),
       pollDeviceRegion(authorization, clientId, "us", fetchImpl, now),
@@ -258,6 +260,7 @@ export async function pollDeviceAuthorization(authorization, dependencies = {}) 
     const success = results.find((result) => result.kind === "success");
     if (success) {
       const tokens = success.tokens;
+      if (shouldCancel()) throw new Error("authorization_cancelled");
       await save(tokens);
       return tokens;
     }

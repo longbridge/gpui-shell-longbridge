@@ -9,17 +9,28 @@ import {
   COMMAND,
   FRAME_TYPE,
   SUB_TYPE,
+  TRADE_SESSION,
   decodeErrorResponse,
   decodeFrame,
+  decodePushDepth,
   decodePushQuote,
+  decodePushTrade,
   decodeSecurityCandlestickResponse,
+  decodeSecurityDepthResponse,
+  decodeSecurityIntradayResponse,
   decodeSecurityQuoteResponse,
+  decodeSecurityTradeResponse,
   encodeAuthRequest,
   encodeFrame,
   encodeHeartbeat,
   encodeHistoryCandlestickDateRequest,
+  encodeIntradayRequest,
   encodeRealtimeQuoteRequest,
+  encodeSecurityRequest,
+  encodeSecurityCandlestickRequest,
+  encodeSecurityTradeRequest,
   encodeSubscribeRequest,
+  encodeUnsubscribeRequest,
 } from "./protocol.js";
 
 // Longbridge negotiates the binary protocol during the HTTP upgrade. These
@@ -84,6 +95,35 @@ function responseError(packet) {
   );
 }
 
+const INTRADAY_SESSIONS = Object.freeze([
+  TRADE_SESSION.NORMAL,
+  TRADE_SESSION.PRE,
+  TRADE_SESSION.POST,
+  TRADE_SESSION.OVERNIGHT,
+]);
+const DETAIL_SUB_TYPES = Object.freeze([SUB_TYPE.DEPTH, SUB_TYPE.TRADE]);
+
+function mergeIntradayResponses(symbol, responses) {
+  const indexedLines = [];
+  for (const { lines, tradeSession } of responses) {
+    for (const line of lines) {
+      indexedLines.push({ ...line, tradeSession, index: indexedLines.length });
+    }
+  }
+  indexedLines.sort((left, right) => {
+    if (typeof left.timestamp === "bigint" && typeof right.timestamp === "bigint") {
+      if (left.timestamp < right.timestamp) return -1;
+      if (left.timestamp > right.timestamp) return 1;
+    }
+    if (left.tradeSession !== right.tradeSession) return left.tradeSession - right.tradeSession;
+    return left.index - right.index;
+  });
+  return {
+    symbol: responses.find((response) => response.symbol)?.symbol ?? symbol,
+    lines: indexedLines.map(({ index, ...line }) => line),
+  };
+}
+
 /**
  * Opens a read-only Longbridge quote stream.
  *
@@ -101,6 +141,9 @@ export function createQuoteStream(options) {
   };
   const symbols = requireSymbols(options.symbols);
   const onQuote = requireCallback(options.onQuote, "onQuote");
+  const onDepth = requireCallback(options.onDepth, "onDepth");
+  const onTrades = requireCallback(options.onTrades, "onTrades");
+  const onDetailError = requireCallback(options.onDetailError, "onDetailError");
   const onStatus = requireCallback(options.onStatus, "onStatus");
   const transport = options.WebSocket ?? WebSocket;
   if (!transport || typeof transport.connect !== "function")
@@ -138,9 +181,34 @@ export function createQuoteStream(options) {
   let handshakeHandle = null;
   let reconnectAttempt = 0;
   let startPromise = null;
+  let selectedDetailSymbol = null;
+  let selectedDetailGeneration = null;
+  // PushDepth/PushTrade carry a symbol and sequence, not a subscription
+  // generation. On this ordered socket, unsubscribe/subscribe responses plus
+  // the selected snapshot responses are the only provenance barrier: pushes
+  // stay disabled until that barrier completes. Afterwards an A push is
+  // protocol-wise the final-A stream; the wire offers no basis to call it old.
+  let activeDetailGeneration = null;
+  let detailEpoch = 0;
+  let detailTransition = Promise.resolve();
 
   const emitStatus = (state, extra = {}) => onStatus({ state, ...extra });
   const active = (session) => !stopped && current === session;
+  const selectedDetailIs = (symbol, generation) =>
+    selectedDetailSymbol === symbol && selectedDetailGeneration === generation;
+
+  function emitDetailError(symbol, generation, error) {
+    if (!selectedDetailIs(symbol, generation)) return;
+    try {
+      onDetailError({
+        symbol,
+        generation,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } catch (callbackError) {
+      emitStatus("callback_error", { error: String(callbackError?.message ?? callbackError) });
+    }
+  }
 
   function clearHeartbeat() {
     cancel(heartbeatHandle);
@@ -282,12 +350,84 @@ export function createQuoteStream(options) {
   }
 
   function receivePush(packet) {
-    if (packet.command !== COMMAND.PUSH_QUOTE) return;
-    const quote = decodePushQuote(packet.body);
+    let callback;
+    let payload;
+    if (packet.command === COMMAND.PUSH_QUOTE) {
+      callback = onQuote;
+      payload = decodePushQuote(packet.body);
+    } else if (packet.command === COMMAND.PUSH_DEPTH) {
+      callback = onDepth;
+      payload = decodePushDepth(packet.body);
+    } else if (packet.command === COMMAND.PUSH_TRADE) {
+      callback = onTrades;
+      payload = decodePushTrade(packet.body);
+    } else {
+      return;
+    }
+    if (
+      (packet.command === COMMAND.PUSH_DEPTH || packet.command === COMMAND.PUSH_TRADE) &&
+      (payload.symbol !== selectedDetailSymbol || activeDetailGeneration !== selectedDetailGeneration)
+    ) {
+      return;
+    }
     try {
-      onQuote(quote);
+      callback(payload, activeDetailGeneration);
     } catch (error) {
       emitStatus("callback_error", { error: String(error?.message ?? error) });
+    }
+  }
+
+  async function requestDetailSnapshots(session, symbol, generation) {
+    const [depthBody, tradesBody] = await Promise.all([
+      request(session, COMMAND.DEPTH, encodeSecurityRequest(symbol)),
+      request(session, COMMAND.TRADES, encodeSecurityTradeRequest({ symbol, count: 20 })),
+    ]);
+    if (!active(session) || !selectedDetailIs(symbol, generation)) return;
+    try {
+      const depth = decodeSecurityDepthResponse(depthBody);
+      const trades = decodeSecurityTradeResponse(tradesBody);
+      if (
+        !active(session) ||
+        !selectedDetailIs(symbol, generation) ||
+        depth.symbol !== symbol ||
+        trades.symbol !== symbol
+      ) {
+        return;
+      }
+      activeDetailGeneration = generation;
+      onDepth(depth, generation);
+      onTrades(trades, generation);
+    } catch (error) {
+      emitDetailError(symbol, generation, error);
+    }
+  }
+
+  async function subscribeDetail(session, symbol, generation) {
+    await request(
+      session,
+      COMMAND.SUBSCRIBE,
+      encodeSubscribeRequest({ symbols: [symbol], subTypes: DETAIL_SUB_TYPES, isFirstPush: true }),
+    );
+    if (!active(session) || !selectedDetailIs(symbol, generation)) return;
+    await requestDetailSnapshots(session, symbol, generation);
+  }
+
+  async function synchronizeDetailSelection(previous, symbol, generation) {
+    const session = current;
+    if (!session || !active(session)) return;
+    try {
+      if (previous) {
+        await request(
+          session,
+          COMMAND.UNSUBSCRIBE,
+          encodeUnsubscribeRequest({ symbols: [previous], subTypes: DETAIL_SUB_TYPES }),
+        );
+      }
+      if (symbol) await subscribeDetail(session, symbol, generation);
+    } catch (error) {
+      // Depth/Trades permissions are an optional selected-detail capability.
+      // They must not make a healthy Quote handshake disconnect or retry.
+      emitDetailError(symbol, generation, error);
     }
   }
 
@@ -320,6 +460,7 @@ export function createQuoteStream(options) {
 
   async function connectAndSubscribe() {
     let session = null;
+    activeDetailGeneration = null;
     armHandshake(() => session);
     try {
       emitStatus("connecting");
@@ -370,6 +511,11 @@ export function createQuoteStream(options) {
       }
       if (!active(session)) throw new Error("quote stream disconnected during initial snapshot");
 
+      if (selectedDetailSymbol) {
+        await synchronizeDetailSelection(null, selectedDetailSymbol, selectedDetailGeneration);
+      }
+      if (!active(session)) throw new Error("quote stream disconnected during detail snapshot");
+
       reconnectAttempt = 0;
       startHeartbeat(session);
       emitStatus("connected");
@@ -414,15 +560,86 @@ export function createQuoteStream(options) {
       emitStatus("stopped");
     },
 
-    async queryCandlesticks({ symbol, startDate, endDate }) {
+    async queryIntraday({ symbol, tradeSession }) {
       const session = current;
       if (!session || !active(session)) throw new Error("quote stream is not connected");
+      const requestedSessions =
+        tradeSession === TRADE_SESSION.ALL
+          ? INTRADAY_SESSIONS
+          : [tradeSession ?? TRADE_SESSION.NORMAL];
+      const responses = [];
+      for (const requestedSession of requestedSessions) {
+        const body = await request(
+          session,
+          COMMAND.INTRADAY,
+          encodeIntradayRequest({ symbol, tradeSession: requestedSession }),
+        );
+        const decoded = decodeSecurityIntradayResponse(body);
+        responses.push({ ...decoded, tradeSession: requestedSession });
+      }
+      return mergeIntradayResponses(symbol, responses);
+    },
+
+    async queryCandlesticks({ symbol, period, startDate, endDate, tradeSession, count }) {
+      const session = current;
+      if (!session || !active(session)) throw new Error("quote stream is not connected");
+      const useHistory = startDate !== undefined || endDate !== undefined;
+      if (useHistory && (startDate === undefined || endDate === undefined)) {
+        throw new TypeError("startDate and endDate must be provided together");
+      }
       const body = await request(
         session,
-        COMMAND.HISTORY_CANDLESTICKS,
-        encodeHistoryCandlestickDateRequest({ symbol, startDate, endDate }),
+        useHistory ? COMMAND.HISTORY_CANDLESTICKS : COMMAND.CANDLESTICKS,
+        useHistory
+          ? encodeHistoryCandlestickDateRequest({
+              symbol,
+              startDate,
+              endDate,
+              period,
+              tradeSession,
+            })
+          : encodeSecurityCandlestickRequest({ symbol, period, count, tradeSession }),
       );
       return decodeSecurityCandlestickResponse(body);
+    },
+
+    async queryDepth(symbol) {
+      const session = current;
+      if (!session || !active(session)) throw new Error("quote stream is not connected");
+      return decodeSecurityDepthResponse(
+        await request(session, COMMAND.DEPTH, encodeSecurityRequest(requireString(symbol, "symbol"))),
+      );
+    },
+
+    async queryTrades(symbol, count = 20) {
+      const session = current;
+      if (!session || !active(session)) throw new Error("quote stream is not connected");
+      return decodeSecurityTradeResponse(
+        await request(
+          session,
+          COMMAND.TRADES,
+          encodeSecurityTradeRequest({
+            symbol: requireString(symbol, "symbol"),
+            count: requirePositiveInteger(count, "count"),
+          }),
+        ),
+      );
+    },
+
+    selectDetailSymbol(symbol, generation) {
+      if (symbol !== null) requireString(symbol, "symbol");
+      const detailGeneration = generation ?? ++detailEpoch;
+      if (symbol === selectedDetailSymbol && detailGeneration === selectedDetailGeneration)
+        return detailTransition;
+      const previous = selectedDetailSymbol;
+      selectedDetailSymbol = symbol;
+      selectedDetailGeneration = detailGeneration;
+      activeDetailGeneration = null;
+      const transition = detailTransition.then(() =>
+        synchronizeDetailSelection(previous, symbol, detailGeneration),
+      );
+      detailTransition = transition.catch(() => {});
+      return transition;
     },
   };
 }

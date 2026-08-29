@@ -23,6 +23,9 @@ import {
   v_flex,
 } from "gpui-base";
 import { formatCompactNumber, quoteFreshness, tradeStatusLabel } from "./market.js";
+import { formatMarketTime } from "./chart.js";
+import { validDepthLevel } from "./market_detail.js";
+import { tradeIdentity, tradeVolumeRatio } from "./market_detail.js";
 import { allocationColor, avatarColor, changeTone, statusColors, valueTone } from "./palette.js";
 import { foldAllocationSlices } from "./portfolio.js";
 
@@ -214,22 +217,6 @@ export function themeButton(tokens, onClick) {
  * @param {boolean} open
  * @param {(event: import("gpui").ClickEvent, cx: import("gpui").Context) => void} onClick
  */
-export function detailToggle(tokens, open, onClick) {
-  const hint = open ? "Hide stock details" : "Show stock details";
-  return iconBox(tokens, Button.new("detail-toggle"))
-    .accessibility_label(hint)
-    .tooltip(hint)
-    .selected(open)
-    .on_click(onClick)
-    .border_color(open ? tokens.border : tokens.surface)
-    .bg(open ? tokens.muted : tokens.surface)
-    .text_color(open ? tokens.foreground : tokens.muted_foreground)
-    .transition("opacity", MOTION)
-    .hover((style) => style.bg(tokens.accent).text_color(tokens.accent_foreground))
-    .focus((style) => style.bg(tokens.accent).text_color(tokens.accent_foreground))
-    .child(icon(open ? "assets/panel-right.svg" : "assets/panel-right-collapsed.svg"));
-}
-
 /** @param {import("gpui-base").Theme} tokens @param {string} id @param {string} caption @param {string} url */
 export function externalLink(tokens, id, caption, url) {
   return Link.new(id)
@@ -368,9 +355,21 @@ const WATCHLIST_COLUMNS = [
   { title: "Session", size: (el) => el.flex_1(), align: (el) => el.justify_end() },
 ];
 
-/** @param {import("gpui-base").Theme} tokens */
-export function watchlistHeader(tokens) {
-  return tableHeaderRow(tokens, "watchlist", WATCHLIST_COLUMNS);
+/** @param {import("gpui-base").Theme} tokens @param {boolean} [compact] */
+export function watchlistHeader(tokens, compact = false) {
+  // A narrow dock has room for the object and its current value. The movement,
+  // volume and session lanes are secondary readings; keeping them would force
+  // every number into the same few pixels and make the primary data overlap.
+  return tableHeaderRow(
+    tokens,
+    "watchlist",
+    compact
+      ? [
+          { title: "Instrument", size: (el) => el.w("60%") },
+          { title: "Last", size: (el) => el.flex_1(), align: (el) => el.justify_end() },
+        ]
+      : WATCHLIST_COLUMNS,
+  );
 }
 
 /**
@@ -465,11 +464,7 @@ export function filterInput(tokens, state, width = 180) {
  * @param {import("gpui-base").Theme} tokens
  */
 export function tableToolbar(tokens) {
-  return h_flex()
-    .items_center()
-    .justify_between()
-    .px(tokens.spacing.sm)
-    .py(tokens.spacing.sm);
+  return h_flex().items_center().justify_between().px(tokens.spacing.sm).py(tokens.spacing.sm);
 }
 
 /**
@@ -551,7 +546,7 @@ function interactiveTableRow(tokens, row, selected = false) {
  * @param {number} rowIndex
  * @param {number} [now]
  */
-export function quoteRow(tokens, quote, selected, rowIndex = 0, now = Date.now()) {
+export function quoteRow(tokens, quote, selected, rowIndex = 0, now = Date.now(), compact = false) {
   const tone = changeTone(tokens, quote.change);
   const cell = (column, build) => build(TableCell.new(`quote-${quote.symbol}-${column}`, column));
   return interactiveTableRow(
@@ -575,55 +570,307 @@ export function quoteRow(tokens, quote, selected, rowIndex = 0, now = Date.now()
         element
           .flex()
           .items_center()
-          .w("31%")
+          .w(compact ? "60%" : "31%")
           .gap(tokens.spacing.sm)
           // The badge is an `Avatar` with only its fallback filled: there is no
           // per-market artwork in the application directory, and an image that
           // never resolves is the case the fallback exists for.
-          .child(marketAvatar(tokens, quote.code || quote.symbol))
+          .when(!compact, (cell) => cell.child(marketAvatar(tokens, quote.code || quote.symbol)))
           .child(
-            v_flex()
-              .min_w(0)
-              .gap(tokens.spacing.xxs)
-              .child(label(tokens, quote.code))
-              .child(muted(tokens, quote.name)),
+            compact
+              ? v_flex()
+                  .min_w(0)
+                  .gap(tokens.spacing.xxs)
+                  .child(label(tokens, quote.symbol).truncate())
+                  .child(muted(tokens, quote.name).truncate())
+              : v_flex()
+                  .min_w(0)
+                  .gap(tokens.spacing.xxs)
+                  .child(label(tokens, quote.code).truncate())
+                  .child(muted(tokens, quote.name).truncate()),
           ),
       ),
     )
     .child(
       cell(2, (element) =>
-        element.flex().w("19%").justify_end().child(numeric(tokens, quote.last)),
-      ),
-    )
-    .child(
-      cell(3, (element) =>
         element
           .flex()
-          .flex_col()
-          .w("18%")
-          .items_end()
-          .gap(tokens.spacing.xxs)
-          .child(numeric(tokens, quote.changePercent).text_color(tone))
-          .child(numeric(tokens, quote.change).text_color(tone)),
-      ),
-    )
-    .child(
-      cell(4, (element) =>
-        element
-          .flex()
-          .w("16%")
+          .w(compact ? "40%" : "19%")
+          .min_w(0)
           .justify_end()
-          .child(muted(tokens, formatCompactNumber(quote.volume))),
+          .child(
+            compact
+              ? v_flex()
+                  .min_w(0)
+                  .items_end()
+                  .gap(tokens.spacing.xxs)
+                  .child(numeric(tokens, quote.last).truncate())
+                  .child(numeric(tokens, quote.changePercent).truncate().text_color(tone))
+              : numeric(tokens, quote.last).truncate(),
+          ),
       ),
     )
-    .child(
-      cell(5, (element) =>
-        element
-          .flex()
-          .flex_1()
-          .justify_end()
-          .child(muted(tokens, tradeStatusLabel(quote))),
+    .when(!compact, (element) =>
+      element.child(
+        cell(3, (element) =>
+          element
+            .flex()
+            .flex_col()
+            .w("18%")
+            .items_end()
+            .gap(tokens.spacing.xxs)
+            .child(numeric(tokens, quote.changePercent).text_color(tone))
+            .child(numeric(tokens, quote.change).text_color(tone)),
+        ),
       ),
+    )
+    .when(!compact, (element) =>
+      element.child(
+        cell(4, (element) =>
+          element
+            .flex()
+            .w("16%")
+            .justify_end()
+            .child(muted(tokens, formatCompactNumber(quote.volume))),
+        ),
+      ),
+    )
+    .when(!compact, (element) =>
+      element.child(
+        cell(5, (element) =>
+          element
+            .flex()
+            .flex_1()
+            .justify_end()
+            .child(muted(tokens, tradeStatusLabel(quote))),
+        ),
+      ),
+    );
+}
+
+function detailStatus(tokens, state, empty) {
+  if (state?.status === "loading") return muted(tokens, "Loading live market data…");
+  if (state?.status === "error")
+    return muted(tokens, state.error || "Live market data is unavailable. Reconnect to try again.");
+  return muted(tokens, empty);
+}
+
+function detailNumber(value) {
+  return value === undefined || value === null ? "—" : formatCompactNumber(value);
+}
+
+function tradeDirection(tokens, direction) {
+  if (direction === 2) return { text: "↑ Up", tone: statusColors(tokens).up };
+  if (direction === 1) return { text: "↓ Down", tone: statusColors(tokens).down };
+  return { text: "• Neutral", tone: tokens.muted_foreground };
+}
+
+function depthRow(tokens, side, level) {
+  const levelId = level.position ?? level.price;
+  return h_flex()
+    .id(`order-book-${side}-level-${levelId}`)
+    .items_center()
+    .min_w(0)
+    .h(22)
+    .px(tokens.spacing.sm)
+    .child(
+      muted(tokens, `${side === "ask" ? "Ask" : "Bid"} ${level.position ?? ""}`)
+        .w("28%")
+        .min_w(0)
+        .truncate(),
+    )
+    .child(
+      numeric(tokens, level.price ?? "—")
+        .w("36%")
+        .min_w(0)
+        .truncate()
+        .text_right(),
+    )
+    .child(numeric(tokens, detailNumber(level.volume)).w("36%").min_w(0).truncate().text_right());
+}
+
+function orderBookStatus(state, hasDepth) {
+  if (state?.status === "loading") return "Loading";
+  if (state?.status === "error") return "Error";
+  if (state?.status !== "ready" || !hasDepth) return "Empty";
+  return "Live";
+}
+
+/**
+ * The selected instrument's five-by-five depth book. The server sends nearest
+ * levels first; asks are reversed so the best ask sits at the spread and bids
+ * remain nearest-first below it. Missing levels are not synthetic rows.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {LongbridgeDepthState} state
+ * @param {{ bid: number, ask: number }} ratio
+ */
+export function orderBookPanel(tokens, state, ratio) {
+  const asks = Array.isArray(state?.asks)
+    ? state.asks.filter(validDepthLevel).slice(0, 5).reverse()
+    : [];
+  const bids = Array.isArray(state?.bids) ? state.bids.filter(validDepthLevel).slice(0, 5) : [];
+  const hasDepth = asks.length > 0 || bids.length > 0;
+  const bidPercent = Math.round((ratio?.bid ?? 0) * 100);
+  const askPercent = Math.max(0, 100 - bidPercent);
+  const status = orderBookStatus(state, hasDepth);
+  return v_flex()
+    .id("order-book-panel")
+    .w_full()
+    .min_w(0)
+    .child(
+      h_flex()
+        .items_center()
+        .justify_between()
+        .px(tokens.spacing.sm)
+        .py(tokens.spacing.xs)
+        .child(label(tokens, "Order Book", 12).font_weight(700))
+        .child(muted(tokens, status)),
+    )
+    .child(rule(tokens))
+    .child(
+      state?.status !== "ready"
+        ? v_flex()
+            .p(tokens.spacing.md)
+            .child(detailStatus(tokens, state, "No order book data"))
+        : hasDepth
+          ? v_flex()
+              .py(tokens.spacing.xs)
+              .children(asks.map((level) => depthRow(tokens, "ask", level)))
+              .child(
+                h_flex()
+                  .id("order-book-ratio-divider")
+                  .items_center()
+                  .h(22)
+                  .px(tokens.spacing.sm)
+                  .child(muted(tokens, `Bid ${bidPercent}%`).w("28%").min_w(0).truncate())
+                  .child(
+                    h_flex()
+                      .flex_1()
+                      .h(5)
+                      .overflow_hidden()
+                      .bg(tokens.muted)
+                      .child(div().h_full().w(`${bidPercent}%`).bg(statusColors(tokens).up))
+                      .child(div().h_full().w(`${askPercent}%`).bg(statusColors(tokens).down)),
+                  )
+                  .child(
+                    muted(tokens, `Ask ${askPercent}%`).w("28%").min_w(0).truncate().text_right(),
+                  ),
+              )
+              .children(bids.map((level) => depthRow(tokens, "bid", level)))
+          : div().h(0),
+    );
+}
+
+function tradeTime({ symbol, market }, timestamp) {
+  const marketSymbol = symbol || (market ? `market.${market}` : "");
+  return formatMarketTime(marketSymbol, timestamp, true) || "--";
+}
+
+function tradeRow(tokens, trade, maximum, context) {
+  const direction = tradeDirection(tokens, trade.direction);
+  const ratio = Math.round(tradeVolumeRatio(trade.volume, maximum) * 100);
+  const identity = tradeIdentity(trade);
+  return h_flex()
+    .id(`time-sales-row-${identity}`)
+    .relative()
+    .items_center()
+    .min_w(0)
+    .h(24)
+    .gap(tokens.spacing.sm)
+    .px(tokens.spacing.sm)
+    .child(muted(tokens, tradeTime(context, trade.timestamp)).w("24%").min_w(0).truncate())
+    .child(muted(tokens, direction.text).w("25%").min_w(0).truncate().text_color(direction.tone))
+    .child(
+      numeric(tokens, trade.price ?? "—")
+        .flex_1()
+        .min_w(0)
+        .truncate()
+        .text_right(),
+    )
+    .child(
+      div()
+        .relative()
+        .w("28%")
+        .min_w(0)
+        .h_full()
+        .overflow_hidden()
+        .child(
+          div()
+            .absolute()
+            .right(0)
+            .top(3)
+            .bottom(3)
+            .w(`${ratio}%`)
+            .bg(direction.tone)
+            .opacity(volumeIntensity(ratio)),
+        )
+        .child(
+          numeric(tokens, detailNumber(trade.volume))
+            .relative()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_end()
+            .truncate(),
+        ),
+    );
+}
+
+function volumeIntensity(ratio) {
+  return Math.max(0.35, Math.min(1, 0.35 + (Math.max(0, ratio) / 100) * 0.65));
+}
+
+/** @param {import("gpui-base").Theme} tokens @param {LongbridgeTradesState} state @param {{ symbol?: string, market?: string }} [context] */
+export function timeSalesPanel(tokens, state, context = {}) {
+  const trades = Array.isArray(state?.trades) ? state.trades.slice(0, 20) : [];
+  const maximum = trades.reduce((largest, trade) => {
+    const volume =
+      typeof trade?.volume === "bigint"
+        ? trade.volume < 0n
+          ? -trade.volume
+          : trade.volume
+        : Math.abs(Number(trade?.volume) || 0);
+    return typeof largest === "bigint" || typeof volume === "bigint"
+      ? BigInt(largest) > BigInt(volume)
+        ? largest
+        : volume
+      : Math.max(largest, volume);
+  }, 0);
+  const status =
+    state?.status === "loading"
+      ? "Loading"
+      : state?.status === "error"
+        ? "Error"
+        : state?.status !== "ready" || !trades.length
+          ? "Empty"
+          : `${trades.length} ${trades.length === 1 ? "trade" : "trades"}`;
+  return v_flex()
+    .id("time-sales-panel")
+    .w_full()
+    .min_w(0)
+    .child(
+      h_flex()
+        .items_center()
+        .justify_between()
+        .px(tokens.spacing.sm)
+        .py(tokens.spacing.xs)
+        .child(label(tokens, "Time & Sales", 12).font_weight(700))
+        .child(muted(tokens, status)),
+    )
+    .child(rule(tokens))
+    .child(
+      state?.status !== "ready"
+        ? v_flex()
+            .p(tokens.spacing.md)
+            .child(detailStatus(tokens, state, "No recent trades"))
+        : trades.length
+          ? v_flex()
+              .py(tokens.spacing.xs)
+              .children(trades.map((trade) => tradeRow(tokens, trade, maximum, context)))
+          : v_flex()
+              .p(tokens.spacing.md)
+              .child(detailStatus(tokens, state, "No recent trades")),
     );
 }
 
@@ -642,7 +889,7 @@ function dataHealth(quote, now) {
 function metricRows(tokens, entries) {
   return v_flex()
     .flex_1()
-    .gap(tokens.spacing.md)
+    .gap(tokens.spacing.sm)
     .children(
       entries.map((entry) =>
         v_flex()
@@ -658,61 +905,57 @@ function metricRows(tokens, entries) {
 /** @param {import("gpui-base").Theme} tokens @param {LongbridgeQuoteRow} quote @param {number} [now] */
 export function quoteDetail(tokens, quote, now = Date.now(), pulseOpacity = 1) {
   const tone = changeTone(tokens, quote.change);
-  return v_flex()
+  const cell = (content) =>
+    v_flex().min_w(0).flex_basis(130).flex_grow(1).gap(tokens.spacing.sm).child(content);
+  return h_flex()
     .id("quote-detail-content")
     .flex_1()
-    .p(tokens.spacing.lg)
-    .gap(tokens.spacing.lg)
+    .flex_wrap()
+    .items_stretch()
+    .p(tokens.spacing.sm)
+    .gap(tokens.spacing.sm)
     .child(
-      h_flex()
-        .items_center()
-        .justify_between()
-        .gap(tokens.spacing.lg)
-        .child(
-          v_flex()
-            .gap(tokens.spacing.xs)
-            .child(label(tokens, quote.name, 16).font_weight(700))
-            .child(muted(tokens, `${quote.market} · ${quote.symbol} · ${quote.currency}`))
-            .child(muted(tokens, tradeStatusLabel(quote))),
-        )
-        .child(
-          v_flex()
-            .id("quote-detail-price")
-            .items_end()
-            .gap(tokens.spacing.xs)
-            .opacity(quote.receivedAt ? pulseOpacity : 0.72)
-            .transition("opacity", MOTION)
-            .child(numeric(tokens, quote.last, 28))
-            .child(
-              numeric(tokens, `${quote.change} · ${quote.changePercent}`, 13).text_color(tone),
-            ),
-        ),
+      cell(
+        v_flex()
+          .gap(tokens.spacing.sm)
+          .child(label(tokens, quote.name, 16).font_weight(700))
+          .child(muted(tokens, `${quote.market} · ${quote.symbol} · ${quote.currency}`))
+          .child(
+            v_flex()
+              .id("quote-detail-price")
+              .gap(tokens.spacing.xs)
+              .opacity(quote.receivedAt ? pulseOpacity : 0.72)
+              .transition("opacity", MOTION)
+              .child(numeric(tokens, quote.last, 24))
+              .child(
+                numeric(tokens, `${quote.change} · ${quote.changePercent}`, 13).text_color(tone),
+              ),
+          ),
+      ),
     )
-    .child(rule(tokens))
     .child(
-      h_flex()
-        .items_start()
-        .gap(tokens.spacing.xl)
-        .child(
-          metricRows(tokens, [
-            { title: "Previous close", value: quote.prevClose },
-            { title: "Open", value: quote.open },
-            {
-              title: "Day range",
-              value:
-                quote.low === "--" || quote.high === "--" ? "--" : `${quote.low} — ${quote.high}`,
-            },
-            { title: "Session", value: tradeStatusLabel(quote) },
-          ]),
-        )
-        .child(
-          metricRows(tokens, [
-            { title: "Volume", value: formatCompactNumber(quote.volume) },
-            { title: "Turnover", value: formatCompactNumber(quote.turnover) },
-            { title: "Last market update", value: marketTime(quote.updatedAt) },
-            { title: "Data health", value: dataHealth(quote, now) },
-          ]),
-        ),
+      cell(
+        metricRows(tokens, [
+          { title: "Previous close", value: quote.prevClose },
+          { title: "Open", value: quote.open },
+          {
+            title: "Day range",
+            value:
+              quote.low === "--" || quote.high === "--" ? "--" : `${quote.low} — ${quote.high}`,
+          },
+          { title: "Session", value: tradeStatusLabel(quote) },
+        ]),
+      ),
+    )
+    .child(
+      cell(
+        metricRows(tokens, [
+          { title: "Volume", value: formatCompactNumber(quote.volume) },
+          { title: "Turnover", value: formatCompactNumber(quote.turnover) },
+          { title: "Last market update", value: marketTime(quote.updatedAt) },
+          { title: "Data health", value: dataHealth(quote, now) },
+        ]),
+      ),
     );
 }
 
@@ -740,10 +983,11 @@ function donutSlice(tokens, slice, index, total, count) {
     const angle = start + ((end - start) * step) / steps;
     points.push([`${50 + Math.cos(angle) * 29}%`, `${50 + Math.sin(angle) * 29}%`]);
   }
-  return window.paint_path(
-    PathBuilder.fill().add_polygon(points).build(),
-    Background.solid(allocationColor(tokens, slice, index)),
-  )
+  return window
+    .paint_path(
+      PathBuilder.fill().add_polygon(points).build(),
+      Background.solid(allocationColor(tokens, slice, index)),
+    )
     .absolute()
     .inset_0();
 }
@@ -1404,9 +1648,7 @@ export function calendarGrid(tokens, calendar, options) {
                     style.bg(tokens.accent).text_color(tokens.accent_foreground),
                   ),
                 )
-                .when(!future, (element) =>
-                  element.on_click((_event, cx) => onPick(day, cx)),
-                )
+                .when(!future, (element) => element.on_click((_event, cx) => onPick(day, cx)))
                 .child(String(Number(day.slice(8))));
             }),
           ),
@@ -1427,9 +1669,7 @@ export function calendarGrid(tokens, calendar, options) {
  */
 export function kbd(tokens, keystroke, state = {}) {
   const { down = false, held = false } = state;
-  const quietFill = /^#[0-9a-f]{6}$/i.test(tokens.muted)
-    ? `${tokens.muted}80`
-    : tokens.muted;
+  const quietFill = /^#[0-9a-f]{6}$/i.test(tokens.muted) ? `${tokens.muted}80` : tokens.muted;
   return (
     div()
       .flex_none()
@@ -1452,165 +1692,30 @@ export function kbd(tokens, keystroke, state = {}) {
   );
 }
 
-// The dock's chrome.
-//
-// Base draws none of it — an area with no chrome still docks, drags, resizes
-// and persists, painting only its panels — so a tab bar, a dock frame, a
-// collapse control and a resize handle are ordinary elements written here with
-// the ordinary style surface.
-//
-// None of them registers an event handler, and that is the one rule worth
-// knowing. A chrome callback runs once per container per frame for as long as
-// the dock is on screen, so a handler created inside one would pile up for as
-// long as the window stood. `select_tab`, `close_panel`, `toggle_dock` and
-// `resize_dock` are commands instead: they name a container and what to ask
-// it, carry no script value at all, and base does the work.
-
-/** The height of a dock's title strip, and of the tab bar beside it. */
 /**
- * What a pane holds back on each side, so the canvas shows between two of them.
- *
- * It has to be applied to the tab bar *and* to the pane body, and by the same
- * amount, because they are siblings inside the region base gives a dock: an
- * inset body under a full-width tab bar is a pane narrower than its own tab,
- * which reads as a misalignment rather than as a gap. Neither can be inset per
- * side -- a `DockGroup` does not know which dock it is in -- so both are inset
- * on both sides, and two adjacent regions come to twice this.
+ * The page inset. Combined with the same small gap between Panels, it keeps
+ * the title bar, window edge and all four Panel outlines on one spacing grid.
  */
 export const PANE_INSET = 4;
+export const WATCHLIST_MIN_WIDTH = 400;
 
-export const DOCK_BAR_HEIGHT = 30;
-
-
-/** The readable half of `shell:<application>/<panel>`. */
-export function panelTitle(name) {
-  const slash = name.lastIndexOf("/");
-  const bare = slash === -1 ? name : name.slice(slash + 1);
-  return bare === "watchlist" ? "Watchlist" : bare === "detail" ? "Stock details" : bare;
-}
-
-/**
- * @param {import("gpui-base").Theme} tokens
- * @param {import("gpui-base").DockGroup} group
- */
-export function dockTabBar(tokens, group) {
-  const facesLeft = group.tabs.some((tab) => panelTitle(tab.name) === "Stock details");
-  return h_flex()
-    .h(DOCK_BAR_HEIGHT)
-    .w_full()
-    .items_center()
-    // The inset is outside the fill, and the fill is on the child. A tab bar
-    // coloured across its own padding would put `surface` where the gap is
-    // meant to be, and the gap would stop being a gap.
-    .when(facesLeft, (element) => element.pl(PANE_INSET))
-    .when(!facesLeft, (element) => element.pr(PANE_INSET))
-    .bg(tokens.background)
+/** A plain titled Panel with an optional compact TitleBar accessory. */
+export function workspacePanel(tokens, title, content, accessory = null) {
+  return panel(tokens)
+    .min_w(0)
+    .min_h(0)
     .child(
       h_flex()
-        .size_full()
+        .h(30)
+        .flex_none()
         .items_center()
-        .bg(tokens.background)
+        .justify_between()
+        .gap(tokens.spacing.sm)
+        .px(tokens.spacing.sm)
         .border_b(1)
         .border_color(tokens.border)
-        .drop_tab(group)
-        .children(
-          group.tabs
-            .filter((tab) => tab.visible)
-            .map((tab) =>
-              h_flex()
-                .id(`dock-tab-${tab.id}`)
-                .h(DOCK_BAR_HEIGHT)
-                .items_center()
-                .gap(tokens.spacing.xs)
-                .px(tokens.spacing.md)
-                // A tab is a shape, not a word with a line after it. The active
-                // one is drawn on three sides so it joins the pane below rather
-                // than sitting on top of it -- that open bottom edge is what
-                // makes a tab read as a tab. There is no per-side border colour
-                // to paint it out with, so the side is simply not drawn.
-                .border_t(1)
-                .border_l(1)
-                .border_r(1)
-                .border_b(1)
-                .border_color(tokens.border)
-                .bg(tokens.background)
-                .text_size(11)
-                .text_color(tab.active ? tokens.foreground : tokens.muted_foreground)
-                .hover((style) => style.bg(tokens.accent))
-                .select_tab(group, tab.index)
-                .drag_tab(group, tab.index)
-                .child(panelTitle(tab.name))
-                // No close control, and not conditionally: this application has
-                // two panes and no way to reopen one, so closing a pane is a
-                // one-way door it should never hold open. `tab.closable` cannot
-                // be trusted to say so either -- `add_panel`'s options do not
-                // survive a restart, because `register_panel` has nowhere to
-                // carry them and `PanelScript::closable` is asked again on every
-                // load. So the control is simply not drawn.
-            ),
-        ),
-    );
-}
-
-/**
- * A dock's chrome: the edge you drag it by, and nothing else.
- *
- * The box the dock occupies is base's -- `DockArea::render_dock` wraps whatever
- * this returns in the dock's own extent -- so this is free to be chrome, which
- * is what the hook was always named for. It did not used to be: the extent
- * lived in base's `DockSkin`, this hook replaced that method whole, and a
- * script-drawn dock came out with no width at all, taking the row it sat in and
- * leaving every pane inside shrunk to its content.
- *
- * @param {import("gpui-base").Theme} tokens
- * @param {import("gpui-base").DockRegion} dock
- * @param {import("gpui").Element} content
- */
-export function dockFrame(tokens, dock, content) {
-  const vertical = dock.placement === "bottom";
-  // A column, and the content grows down it.
-  //
-  // This was a row, and a dock drew nothing at all: `flex_1` grows the main
-  // axis, so in a row it took the width and left the height to stretch --
-  // which `min_h(0)` then allowed to collapse, because a tab group's panel is
-  // positioned absolutely and contributes no height of its own. The dock had
-  // its full width and nothing in it, not even a tab bar.
-  return v_flex()
-    .size_full()
-    .relative()
-    .child(content)
-    .child(
-      // Base clamps every position this reports against the area and the
-      // opposite dock, so the handle is a hit area and a colour and no more.
-      div()
-        .id(`dock-resize-${dock.placement}`)
-        .absolute()
-        .map((element) =>
-          vertical
-            ? element.top(0).left(0).w_full().h(4).cursor_row_resize()
-            : element.top(0).h_full().w(4).cursor_col_resize(),
-        )
-        .map((element) =>
-          dock.placement === "left"
-            ? element.right(0)
-            : dock.placement === "right"
-              ? element.left(0)
-              : element,
-        )
-        .hover((style) => style.bg(tokens.primary))
-        .resize_dock(dock),
-    );
-}
-
-export function dockDropHint(tokens, drop) {
-  return div()
-    .absolute()
-    .left(drop.to.x)
-    .top(drop.to.y)
-    .w(drop.to.width)
-    .h(drop.to.height)
-    .bg(tokens.primary)
-    .opacity(0.15)
-    .border(1)
-    .border_color(tokens.primary);
+        .child(label(tokens, title, 13).font_weight(700))
+        .when(accessory, (element) => element.child(accessory)),
+    )
+    .child(content.border(0).flex_1().min_h(0));
 }

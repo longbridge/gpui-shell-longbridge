@@ -71,7 +71,6 @@ export default class WorkspaceUiProbe extends LongbridgeApp {
     this.chartGeneration = 0;
     this.chartThemeRevision = 0;
     this.initPriceChartView(cx);
-    this.initWorkspaceDock(cx);
     this.clock = null;
   }
 

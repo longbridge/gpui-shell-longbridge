@@ -1,11 +1,11 @@
 // A standalone, read-only Longbridge desktop client. OAuth uses direct HTTP,
 // quotes use the documented WebSocket protocol, and no trading API is exposed.
 
-import { View, div, image } from "gpui";
+import { View, div, svg } from "gpui";
 import { holdContext } from "./context.js";
 import {
   CalendarState,
-  DockArea,
+  Button,
   InputState,
   Popover,
   Scrollbar,
@@ -13,8 +13,6 @@ import {
   TableBody,
   Tab,
   Tabs,
-  dock_area,
-  dock_content,
   h_flex,
   set_theme,
   v_flex,
@@ -40,30 +38,37 @@ import {
   watchlistInstruments,
 } from "./market.js";
 import { createQuoteStream } from "./quote_stream.js";
-import { mergeLiveQuote, prepareFiveDaySeries } from "./chart.js";
+import { compactFiveDaySeries, prepareFiveDaySeries } from "./chart.js";
+import {
+  CHART_MODES,
+  chartRequestIdentity,
+  mergeLiveChartQuote,
+  prepareCandleSeries,
+  prepareIntradaySeries,
+  windowCandles,
+} from "./chart_modes.js";
+import { PERIOD, TRADE_SESSION } from "./protocol.js";
+import { depthRatio, mergeTrades, normalizeDepth, validDepthLevel } from "./market_detail.js";
 import { allocationInUsd, normalizeUsdRates, portfolioPresentation } from "./portfolio.js";
-import PriceChartView, { PRICE_CHART_LAYOUT } from "./price_chart_view.js";
+import PriceChartView, {
+  PRICE_CHART_LAYOUT,
+  compactIntradaySeriesForView,
+} from "./price_chart_view.js";
 import { loadFpsVisible, saveFpsVisible } from "./fps_preference.js";
 import { omarchyBaseColors, omarchyMarketColors, omarchyTheme } from "./system_theme.js";
-import { setOmarchyAvatarColors, setOmarchyMarketColors } from "./palette.js";
-import { DetailPanel, WatchlistPanel, holdWorkspaceApp } from "./workspace.js";
+import { setOmarchyAvatarColors, setOmarchyMarketColors, statusColors } from "./palette.js";
 import {
-  accordionGroup,
-  accordionSection,
   action,
   allocationChart,
   connectionPill,
   detailGrid,
   emptyPanel,
   kbd,
-  detailToggle,
-  PANE_INSET,
-  dockDropHint,
-  dockFrame,
-  dockTabBar,
   errorMessage,
   filterInput,
   HOLDING_ROW_HEIGHT,
+  PANE_INSET,
+  WATCHLIST_MIN_WIDTH,
   TABLE_HEADER_HEIGHT,
   holdingRow,
   holdingsHeader,
@@ -80,11 +85,14 @@ import {
   portfolioSummary,
   quoteDetail,
   quoteRow,
+  orderBookPanel,
   QUOTE_ROW_HEIGHT,
   rule,
   tableToolbar,
   themeButton,
+  timeSalesPanel,
   watchlistHeader,
+  workspacePanel,
 } from "./ui.js";
 
 let themes = null;
@@ -102,16 +110,23 @@ async function currentOmarchyColors() {
 // How many Holdings rows the panel shows before the page scrolls instead of
 // the panel growing. Any ceiling would do; this one keeps the summary and the
 // allocation chart reachable above it without a scroll.
-/** Where the workspace layout is kept between runs, and under which shape. */
-const WORKSPACE_LAYOUT_KEY = "workspace.layout";
-// 2, because 1 was the layout that docked Watchlist on the left and left the
-// details in the center. A saved layout from that build would put the
-// placements straight back and take the details' collapse control with them.
-const WORKSPACE_LAYOUT_VERSION = 2;
-/** The detail dock's starting width; after that the user's drag decides. */
-const DETAIL_DOCK_WIDTH = 460;
-
 const HOLDINGS_VIEWPORT_ROWS = 10;
+const RESPONSIVE_DETAIL_MIN_WIDTH = 320;
+const WORKSPACE_PANEL_GAP = 8;
+
+function responsivePanelWidths(viewportWidth) {
+  const available = Math.max(0, Number(viewportWidth) - PANE_INSET * 2);
+  const sideBySide =
+    available >= WATCHLIST_MIN_WIDTH + RESPONSIVE_DETAIL_MIN_WIDTH + WORKSPACE_PANEL_GAP;
+  if (!sideBySide) return { available, sideBySide, watchlist: available, detail: available };
+  const content = available - WORKSPACE_PANEL_GAP;
+  const detail = Math.max(
+    RESPONSIVE_DETAIL_MIN_WIDTH,
+    Math.min(content - WATCHLIST_MIN_WIDTH, content * 0.4),
+  );
+  return { available, sideBySide, watchlist: content - detail, detail };
+}
+
 /**
  * How long the steps before the stream exists may take before the window says
  * so. Generous: it covers a token refresh, the watchlist read and the account
@@ -132,10 +147,48 @@ const CHART_PUBLISH_INTERVAL_MS = 500;
 
 /** Which pane a change is worth repainting. See `syncWorkspacePanels`. */
 const PANE_WATCHLIST = 1;
-const PANE_DETAIL = 2;
+const PANE_QUOTE = 2;
+const PANE_CHART = 4;
+const PANE_MARKET = 8;
+const PANE_DETAIL = PANE_QUOTE | PANE_CHART | PANE_MARKET;
 const PANE_BOTH = PANE_WATCHLIST | PANE_DETAIL;
 
 const EMPTY_CANDLES = Object.freeze([]);
+const EMPTY_DETAIL_LEVELS = Object.freeze([]);
+const EMPTY_DETAIL_TRADES = Object.freeze([]);
+const CHART_CACHE_LIMIT = 16;
+const CHART_LATEST_END = "latest";
+const CANDLE_WINDOW_DAYS = Object.freeze({ "1m": 1, "5m": 5, "15m": 15, "1D": 190 });
+const CHART_PERIODS = Object.freeze({
+  "1m": PERIOD.ONE_MINUTE,
+  "5m": PERIOD.FIVE_MINUTE,
+  "15m": PERIOD.FIFTEEN_MINUTE,
+  "1D": PERIOD.DAY,
+});
+
+function providerDayBucket(value) {
+  const seconds = typeof value === "bigint" ? Number(value) : value;
+  return Number.isSafeInteger(seconds) ? Math.floor(seconds / 86_400) : null;
+}
+
+function emptyDepthState(symbol = null) {
+  return {
+    symbol,
+    status: symbol ? "loading" : "idle",
+    asks: EMPTY_DETAIL_LEVELS,
+    bids: EMPTY_DETAIL_LEVELS,
+    error: "",
+  };
+}
+
+function emptyTradesState(symbol = null) {
+  return {
+    symbol,
+    status: symbol ? "loading" : "idle",
+    trades: EMPTY_DETAIL_TRADES,
+    error: "",
+  };
+}
 
 /**
  * The height of the window's own title bar, and the room macOS needs on its
@@ -182,7 +235,8 @@ function motion(element, property) {
  * the panes just shrank. `window.viewport_size()` is legal from `render`,
  * which is where the question is asked.
  */
-const NARROW_VIEWPORT = 900;
+const NARROW_VIEWPORT = 960;
+const COMPACT_WATCHLIST_WIDTH = 440;
 
 /** How many holdings one page of the Holdings panel shows. */
 
@@ -204,7 +258,11 @@ export const KEY_BINDINGS = Object.freeze([
   { keystroke: `${PRIMARY_MODIFIER}-2`, action: "workspace::portfolio", context: "Workspace" },
   { keystroke: `${PRIMARY_MODIFIER}-r`, action: "workspace::reconnect", context: "Workspace" },
   { keystroke: `${PRIMARY_MODIFIER}-t`, action: "workspace::toggle-theme", context: "Workspace" },
-  { keystroke: `${PRIMARY_MODIFIER}-shift-f`, action: "workspace::toggle-fullscreen", context: "Workspace" },
+  {
+    keystroke: `${PRIMARY_MODIFIER}-shift-f`,
+    action: "workspace::toggle-fullscreen",
+    context: "Workspace",
+  },
   { keystroke: "alt-down", action: "watchlist::next", context: "Workspace" },
   { keystroke: "alt-up", action: "watchlist::previous", context: "Workspace" },
   { keystroke: "escape", action: "workspace::dismiss", context: "Workspace" },
@@ -246,7 +304,8 @@ export function chordLabel(keystroke) {
     (name) => MODIFIER_NAMES[name],
   );
   const named =
-    KEY_NAMES[key] ?? (key.length === 1 ? key.toUpperCase() : key.charAt(0).toUpperCase() + key.slice(1));
+    KEY_NAMES[key] ??
+    (key.length === 1 ? key.toUpperCase() : key.charAt(0).toUpperCase() + key.slice(1));
   return [...modifiers, named].join(" + ");
 }
 
@@ -374,6 +433,7 @@ export default class LongbridgeApp extends View {
     this.hasStoredTokens = Boolean(storedTokens());
     this.status = { state: this.hasStoredTokens ? "saved session" : "offline" };
     this.authorization = null;
+    this.authorizationGeneration = 0;
     this.account = null;
     this.fxRates = new Map([["USD", 1]]);
     /** @type {LongbridgeHoldingRow[]} */
@@ -406,11 +466,12 @@ export default class LongbridgeApp extends View {
     this.chartState = { symbol: null, state: "idle" };
     this.chartGeneration = 0;
     this.chartThemeRevision = 0;
+    this.initChartModeState();
+    this.initDetailMarketState();
     this.initInteractionState();
     this.initKeyboard(cx);
     this.initChartCalendar(cx);
     this.initPriceChartView(cx);
-    this.initWorkspaceDock(cx);
     this.clock = cx.timer.every(1_000, (cx) => {
       this.syncSystemTheme(cx);
       this.lastTick = Date.now();
@@ -463,9 +524,6 @@ export default class LongbridgeApp extends View {
     this.pointerDown = false;
     this.diagnosticsOpen = false;
     this.boundKeys = cx.bind_keys([...KEY_BINDINGS]);
-    // Focus is a fact about the window, and the window exists by the time a
-    // task runs. Requesting it inside `init` itself would come before the
-    // element tracking the handle has ever been drawn.
     cx.spawn(async (cx) => {
       await cx.sleep(0);
       this.workspaceFocus.focus();
@@ -492,10 +550,111 @@ export default class LongbridgeApp extends View {
       const day = typeof date === "string" ? date : null;
       if (!day || day === this.chartEndDate) return;
       this.chartEndDate = day;
-      this.candleCache.delete(this.selectedSymbol);
       this.loadSelectedChart(cx);
       this.redraw(cx);
     });
+  }
+
+  /** Initializes session-only chart selection and its bounded response cache. */
+  initChartModeState() {
+    // This deliberately never reads or writes localStorage: a chosen chart
+    // mode belongs to this running application session, not the login session.
+    this.chartMode = "5D";
+    this.chartModeMenuOpen = false;
+    this.chartCache = new Map();
+  }
+
+  /** @returns {keyof typeof CHART_MODES} */
+  activeChartMode() {
+    return CHART_MODES[this.chartMode] ? this.chartMode : "5D";
+  }
+
+  chartIdentityEndDate() {
+    return this.chartEndDate ?? CHART_LATEST_END;
+  }
+
+  currentChartIdentity(symbol = this.selectedSymbol) {
+    return symbol
+      ? chartRequestIdentity(symbol, this.activeChartMode(), this.chartIdentityEndDate())
+      : null;
+  }
+
+  cachedChartSeries(symbol = this.selectedSymbol) {
+    const identity = this.currentChartIdentity(symbol);
+    if (!identity) return EMPTY_CANDLES;
+    if (this.chartCache?.has(identity)) {
+      const cached = this.chartCache.get(identity);
+      // Map insertion order is the LRU order. A completed response and a cache
+      // hit both become most-recently used without rebuilding its series.
+      this.chartCache.delete(identity);
+      this.chartCache.set(identity, cached);
+      return cached;
+    }
+    // Older retained-child fixtures seed the pre-mode cache directly. Keeping
+    // this read-only compatibility path lets the state migration land before
+    // the retained UI changes, without allowing it to mask a new mode cache.
+    return this.activeChartMode() === "5D"
+      ? (this.candleCache?.get(symbol) ?? EMPTY_CANDLES)
+      : EMPTY_CANDLES;
+  }
+
+  hasCachedChartSeries(symbol = this.selectedSymbol) {
+    const identity = this.currentChartIdentity(symbol);
+    return Boolean(
+      identity &&
+      (this.chartCache?.has(identity) ||
+        (this.activeChartMode() === "5D" && this.candleCache?.has(symbol))),
+    );
+  }
+
+  cacheChartSeries(identity, candles) {
+    if (!this.chartCache) this.chartCache = new Map();
+    this.chartCache.delete(identity);
+    this.chartCache.set(identity, candles);
+    while (this.chartCache.size > CHART_CACHE_LIMIT)
+      this.chartCache.delete(this.chartCache.keys().next().value);
+  }
+
+  setChartMode(mode, cx) {
+    if (!CHART_MODES[mode] || mode === this.activeChartMode()) return;
+    this.chartMode = mode;
+    this.loadSelectedChart(cx);
+    this.redraw(cx);
+  }
+
+  /** Invalidates only the currently visible request from the session cache. */
+  invalidateCurrentChartCache() {
+    const identity = this.currentChartIdentity();
+    if (identity) this.chartCache?.delete(identity);
+    if (this.activeChartMode() === "5D") this.candleCache?.delete(this.selectedSymbol);
+  }
+
+  chartRequestFor(symbol, mode, endDate = this.chartIdentityEndDate()) {
+    const selected = CHART_MODES[mode];
+    if (!selected) throw new TypeError(`unknown chart mode ${mode}`);
+    // An omitted end date is the explicit "current market day" boundary. Any
+    // date the user selected, including today, must go through dated history so
+    // a command-18 response cannot be cached under a historical identity.
+    if (mode === "intraday" && endDate === CHART_LATEST_END) {
+      return {
+        kind: "intraday",
+        params: { symbol, tradeSession: TRADE_SESSION.ALL },
+      };
+    }
+    const requestEnd = endDate === CHART_LATEST_END ? calendarDay(new Date()) : endDate;
+    const days = mode === "intraday" ? 0 : mode === "5D" ? 14 : CANDLE_WINDOW_DAYS[mode];
+    const startDay = days === 0 ? requestEnd : shiftDay(requestEnd, -days);
+    const compact = (day) => day.replaceAll("-", "");
+    return {
+      kind: "candlesticks",
+      params: {
+        symbol,
+        period: CHART_PERIODS[selected.period],
+        startDate: compact(startDay),
+        endDate: compact(requestEnd),
+        tradeSession: mode === "intraday" ? TRADE_SESSION.ALL : TRADE_SESSION.NORMAL,
+      },
+    };
   }
 
   /**
@@ -510,18 +669,38 @@ export default class LongbridgeApp extends View {
   }
 
   /** The complete immutable input snapshot the child needs to render the chart. */
-  nextPriceChartProps() {
+  chartProps() {
     const symbol = this.selectedSymbol ?? "";
-    const candles = symbol ? (this.candleCache.get(symbol) ?? EMPTY_CANDLES) : EMPTY_CANDLES;
+    const mode = this.activeChartMode();
+    const candles = symbol ? this.cachedChartSeries(symbol) : EMPTY_CANDLES;
     const state =
       this.chartState.symbol === symbol ? this.chartState.state : symbol ? "loading" : "idle";
+    const chartSeries =
+      mode === "intraday"
+        ? compactIntradaySeriesForView(prepareIntradaySeries(candles), PRICE_CHART_LAYOUT)
+        : mode === "5D"
+          ? compactFiveDaySeries(prepareFiveDaySeries(symbol, candles), PRICE_CHART_LAYOUT)
+          : prepareCandleSeries(windowCandles(candles));
+    const end = this.chartEndDate ?? calendarDay(new Date());
+    const description =
+      mode === "intraday"
+        ? `Trading day ${end}`
+        : mode === "5D"
+          ? `Five sessions to ${end}`
+          : `${mode} bars ending ${end}`;
     return {
       symbol,
-      series: prepareFiveDaySeries(symbol, candles),
+      mode,
+      description,
+      chartSeries,
       state,
       layout: PRICE_CHART_LAYOUT,
       themeRevision: this.chartThemeRevision,
     };
+  }
+
+  nextPriceChartProps() {
+    return this.chartProps();
   }
 
   /** Pushes props only when a chart input changed, and only from mutation sites. */
@@ -531,7 +710,9 @@ export default class LongbridgeApp extends View {
     const previous = this.publishedPriceChartProps;
     if (
       previous?.symbol === next.symbol &&
-      previous?.series === next.series &&
+      previous?.mode === next.mode &&
+      previous?.description === next.description &&
+      previous?.chartSeries === next.chartSeries &&
       previous?.state === next.state &&
       previous?.layout === next.layout &&
       previous?.themeRevision === next.themeRevision
@@ -540,147 +721,6 @@ export default class LongbridgeApp extends View {
     }
     this.publishedPriceChartProps = next;
     this.priceChart.set_props(next);
-  }
-
-  /**
-   * Creates the workspace dock and its two panels.
-   *
-   * The layout is the user's, not the application's: which pane is where, how
-   * wide the watchlist is, whether it is collapsed. So it lives in a retained
-   * `DockArea` and is written back to storage whenever it changes, rather than
-   * being described afresh on every render — a dock rebuilt from a description
-   * would undo every drag the moment anything else redrew.
-   *
-   * @param {import("gpui").Context} cx
-   */
-  initWorkspaceDock(cx) {
-    // Before anything can rebuild a panel. A pane the dock reconstructs from a
-    // saved layout is constructed with no props, so the application it draws
-    // cannot arrive that way; it takes the held one instead.
-    holdWorkspaceApp(this);
-    // Registered before the layout is restored: this is what lets a saved
-    // layout find the class its panel is rebuilt from.
-    DockArea.register_panel("watchlist", WatchlistPanel);
-    DockArea.register_panel("detail", DetailPanel);
-
-    // Reset runs this a second time, so nothing here may assume it is the
-    // first: the dock, its panels and the restored flag are all replaced
-    // wholesale rather than added to.
-    this.workspaceDock = DockArea.new("longbridge-workspace", { version: WORKSPACE_LAYOUT_VERSION });
-    this.watchlistPanel = cx.new(WatchlistPanel, { app: this });
-    this.detailPanel = cx.new(DetailPanel, { app: this });
-    // Watchlist is the center and the details are the right dock, which is the
-    // opposite of how they started. Only a left, right or bottom dock is a
-    // *dock*: the center is the area itself, it has no frame, and so it has no
-    // collapse control -- which put the affordance on the pane nobody wants to
-    // put away. The watchlist is the list this window is for; the details are
-    // what it is showing about one row of it, and that is the half worth
-    // folding out of the way.
-    // `closable: false` on both, and it is not only a matter of taste. A dock
-    // whose last panel is closed keeps the dock and loses the panel, so the
-    // window came back with an empty group offering to have a pane dropped in
-    // it and no way to put the closed one back -- there is no "reopen" for a
-    // panel this application never offers to close. Two panes that are always
-    // both there cannot reach that state.
-    this.workspaceDock.add_panel(this.watchlistPanel, {
-      name: "watchlist",
-      placement: "center",
-      closable: false,
-    });
-    this.workspaceDock.add_panel(this.detailPanel, {
-      name: "detail",
-      placement: "right",
-      closable: false,
-      size: DETAIL_DOCK_WIDTH,
-    });
-
-    // What is restored is the geometry, not the panels.
-    //
-    // `load` rebuilds every panel through the registry, which means the two
-    // this view just created are replaced by two it has no handle on -- and a
-    // panel it cannot address is a panel it cannot repaint. `window.refresh()`
-    // does not reach them either; measured, the pane rendered twice at startup
-    // and never again, so the watchlist arrived and the pane went on showing
-    // the empty state it had drawn before the data landed. That is the whole
-    // bug, and it only appeared once a layout had been saved, which is why it
-    // looked intermittent.
-    //
-    // So the panels are always the seeded ones and only what the user actually
-    // adjusts is read back: how wide the details are, and whether they are
-    // folded away. Dragging a pane somewhere else is no longer remembered --
-    // a smaller promise, and one this can keep.
-    try {
-      const saved = localStorage.getItem(WORKSPACE_LAYOUT_KEY);
-      const layout = saved ? JSON.parse(saved) : null;
-      if (layout && layout.version === WORKSPACE_LAYOUT_VERSION) {
-        const detail = layout.right_dock;
-        if (Number.isFinite(detail?.size)) {
-          this.workspaceDock.set_dock_size("right", detail.size);
-        }
-        if (detail?.open === false && this.workspaceDock.is_dock_open("right")) {
-          this.workspaceDock.toggle_dock("right");
-        }
-      }
-    } catch {
-      this.layoutStorage = false;
-    }
-
-    // Fires on every edit, including each step of a drag, so the write is on a
-    // timer rather than on the event.
-    this.workspaceDock.on("layout_changed", (cx) => {
-      this.redraw(cx);
-      if (this.layoutWrite) return;
-      this.layoutWrite = cx.timer.after(400, () => {
-        this.layoutWrite = null;
-        if (this.layoutStorage === false) return;
-        try {
-          // Written in base's shape so an older build could still read it,
-          // but only the two fields this restores are meaningful.
-          localStorage.setItem(
-            WORKSPACE_LAYOUT_KEY,
-            JSON.stringify({
-              version: WORKSPACE_LAYOUT_VERSION,
-              right_dock: {
-                placement: "right",
-                size: this.workspaceDock.dock_size("right") ?? DETAIL_DOCK_WIDTH,
-                open: this.workspaceDock.is_dock_open("right"),
-              },
-            }),
-          );
-        } catch {
-          this.layoutStorage = false;
-        }
-      });
-    });
-  }
-
-  /**
-   * Repaints the two panes.
-   *
-   * A dock panel is not a child of this view's description — the dock area
-   * holds it — so `cx.notify()` here repaints the header, the footer and the
-   * chrome, and reaches neither pane. This is the other half of that: it hands
-   * each panel a targeted notification, because what the call is for is a
-   * repaint of shared state rather than a new value.
-   *
-   * @param {import("gpui").Context | import("gpui").AsyncContext} cx
-   */
-  syncWorkspacePanels(cx) {
-    if (!this.workspaceDock) return;
-    // Each `set_props` crosses the nested-view bridge and rebuilds that pane's
-    // whole description, so publishing to both on every repaint costs twice
-    // what the change was worth -- a quote for an instrument nobody selected
-    // moves a row in the watchlist and nothing at all in the details. On the
-    // resizable workspace this view drew both panes itself and one `notify`
-    // covered them; the bridge is what makes the difference worth tracking.
-    const panes = this.dirtyPanes;
-    this.dirtyPanes = 0;
-    // These panes read the shared application they retained during `init`.
-    // `cx.notify(entity)` is GPUI's targeted invalidation: unlike `set_props`,
-    // it does not run a child update transaction or checkpoint every object
-    // reachable through that application reference.
-    if (panes & PANE_WATCHLIST && this.watchlistPanel) cx.notify(this.watchlistPanel);
-    if (panes & PANE_DETAIL && this.detailPanel) cx.notify(this.detailPanel);
   }
 
   /**
@@ -720,6 +760,8 @@ export default class LongbridgeApp extends View {
     if (this.repaint) return;
     this.repaint = cx.timer.after(100, (cx) => {
       this.repaint = null;
+      const pendingPanes = this.dirtyPanes || PANE_BOTH;
+      this.dirtyPanes = 0;
       this.drainQuotes();
       // The chart's live tail, at a rate a chart can be read at.
       //
@@ -735,23 +777,13 @@ export default class LongbridgeApp extends View {
         this.chartPublishedAt = Date.now();
         this.syncPriceChartView();
       }
-      this.redraw(cx);
+      this.redraw(cx, pendingPanes);
     });
   }
 
-  /**
-   * What every mutation site calls: repaint this view, and repaint the panes.
-   *
-   * One funnel rather than a `cx.notify()` at each site, because after the
-   * workspace became a dock those are two different requests and forgetting the
-   * second one is invisible — the header updates and the table does not.
-   *
-   * @param {import("gpui").Context} cx
-   */
-  redraw(cx, panes = PANE_BOTH) {
-    this.dirtyPanes |= panes;
+  /** One repaint funnel for the plain Panel workspace. */
+  redraw(cx, _panes = PANE_BOTH) {
     cx.notify();
-    this.syncWorkspacePanels(cx);
   }
 
   releasePriceChartView() {
@@ -759,6 +791,132 @@ export default class LongbridgeApp extends View {
     this.priceChart.release();
     this.priceChart = null;
     this.publishedPriceChartProps = null;
+  }
+
+  /** Initializes data which belongs only to the selected instrument's detail panels. */
+  initDetailMarketState() {
+    this.depthCache = new Map();
+    this.depthState = emptyDepthState();
+    this.tradesState = emptyTradesState();
+    this.detailMarketGeneration = 0;
+  }
+
+  /** Invalidates all in-flight detail work and clears both panel states. */
+  clearDetailMarket() {
+    this.detailMarketGeneration += 1;
+    this.depthState = emptyDepthState();
+    this.tradesState = emptyTradesState();
+  }
+
+  /**
+   * Changes the selected detail instrument without touching the chart's retained props.
+   *
+   * @param {string | null} symbol
+   * @param {import("gpui").Context | import("gpui").AsyncContext} cx
+   */
+  selectDetailMarket(symbol, cx) {
+    const selected = typeof symbol === "string" && symbol ? symbol : null;
+    const generation = ++this.detailMarketGeneration;
+    this.selectedSymbol = selected;
+    const cachedDepth = selected ? this.depthCache?.get(selected) : null;
+    this.depthState = cachedDepth ?? emptyDepthState(selected);
+    this.tradesState = emptyTradesState(selected);
+    this.redraw(cx, PANE_DETAIL);
+
+    const stream = this.stream;
+    if (!stream || typeof stream.selectDetailSymbol !== "function") return Promise.resolve();
+    try {
+      return Promise.resolve(stream.selectDetailSymbol(selected, generation)).catch((error) =>
+        this.receiveDetailError({ symbol: selected, generation, error }, cx),
+      );
+    } catch (error) {
+      this.receiveDetailError({ symbol: selected, generation, error }, cx);
+      return Promise.resolve();
+    }
+  }
+
+  /**
+   * @param {unknown} detail
+   * @param {import("gpui").Context | import("gpui").AsyncContext} cx
+   */
+  receiveDetailError(detail, cx) {
+    if (
+      !detail ||
+      typeof detail !== "object" ||
+      detail.symbol !== this.selectedSymbol ||
+      detail.generation !== this.detailMarketGeneration
+    ) {
+      return;
+    }
+    const message =
+      detail.error instanceof Error ? detail.error.message : String(detail.error ?? "");
+    this.depthState = { ...this.depthState, status: "error", error: message };
+    this.tradesState = { ...this.tradesState, status: "error", error: message };
+    this.scheduleRedraw(cx, PANE_MARKET);
+  }
+
+  /**
+   * @param {unknown} depth
+   * @param {import("gpui").Context | import("gpui").AsyncContext} cx
+   * @param {number} generation
+   */
+  receiveDepth(depth, cx, generation) {
+    if (
+      !depth ||
+      typeof depth !== "object" ||
+      generation !== this.detailMarketGeneration ||
+      depth.symbol !== this.selectedSymbol ||
+      this.depthState.symbol !== this.selectedSymbol
+    ) {
+      return;
+    }
+    const normalized = normalizeDepth(depth);
+    const hasDepth = [...normalized.asks, ...normalized.bids].some(validDepthLevel);
+    this.depthCache ??= new Map();
+    if (hasDepth) {
+      this.depthState = Object.freeze({
+        symbol: normalized.symbol,
+        status: "ready",
+        asks: normalized.asks,
+        bids: normalized.bids,
+        error: "",
+      });
+      this.depthCache.set(normalized.symbol, this.depthState);
+    } else {
+      this.depthState = this.depthCache.get(normalized.symbol) ?? {
+        symbol: normalized.symbol,
+        status: "ready",
+        asks: normalized.asks,
+        bids: normalized.bids,
+        error: "",
+      };
+    }
+    this.scheduleRedraw(cx, PANE_MARKET);
+  }
+
+  /**
+   * @param {unknown} payload
+   * @param {import("gpui").Context | import("gpui").AsyncContext} cx
+   * @param {number} generation
+   */
+  receiveTrades(payload, cx, generation) {
+    if (
+      !payload ||
+      typeof payload !== "object" ||
+      generation !== this.detailMarketGeneration ||
+      payload.symbol !== this.selectedSymbol ||
+      this.tradesState.symbol !== this.selectedSymbol
+    ) {
+      return;
+    }
+    const trades = Array.isArray(payload.trades) ? payload.trades : EMPTY_DETAIL_TRADES;
+    this.tradesState = {
+      symbol: this.selectedSymbol,
+      status: "ready",
+      trades: mergeTrades(this.tradesState.trades, trades),
+      error: "",
+    };
+    this.scheduleRedraw(cx, PANE_MARKET);
   }
 
   /**
@@ -780,7 +938,6 @@ export default class LongbridgeApp extends View {
     this.userMenuOpen = false;
     this.allocationHelpOpen = false;
     /** Which stock-detail sections are expanded. */
-    this.detailSections = { quote: true, about: false };
     this.watchlistQuery = "";
     this.holdingsQuery = "";
     this.watchlistFilter = InputState.new({ placeholder: "Filter watchlist" });
@@ -857,12 +1014,15 @@ export default class LongbridgeApp extends View {
   /** @param {import("gpui").Context} cx */
   signIn(cx) {
     if (this.authorization) return;
+    const generation = (this.authorizationGeneration ?? 0) + 1;
+    this.authorizationGeneration = generation;
     this.status = { state: "authorizing" };
     this.error = "";
     this.redraw(cx);
     cx.spawn(async (cx) => {
       try {
         const authorization = await beginDeviceAuthorization();
+        if (generation !== this.authorizationGeneration) return;
         this.authorization = authorization;
         // The page opens here rather than waiting to be clicked. The address is
         // only known once the device code exists, which is what a second click
@@ -879,11 +1039,15 @@ export default class LongbridgeApp extends View {
           console.warn(`could not open the authorization page: ${error}`);
         }
         this.redraw(cx);
-        const tokens = await pollDeviceAuthorization(authorization);
+        const tokens = await pollDeviceAuthorization(authorization, {
+          shouldCancel: () => generation !== this.authorizationGeneration,
+        });
+        if (generation !== this.authorizationGeneration) return;
         this.hasStoredTokens = true;
         this.authorization = null;
         await this.connect(tokens.accessToken, cx);
       } catch (error) {
+        if (generation !== this.authorizationGeneration) return;
         this.authorization = null;
         this.status = { state: "error" };
         this.error = error instanceof Error ? error.message : String(error);
@@ -900,6 +1064,7 @@ export default class LongbridgeApp extends View {
     // request stale before awaiting stop, so its catch cannot publish into the
     // reconnecting chart while the replacement watchlist is still loading.
     this.chartGeneration += 1;
+    this.clearDetailMarket();
     const previous = this.stream;
     this.stream = null;
     if (previous) await previous.stop();
@@ -947,12 +1112,25 @@ export default class LongbridgeApp extends View {
         if (generation === this.streamGeneration && this.stream === stream)
           this.receiveQuote(quote, cx);
       },
+      onDepth: (depth, detailGeneration) => {
+        if (generation === this.streamGeneration && this.stream === stream)
+          this.receiveDepth(depth, cx, detailGeneration);
+      },
+      onTrades: (trades, detailGeneration) => {
+        if (generation === this.streamGeneration && this.stream === stream)
+          this.receiveTrades(trades, cx, detailGeneration);
+      },
+      onDetailError: (detail) => {
+        if (generation === this.streamGeneration && this.stream === stream)
+          this.receiveDetailError(detail, cx);
+      },
       onStatus: (status) => {
         if (generation === this.streamGeneration && this.stream === stream)
           this.receiveStatus(status, cx);
       },
     });
     this.stream = stream;
+    this.selectDetailMarket(this.selectedSymbol, cx);
     await stream.start();
     if (generation !== this.streamGeneration) {
       await stream.stop();
@@ -978,17 +1156,18 @@ export default class LongbridgeApp extends View {
     // merged in one pass by the repaint that was already being coalesced.
     this.pendingQuotes.push(quote);
     if (quote && typeof quote === "object" && quote.symbol === this.selectedSymbol) {
-      const candles = this.candleCache.get(this.selectedSymbol);
-      if (candles) {
-        const merged = mergeLiveQuote(this.selectedSymbol, candles, quote);
+      const identity = this.currentChartIdentity();
+      const candles = this.cachedChartSeries();
+      if (this.hasCachedChartSeries() && candles) {
+        const activeQuote = this.quoteForActiveChart(candles, quote);
+        const merged = activeQuote
+          ? mergeLiveChartQuote(this.selectedSymbol, this.activeChartMode(), candles, activeQuote)
+          : candles;
         if (merged !== candles) {
-          this.candleCache.set(this.selectedSymbol, merged);
-          // Not published here. `mergeLiveQuote` answers with a new series for
-          // every push, so the identity guard in `syncPriceChartView` never
-          // holds on this path and each quote handed the whole five days of
-          // candles across the nested-view bridge -- which is the other thing
-          // that was being interrupted for overrunning the sandbox's budget.
-          // The coalesced repaint publishes it instead.
+          if (identity) this.cacheChartSeries(identity, merged);
+          // Not published here. A live merge answers with a new series for
+          // every push, so each quote must wait for the coalesced redraw rather
+          // than crossing the retained-view bridge with a full history window.
           this.chartDirty = true;
         }
       }
@@ -1011,40 +1190,92 @@ export default class LongbridgeApp extends View {
       this.publishChart(cx);
       return;
     }
+    const mode = this.activeChartMode();
+    const identity = this.currentChartIdentity(symbol);
+    const cached = this.hasCachedChartSeries(symbol);
+    if (cached) this.cachedChartSeries(symbol);
     const generation = ++this.chartGeneration;
     this.chartState = {
       symbol,
-      state: this.candleCache.has(symbol) ? "ready" : "loading",
+      state: cached ? "ready" : "loading",
     };
     this.redraw(cx);
     this.publishChart(cx);
-    if (!stream) return;
-    // The window ends on the day the picker chose, and on today when it has
-    // chosen nothing. Fourteen calendar days back is enough to contain five
-    // trading sessions across a holiday.
-    const end = this.chartEndDate ? new Date(`${this.chartEndDate}T12:00:00`) : new Date();
-    const start = new Date(end.getTime() - 14 * 86_400_000);
-    const compact = (date) => date.toISOString().slice(0, 10).replaceAll("-", "");
+    if (!stream || cached) return;
+    const request = this.chartRequestFor(symbol, mode);
     cx.spawn(async (cx) => {
       try {
-        const response = await stream.queryCandlesticks({
-          symbol,
-          startDate: compact(start),
-          endDate: compact(end),
-        });
-        if (generation !== this.chartGeneration || symbol !== this.selectedSymbol) return;
-        this.candleCache.set(symbol, response.candlesticks);
-        this.chartState = { symbol, state: "ready" };
+        let candles;
+        if (request.kind === "intraday") {
+          const response = await stream.queryIntraday(request.params);
+          candles = response.lines.map((line) => ({
+            ...line,
+            open: line.price,
+            high: line.price,
+            low: line.price,
+            close: line.price,
+          }));
+        } else {
+          const response = await stream.queryCandlesticks(request.params);
+          candles = response.candlesticks;
+        }
+        if (!this.publishChartResponse(symbol, identity, generation, candles)) return;
       } catch (_) {
-        if (generation !== this.chartGeneration || symbol !== this.selectedSymbol) return;
+        if (!this.acceptsChartResponse(symbol, identity, generation)) return;
         this.chartState = {
           symbol,
-          state: this.candleCache.has(symbol) ? "ready" : "error",
+          state: this.hasCachedChartSeries(symbol) ? "ready" : "error",
         };
       }
       this.redraw(cx);
       this.publishChart(cx);
     });
+  }
+
+  acceptsChartResponse(symbol, identity, generation) {
+    return (
+      generation === this.chartGeneration &&
+      symbol === this.selectedSymbol &&
+      identity !== null &&
+      identity === this.currentChartIdentity(symbol)
+    );
+  }
+
+  normalizeChartCandles(mode, candles) {
+    const source = Array.isArray(candles) ? candles : EMPTY_CANDLES;
+    if (mode === "intraday") return prepareIntradaySeries(source).candles;
+    return prepareCandleSeries(source).candles;
+  }
+
+  publishChartResponse(symbol, identity, generation, candles) {
+    if (!this.acceptsChartResponse(symbol, identity, generation)) return false;
+    this.cacheChartSeries(identity, this.normalizeChartCandles(this.activeChartMode(), candles));
+    this.chartState = { symbol, state: "ready" };
+    return true;
+  }
+
+  quoteForActiveChart(candles, quote) {
+    if (this.activeChartMode() !== "1D" || quote?.tradeSession !== TRADE_SESSION.NORMAL)
+      return quote;
+    const last = candles.at(-1);
+    if (!last) return null;
+    const lastMarketDay =
+      typeof last.marketDay === "string"
+        ? last.marketDay
+        : typeof last.tradingDate === "string"
+          ? last.tradingDate
+          : null;
+    const quoteMarketDay =
+      typeof quote.marketDay === "string"
+        ? quote.marketDay
+        : typeof quote.tradingDate === "string"
+          ? quote.tradingDate
+          : null;
+    if (lastMarketDay && quoteMarketDay) return lastMarketDay === quoteMarketDay ? quote : null;
+    const lastBucket = providerDayBucket(last.timestamp);
+    const quoteBucket = providerDayBucket(quote.timestamp);
+    if (lastBucket === null || quoteBucket === null || lastBucket !== quoteBucket) return null;
+    return { ...quote, dailyBucket: quoteBucket };
   }
 
   /**
@@ -1149,6 +1380,7 @@ export default class LongbridgeApp extends View {
 
   /** @param {import("gpui").Context} cx */
   signOut(cx) {
+    this.authorizationGeneration = (this.authorizationGeneration ?? 0) + 1;
     const stream = this.stream;
     if (stream) cx.spawn(() => stream.stop());
     this.stream = null;
@@ -1165,7 +1397,10 @@ export default class LongbridgeApp extends View {
     this.quotes = [];
     this.portfolioQuotes = [];
     this.selectedSymbol = null;
+    this.clearDetailMarket();
+    this.depthCache?.clear();
     this.candleCache.clear();
+    this.chartCache?.clear();
     this.chartGeneration += 1;
     this.chartState = { symbol: null, state: "idle" };
     this.releasePriceChartView();
@@ -1325,7 +1560,9 @@ export default class LongbridgeApp extends View {
             v_flex()
               .flex_1()
               .min_h(0)
-              .p(tokens.spacing.sm)
+              .px(PANE_INSET)
+              .pb(PANE_INSET)
+              .pt(0)
               .gap(tokens.spacing.sm)
               .child(
                 // The performance overlay is anchored in *this* box rather than
@@ -1361,81 +1598,88 @@ export default class LongbridgeApp extends View {
    * @param {import("gpui-base").Theme} tokens
    */
   titleBar(tokens) {
-    return h_flex()
-      .id("window-title-bar")
-      .flex_none()
-      .h(TITLE_BAR_HEIGHT)
-      .w_full()
-      .items_center()
-      .gap(tokens.spacing.md)
-      // Symmetric, so the page switch between the two tracks is centred on the
-      // window rather than on a box that has been pushed right. The room macOS
-      // needs for its traffic lights is the *left track's* padding, below: as
-      // padding here it inset the content box on one side only, and the middle
-      // came to rest 42 pixels right of centre.
-      .px(tokens.spacing.sm)
-      .bg(tokens.surface)
-      .border_b(1)
-      .border_color(tokens.border)
-      .child(
-        h_flex()
-          .flex_1()
-          .min_w(0)
-          // The traffic lights are drawn over this corner by the system, so
-          // the mark starts after them. On a platform without them this is the
-          // ordinary gap.
-          .pl(TITLE_BAR_LEADING - tokens.spacing.sm)
-          // The mark and the name are one lockup, so they sit on a shared
-          // baseline. Not `items_center`, which leaves the name floating above
-          // the mark's foot, and not `items_end` either: that aligns the *line
-          // box*, and a 1.25 line box keeps room under the baseline for
-          // descenders, so the mark still ends up sitting low by that much.
-          // Baseline alignment puts the mark's foot on the letters' own.
-          .items_baseline()
-          // 6, not a spacing token: this is the gap inside one lockup, which is
-          // an optical fit between a mark and a wordmark rather than a layout
-          // step. The scale's neighbours (4 and 8) are both wrong by eye here.
-          .gap(6)
-          .child(
-            image(tokens.appearance === "dark" ? "assets/logo-dark.svg" : "assets/logo-light.svg")
-              .w(20)
-              .h(20)
-              .flex_none()
-              .accessibility_label("Longbridge"),
-          )
-          .child(label(tokens, "Longbridge", 13).font_weight(700)),
-      )
-      // The switch is only a switch once there is something to switch between,
-      // and both pages need a session.
-      .when(this.hasStoredTokens, (element) => element.child(this.pageSwitch(tokens)))
-      .child(
-        h_flex()
-          .flex_1()
-          .min_w(0)
-          .items_center()
-          .justify_end()
-          .gap(tokens.spacing.sm)
-          .child(connectionPill(tokens, this.status.state))
-          // Only on the page that has the pane it folds. Portfolio is one
-          // column with no details beside it, so the control there would be a
-          // switch for something that is not on screen.
-          .when(this.hasStoredTokens && this.page === "watchlist", (element) =>
-            element.child(
-              detailToggle(tokens, this.isDetailOpen(), (_event, cx) => this.toggleDetail(cx)),
-            ),
-          )
-          .when(!this.followsSystemTheme, (element) =>
-            element.child(
-              themeButton(tokens, (_event, cx) =>
-                this.chooseTheme(tokens.appearance === "dark" ? "light" : "dark", cx),
+    const status = statusColors(tokens);
+    return (
+      h_flex()
+        .id("window-title-bar")
+        .flex_none()
+        .h(TITLE_BAR_HEIGHT)
+        .w_full()
+        .items_center()
+        .gap(tokens.spacing.md)
+        // Symmetric, so the page switch between the two tracks is centred on the
+        // window rather than on a box that has been pushed right. The room macOS
+        // needs for its traffic lights is the *left track's* padding, below: as
+        // padding here it inset the content box on one side only, and the middle
+        // came to rest 42 pixels right of centre.
+        .px(tokens.spacing.sm)
+        .bg(tokens.surface)
+        .child(
+          h_flex()
+            .flex_1()
+            .min_w(0)
+            // The traffic lights are drawn over this corner by the system, so
+            // the mark starts after them. On a platform without them this is the
+            // ordinary gap.
+            .pl(TITLE_BAR_LEADING - tokens.spacing.sm)
+            // The mark and the name are one lockup, so they sit on a shared
+            // baseline. Not `items_center`, which leaves the name floating above
+            // the mark's foot, and not `items_end` either: that aligns the *line
+            // box*, and a 1.25 line box keeps room under the baseline for
+            // descenders, so the mark still ends up sitting low by that much.
+            // Baseline alignment puts the mark's foot on the letters' own.
+            .items_baseline()
+            // 6, not a spacing token: this is the gap inside one lockup, which is
+            // an optical fit between a mark and a wordmark rather than a layout
+            // step. The scale's neighbours (4 and 8) are both wrong by eye here.
+            .gap(6)
+            .child(
+              div()
+                .relative()
+                .w(20)
+                .h(20)
+                .flex_none()
+                .accessibility_label("Longbridge")
+                .child(
+                  svg("assets/logo-foreground.svg")
+                    .absolute()
+                    .inset_0()
+                    .text_color(tokens.foreground),
+                )
+                .child(
+                  svg("assets/logo-info-cyan.svg").absolute().inset_0().text_color(status.info),
+                )
+                .child(
+                  svg("assets/logo-warning.svg").absolute().inset_0().text_color(status.warning),
+                )
+                .child(svg("assets/logo-danger.svg").absolute().inset_0().text_color(status.down)),
+            )
+            .child(label(tokens, "Longbridge", 13).font_weight(700)),
+        )
+        // The switch is only a switch once there is something to switch between,
+        // and both pages need a session.
+        .when(this.hasStoredTokens, (element) => element.child(this.pageSwitch(tokens)))
+        .child(
+          h_flex()
+            .flex_1()
+            .min_w(0)
+            .items_center()
+            .justify_end()
+            .gap(tokens.spacing.sm)
+            .child(connectionPill(tokens, this.status.state))
+            .when(!this.followsSystemTheme, (element) =>
+              element.child(
+                themeButton(tokens, (_event, cx) =>
+                  this.chooseTheme(tokens.appearance === "dark" ? "light" : "dark", cx),
+                ),
               ),
-            ),
-          )
-          // The menu belongs to the session, not to the Watchlist: it signs out
-          // and switches theme, and neither is a property of a list. The
-          // window's own corner is where a session's controls live.
-          .when(this.hasStoredTokens, (element) => element.child(this.userMenu(tokens))),
-      );
+            )
+            // The menu belongs to the session, not to the Watchlist: it signs out
+            // and switches theme, and neither is a property of a list. The
+            // window's own corner is where a session's controls live.
+            .when(this.hasStoredTokens, (element) => element.child(this.userMenu(tokens))),
+        )
+    );
   }
 
   /**
@@ -1521,6 +1765,15 @@ export default class LongbridgeApp extends View {
     return window.viewport_size().width < NARROW_VIEWPORT;
   }
 
+  /**
+   * Estimate the center region once per Watchlist paint. The result is passed
+   * into every virtual row, avoiding the per-row host sizing calls that cut
+   * Release throughput while still letting a wide Watchlist show its columns.
+   */
+  isWatchlistCompact() {
+    return responsivePanelWidths(window.viewport_size().width).watchlist < COMPACT_WATCHLIST_WIDTH;
+  }
+
   /** @param {import("gpui-base").Theme} tokens */
   workspace(tokens) {
     // Each page owns its own scrolling. Watchlist is a master-detail layout
@@ -1572,7 +1825,6 @@ export default class LongbridgeApp extends View {
       .when(facing === "right", (element) => element.pr(PANE_INSET));
   }
 
-
   /** @param {import("gpui-base").Theme} tokens */
   loginGate(tokens) {
     return h_flex()
@@ -1583,105 +1835,61 @@ export default class LongbridgeApp extends View {
       .child(v_flex().w(400).child(this.authPanel(tokens)));
   }
 
-  /**
-   * Puts the workspace back the way it ships.
-   *
-   * A dock area is the one part of this window whose shape is the user's, and
-   * the price of that is a shape they can get stuck in: a pane dragged into the
-   * centre and its dock left holding nothing, a pane collapsed and its handle
-   * off the edge of the window. Every one of those is recoverable by hand and
-   * none of them is obvious, so the way back is a menu item rather than a
-   * paragraph in a README.
-   *
-   * The stored layout goes first. Rebuilding the dock republishes one through
-   * `layout_changed`, so clearing afterwards would only delete the layout that
-   * was just written, and the next launch would restore the shape this is
-   * supposed to be undoing.
-   *
-   * @param {import("gpui").Context} cx
-   */
-  resetWorkspace(cx) {
-    if (this.layoutWrite) {
-      this.layoutWrite = null;
-    }
-    try {
-      localStorage.removeItem(WORKSPACE_LAYOUT_KEY);
-    } catch {
-      // A host that granted no storage has nothing to forget, and the rebuild
-      // below is the part that matters.
-      this.layoutStorage = false;
-    }
-    this.initWorkspaceDock(cx);
-    this.redraw(cx);
-    cx.notify();
-    window.push_toast({ title: "Layout reset", level: "success", id: "workspace-reset" });
-  }
-
-  /**
-   * Whether the stock details are showing.
-   *
-   * Read from the dock every time rather than mirrored on this view: the pane
-   * can also be closed by dragging its edge shut, and a copy of the flag would
-   * be wrong from the first time that happened.
-   */
-  isDetailOpen() {
-    return Boolean(this.workspaceDock?.is_dock_open("right"));
-  }
-
-  /** @param {import("gpui").Context} cx */
-  toggleDetail(cx) {
-    if (!this.workspaceDock) return;
-    this.workspaceDock.toggle_dock("right");
-    // The dock writes its own layout back through `layout_changed`; this is
-    // only the title bar catching up with the icon it should now be showing.
-    cx.notify();
-  }
-
-  /**
-   * The workspace, as a dock the user rearranges and keeps.
-   *
-   * The two panes used to be halves of a resizable group, which meant the
-   * layout was a property of the description: the split had to be re-decided
-   * every render, the narrow case needed a second group with its own id, and
-   * nothing could be moved, collapsed or reordered. A dock area answers all
-   * three — the layout is a value the user edits and this view only draws it.
-   *
-   * Base draws no chrome, so everything visible here is `ui.js`.
-   *
-   * @param {import("gpui-base").Theme} tokens
-   */
+  /** Four plain Panels, ordered by information priority and responsive by width. */
   watchlistPage(tokens) {
-    // No `.dock()` here, deliberately. That hook does not decorate a dock --
-    // it *replaces* base's whole `render_dock`, which is where a side dock's
-    // own box comes from (`Left | Right => h_flex().h_full().w(size)`), along
-    // with the early return that gives a closed dock no width and the resize
-    // handle on its edge. Chrome that returns anything else has silently taken
-    // over the layout, and a dock that no longer states its width stops being
-    // a column beside the centre and drops into the flow below it.
-    //
-    // None of that is worth owning. The one thing this window wanted from dock
-    // chrome was a collapse control, and `DockArea` exposes that directly --
-    // `is_dock_open` and `toggle_dock` take a placement -- so the control lives
-    // in the title bar and base keeps the layout it is good at.
-    return dock_area(this.workspaceDock)
+    const { sideBySide } = responsivePanelWidths(window.viewport_size().width);
+    const watchlist = workspacePanel(tokens, "Watchlist", this.watchlist(tokens));
+    const quote = workspacePanel(tokens, "Quote Details", this.quoteDetailsPanel(tokens));
+    const chart = workspacePanel(
+      tokens,
+      "Chart",
+      this.chartDetailsPanel(tokens),
+      this.chartModeTabs(tokens),
+    );
+    const market = workspacePanel(tokens, "Market Detail", this.marketDetailPanel(tokens));
+
+    if (!sideBySide) {
+      return v_flex()
+        .id("watchlist-panels-stacked")
+        .flex_1()
+        .min_h(0)
+        .gap(WORKSPACE_PANEL_GAP)
+        .overflow_y_scrollbar()
+        .child(watchlist.h(440).flex_none())
+        .child(quote.h(250).flex_none())
+        .child(chart.h(290).flex_none())
+        .child(market.h(360).flex_none());
+    }
+
+    return h_flex()
+      .id("watchlist-panels")
       .flex_1()
       .min_h(0)
-      .tab_bar((group, cx) => dockTabBar(cx.theme(), group))
-      .empty_group((_group, cx) => emptyPanel(cx.theme(), "Nothing here", "Drop a pane in."))
-      .drop_indicator((drop, cx) => dockDropHint(cx.theme(), drop))
-      // `dockFrame` is base's `render_dock`, ported. It has to be supplied:
-      // gpui-shell replaces base's version whether or not an application asks,
-      // and its default chrome hands back the content bare -- no width, so a
-      // side dock stops being a column and drops into the flow below the
-      // centre. See the note on `dockFrame`.
-      .dock((dock, cx) => dockFrame(cx.theme(), dock, dock_content().flex_1().min_h(0).w_full()));
+      .min_w(0)
+      .items_stretch()
+      .gap(WORKSPACE_PANEL_GAP)
+      .child(watchlist.flex_basis(0).flex_grow(6).min_w(WATCHLIST_MIN_WIDTH).min_h(0))
+      .child(
+        v_flex()
+          .id("detail-panels")
+          .flex_basis(0)
+          .flex_grow(4)
+          .min_w(RESPONSIVE_DETAIL_MIN_WIDTH)
+          .min_h(0)
+          .gap(WORKSPACE_PANEL_GAP)
+          .overflow_y_scrollbar()
+          .child(quote.flex_basis(180).flex_grow(1).min_h(160))
+          .child(chart.h(290).flex_none())
+          .child(market.flex_basis(220).flex_grow(1).min_h(180)),
+      );
   }
 
   /** @param {import("gpui-base").Theme} tokens */
   watchlist(tokens) {
     const status = streamStatusSummary({ state: this.status.state, delay: this.status.delay });
     const rows = filterRows(this.quotes, this.watchlistQuery, ["code", "name", "symbol"]);
-    return this.pane(tokens, "right").child(
+    const compact = this.isWatchlistCompact();
+    return (
       panel(tokens)
         .id("watchlist-pane")
         // No top edge: the tab bar above this pane already draws the line, and
@@ -1713,9 +1921,16 @@ export default class LongbridgeApp extends View {
             "Watchlist",
             rows,
             QUOTE_ROW_HEIGHT,
-            watchlistHeader(tokens),
+            watchlistHeader(tokens, compact),
             (quote, index) =>
-              quoteRow(tokens, quote, quote.symbol === this.selectedSymbol, index, this.lastTick),
+              quoteRow(
+                tokens,
+                quote,
+                quote.symbol === this.selectedSymbol,
+                index,
+                this.lastTick,
+                compact,
+              ),
             (symbol, cx) => this.selectQuote(symbol, cx),
             this.watchlistQuery
               ? emptyPanel(tokens, "No matches", "Nothing in the watchlist matches that filter.")
@@ -1724,10 +1939,11 @@ export default class LongbridgeApp extends View {
                   "Watchlist is empty",
                   "Add securities in Longbridge, then reconnect to refresh this read-only view.",
                 ),
+            2,
           )
             .flex_1()
             .min_h(0),
-        ),
+        )
     );
   }
 
@@ -1749,7 +1965,18 @@ export default class LongbridgeApp extends View {
    * @param {((key: string, cx: import("gpui").Context) => void) | null} onSelect
    * @param {import("gpui").Element} empty
    */
-  instrumentTable(tokens, id, name, rows, rowHeight, header, renderRow, onSelect, empty) {
+  instrumentTable(
+    tokens,
+    id,
+    name,
+    rows,
+    rowHeight,
+    header,
+    renderRow,
+    onSelect,
+    empty,
+    columnCount = 5,
+  ) {
     const body = TableBody.new(`${id}-body`)
       .relative()
       .flex_1()
@@ -1781,7 +2008,7 @@ export default class LongbridgeApp extends View {
     return Table.new(`${id}-table`)
       .accessibility_label(name)
       .row_count(rows.length + 1)
-      .column_count(5)
+      .column_count(columnCount)
       .flex()
       .flex_col()
       .child(header)
@@ -1829,12 +2056,6 @@ export default class LongbridgeApp extends View {
             ),
           )
           .child(
-            menuItem(tokens, "user-menu-reset-layout", "Reset layout", (_event, cx) => {
-              close(cx);
-              this.resetWorkspace(cx);
-            }),
-          )
-          .child(
             menuItem(
               tokens,
               "user-menu-status-bar",
@@ -1876,11 +2097,24 @@ export default class LongbridgeApp extends View {
               "Reload 5D chart",
               (_event, cx) => {
                 close(cx);
-                this.candleCache.delete(this.selectedSymbol);
+                this.invalidateCurrentChartCache();
                 this.loadSelectedChart(cx);
               },
               { disabled: !selected },
             ),
+          )
+          .child(rule(tokens))
+          .child(
+            menuItem(tokens, "user-menu-longbridge", "Longbridge website", (_event, cx) => {
+              close(cx);
+              cx.open_url("https://longbridge.com");
+            }),
+          )
+          .child(
+            menuItem(tokens, "user-menu-github", "GitHub", (_event, cx) => {
+              close(cx);
+              cx.open_url("https://github.com/longbridge/longbridge-lite");
+            }),
           )
           .child(rule(tokens))
           .when(!this.followsSystemTheme, (element) =>
@@ -1915,10 +2149,15 @@ export default class LongbridgeApp extends View {
             ),
           )
           .child(
-            menuItem(tokens, "user-menu-zoom", window.is_maximized() ? "Unzoom" : "Zoom", (_event, cx) => {
-              close(cx);
-              window.zoom_window();
-            }),
+            menuItem(
+              tokens,
+              "user-menu-zoom",
+              window.is_maximized() ? "Unzoom" : "Zoom",
+              (_event, cx) => {
+                close(cx);
+                window.zoom_window();
+              },
+            ),
           )
           .child(
             menuItem(tokens, "user-menu-minimize", "Minimize", (_event, cx) => {
@@ -1928,9 +2167,6 @@ export default class LongbridgeApp extends View {
           )
           .child(rule(tokens))
           .child(
-            // The only way out while signed in: the sign-in card is not on
-            // screen once a session is live, so its "Clear session" cannot be
-            // reached from here.
             menuItem(
               tokens,
               "user-menu-sign-out",
@@ -1990,108 +2226,181 @@ export default class LongbridgeApp extends View {
    */
   selectQuote(symbol, cx) {
     if (!symbol || symbol === this.selectedSymbol) return;
-    this.selectedSymbol = symbol;
+    this.selectDetailMarket(symbol, cx);
     // Paint the selection first. `loadSelectedChart` publishes the chart, and
     // publishing it is the expensive half of this click -- see `publishChart`.
     this.redraw(cx);
     this.loadSelectedChart(cx);
   }
 
-  /** @param {import("gpui-base").Theme} tokens */
+  // Test probes can draw the complete detail stack without the Watchlist.
   stockDetail(tokens) {
-    const quote =
-      this.quotes.find((entry) => entry.symbol === this.selectedSymbol) ?? this.quotes[0];
-    return this.pane(tokens, "left").child(
-      panel(tokens)
-        .id("stock-detail-pane")
-        // No top edge: the tab bar above this pane already draws the line, and
-        // two of them at the same seam is a doubled border rather than a
-        // stronger one.
-        .border_t(0)
-        .flex_1()
-        .min_h(0)
-        .child(
-          h_flex()
-            .items_center()
-            .justify_between()
-            .px(tokens.spacing.md)
-            .py(tokens.spacing.sm)
-            // Same as the watchlist: the tab names the pane, so this row only
-            // says what the tab cannot.
-            .child(muted(tokens, "Real-time quote")),
-        )
-        .child(rule(tokens))
-        .child(
-          quote
-            ? v_flex()
-                .flex_1()
-                .min_h(0)
-                .overflow_y_scrollbar()
-                .child(this.detailSectionsFor(tokens, quote))
-            : emptyPanel(
-                tokens,
-                "Watchlist is empty",
-                "Add securities in Longbridge, then reconnect to refresh this read-only view.",
-              ),
-        ),
-    );
+    return v_flex()
+      .size_full()
+      .min_w(0)
+      .min_h(0)
+      .children([
+        this.quoteDetailsPanel(tokens).flex_1().min_h(0),
+        this.chartDetailsPanel(tokens).flex_1().min_h(0),
+        this.marketDetailPanel(tokens).flex_1().min_h(0),
+      ]);
   }
 
-  /**
-   * The three things there are to say about an instrument, each behind its own
-   * disclosure.
-   *
-   * A detail pane is a stack of unrelated readings, and in a narrow window all
-   * three of them at once is a scroll rather than a view. The accordion parts
-   * draw nothing — what they carry is what a screen reader reads: the group,
-   * the heading and its level, the button and its expanded state, and the
-   * region that button controls.
-   *
-   * The chart panel is `keep_mounted`: it holds a retained child view, and a
-   * panel that left the tree on every collapse would tear that child down and
-   * build a new one on the way back.
-   *
-   * @param {import("gpui-base").Theme} tokens
-   * @param {LongbridgeQuoteRow} quote
-   */
-  detailSectionsFor(tokens, quote) {
-    const toggle = (name) => (open, cx) => {
-      this.detailSections = { ...this.detailSections, [name]: open };
-      this.redraw(cx);
-    };
-    return accordionGroup("stock-detail-sections")
+  selectedQuote() {
+    return this.quotes.find((entry) => entry.symbol === this.selectedSymbol) ?? this.quotes[0];
+  }
+
+  /** Quote facts are always expanded: the Panel itself is the disclosure. */
+  quoteDetailsPanel(tokens) {
+    const quote = this.selectedQuote();
+    return panel(tokens)
+      .id("quote-details-panel")
+      .border_t(0)
+      .flex_1()
+      .min_w(0)
+      .min_h(0)
+      .bg(tokens.background)
       .child(
-        accordionSection(tokens, {
-          id: "detail-quote",
-          title: "Quote",
-          detail: quote.code,
-          level: 3,
-          open: this.detailSections.quote,
-          onToggle: toggle("quote"),
-          body: quoteDetail(tokens, quote, this.lastTick, this.quotePulse ?? 1),
-        }),
-      )
-      .child(rule(tokens))
-      .child(this.chartSection(tokens))
-      .child(
-        accordionSection(tokens, {
-          id: "detail-about",
-          title: "About this instrument",
-          detail: quote.market,
-          level: 3,
-          open: this.detailSections.about,
-          onToggle: toggle("about"),
-          body: v_flex()
-            .p(tokens.spacing.md)
-            .child(
-              detailGrid(tokens, [
-                { title: "Symbol", value: quote.symbol },
-                { title: "Market", value: quote.market || "--" },
-                { title: "Currency", value: quote.currency || "--" },
-                { title: "Stream sequence", value: String(quote.sequence ?? "--") },
-              ]),
+        quote
+          ? v_flex()
+              .flex_1()
+              .min_h(0)
+              .overflow_y_scrollbar()
+              .child(quoteDetail(tokens, quote, this.lastTick, this.quotePulse ?? 1))
+          : emptyPanel(
+              tokens,
+              "Watchlist is empty",
+              "Add securities in Longbridge, then reconnect to refresh this read-only view.",
             ),
-        }),
+      );
+  }
+
+  /** The retained chart has its own Panel and is never mounted by market-detail pushes. */
+  chartDetailsPanel(tokens) {
+    return panel(tokens)
+      .id("chart-panel")
+      .border_t(0)
+      .flex_1()
+      .min_w(0)
+      .min_h(0)
+      .bg(tokens.background)
+      .child(v_flex().flex_1().min_h(0).overflow_y_scrollbar().child(this.chartSection(tokens)));
+  }
+
+  /** Compact underline interval tabs carried by the Chart Panel TitleBar. */
+  chartModeTabs(tokens) {
+    const mode = this.activeChartMode();
+    const chartModes = [
+      ["intraday", "Intraday"],
+      ["5D", "5D"],
+      ["1m", "1m"],
+      ["5m", "5m"],
+      ["15m", "15m"],
+      ["1D", "1D"],
+    ];
+    const chartWidth = responsivePanelWidths(window.viewport_size().width).detail;
+    if (chartWidth < 440) {
+      const caption = chartModes.find(([id]) => id === mode)?.[1] ?? mode;
+      return Popover.new("chart-mode-menu")
+        .open(this.chartModeMenuOpen)
+        .on_open_change((open, cx) => {
+          this.chartModeMenuOpen = open;
+          this.redraw(cx);
+        })
+        .trigger(
+          Button.new("chart-mode-menu-trigger")
+            .accessibility_label("Chart interval")
+            .flex()
+            .items_center()
+            .justify_center()
+            .h(22)
+            .px(tokens.spacing.xs)
+            .border(0)
+            .bg(tokens.background)
+            .text_size(11)
+            .text_color(tokens.foreground)
+            .child(`${caption} ▾`),
+        )
+        .content(
+          popoverSurface(tokens, { width: 112, menu: true }).children(
+            chartModes.map(([id, itemCaption]) =>
+              menuItem(
+                tokens,
+                `chart-mode-menu-${id}`,
+                itemCaption,
+                (_event, cx) => {
+                  this.chartModeMenuOpen = false;
+                  this.setChartMode(id, cx);
+                },
+                { detail: mode === id ? "✓" : "" },
+              ),
+            ),
+          ),
+        );
+    }
+    return Tabs.new("chart-mode-tabs")
+      .id("chart-mode-selector")
+      .axis("horizontal")
+      .accessibility_label("Chart interval")
+      .flex_none()
+      .min_w(0)
+      .overflow_x_scroll()
+      .child(
+        h_flex()
+          .flex_none()
+          .children(
+            chartModes.map(([id, caption]) => {
+              const selected = mode === id;
+              return Tab.new(`chart-mode-${id}`)
+                .selected(selected)
+                .on_click((_event, cx) => this.setChartMode(id, cx))
+                .flex_none()
+                .h(22)
+                .px(tokens.spacing.xs)
+                .text_size(11)
+                .border_b(2)
+                .border_color(selected ? tokens.primary : tokens.background)
+                .bg(tokens.background)
+                .text_color(selected ? tokens.foreground : tokens.muted_foreground)
+                .child(caption);
+            }),
+          ),
+      );
+  }
+
+  /** One market-reading scroll: Order Book then Time & Sales. */
+  marketDetailPanel(tokens) {
+    const quote = this.selectedQuote();
+    return panel(tokens)
+      .id("market-detail-panel")
+      .border_t(0)
+      .flex_1()
+      .min_w(0)
+      .min_h(0)
+      .bg(tokens.background)
+      .child(
+        quote
+          ? v_flex()
+              .flex_1()
+              .min_h(0)
+              .overflow_y_scrollbar()
+              .child(
+                v_flex()
+                  .gap(tokens.spacing.xs)
+                  .py(tokens.spacing.xs)
+                  .child(orderBookPanel(tokens, this.depthState, depthRatio(this.depthState)))
+                  .child(
+                    timeSalesPanel(tokens, this.tradesState, {
+                      symbol: quote.symbol,
+                      market: quote.market,
+                    }),
+                  ),
+              )
+          : emptyPanel(
+              tokens,
+              "Watchlist is empty",
+              "Select a security to read its market detail.",
+            ),
       );
   }
 
@@ -2108,55 +2417,34 @@ export default class LongbridgeApp extends View {
     // `today()` is the day the state read when it was created, so a session
     // left open across midnight would still be holding yesterday. The ceiling
     // is the later of that and the clock, which is right either way.
-    const today = [this.chartCalendar.today(), calendarDay(new Date())].sort().at(-1);
+    const today = calendarDay(new Date());
     const end = this.chartEndDate ?? today;
-    return v_flex()
-      .relative()
-      // Match the Stock Details section inset: the date controls, chart
-      // heading, plot and date axis form one content column with Quote above.
-      .px(tokens.spacing.md)
-      .py(tokens.spacing.md)
-      .gap(tokens.spacing.sm)
-      .child(
-        h_flex()
-          .items_center()
-          .justify_between()
-          .gap(tokens.spacing.sm)
-          .child(muted(tokens, `Five sessions to ${end}`))
-          .child(
-            h_flex()
-              .items_center()
-              .gap(tokens.spacing.xs)
-              .child(
-                action(tokens, "chart-date-picker", end, (_event, cx) => {
-                  this.calendarOpen = !this.calendarOpen;
-                  this.redraw(cx);
-                }, { variant: "ghost", selected: this.calendarOpen }),
-              )
-              .when(Boolean(this.chartEndDate), (element) =>
-                element.child(
-                  action(tokens, "chart-date-today", "Today", (_event, cx) => {
-                    this.setChartEnd(null, cx);
-                  }, { variant: "ghost", quiet: true }),
-                ),
-              ),
-          ),
-      )
-      .child(
-        div()
-          .id("price-chart-wheel")
-          // A wheel over the chart walks the window a day at a time. The
-          // handler reads `delta.y` in pixels, which is what every device
-          // reports; `delta_lines` is only there when one reported lines.
-          .on_scroll_wheel((event, cx) => {
-            const step = event.delta.y > 0 ? -1 : event.delta.y < 0 ? 1 : 0;
-            if (step === 0) return;
-            const next = shiftDay(end, step);
-            this.setChartEnd(next > today ? null : next, cx);
-          })
-          .child(this.priceChart),
-      )
-      .when(this.calendarOpen, (element) => element.child(this.calendarSurface(tokens, today)));
+    return (
+      v_flex()
+        .relative()
+        // The title, interval tabs, supporting copy and plot share the Panel's
+        // `sm` content baseline; a second, larger inset made the chart appear
+        // to drift right under its own title.
+        .px(tokens.spacing.sm)
+        .py(tokens.spacing.sm)
+        .gap(tokens.spacing.sm)
+        .child(
+          div()
+            .id("price-chart-wheel")
+            .flex_1()
+            .min_h(244)
+            // A wheel over the chart walks the window a day at a time. The
+            // handler reads `delta.y` in pixels, which is what every device
+            // reports; `delta_lines` is only there when one reported lines.
+            .on_scroll_wheel((event, cx) => {
+              const step = event.delta.y > 0 ? -1 : event.delta.y < 0 ? 1 : 0;
+              if (step === 0) return;
+              const next = shiftDay(end, step);
+              this.setChartEnd(next > today ? null : next, cx);
+            })
+            .child(this.priceChart),
+        )
+    );
   }
 
   /**
@@ -2176,7 +2464,7 @@ export default class LongbridgeApp extends View {
       .right(tokens.spacing.lg)
       .top(48)
       .w(220)
-      .p(tokens.spacing.sm)
+      .p(PANE_INSET)
       .bg(tokens.surface)
       .border(1)
       .border_color(tokens.border)
@@ -2212,11 +2500,6 @@ export default class LongbridgeApp extends View {
   setChartEnd(day, cx) {
     if (day === this.chartEndDate) return;
     this.chartEndDate = day;
-    // The state raises `change` from `set_value`, and the handler `init`
-    // registered is where the reload is written. Setting what it already holds
-    // would be a host call and an event with nothing behind them.
-    if (this.chartCalendar.value() !== day) this.chartCalendar.set_value(day);
-    this.candleCache.delete(this.selectedSymbol);
     this.loadSelectedChart(cx);
     this.redraw(cx);
   }
@@ -2257,154 +2540,154 @@ export default class LongbridgeApp extends View {
     // window the more it draws and the less it pages. A scrolling *page* put a
     // second scroll outside that one, and a table with its own scroll inside a
     // scrolling column is how Holdings used to end up unreachable.
-    return v_flex()
-      .flex_1()
-      .min_h(0)
-      .gap(tokens.spacing.md)
-      // The summary and the ring share a row, four parts to six. They answer
-      // the same question -- what is in this account -- from two directions,
-      // and reading one under the other made the page a column of cards where
-      // it is really two views of one thing. The ring takes the larger share:
-      // it carries a legend beside it, and the summary is a handful of figures.
-      //
-      // `flex_wrap` because a narrow window cannot hold both: they stack rather
-      // than squeezing the legend out of the ring.
-      .child(
-        h_flex()
-          .flex_none()
-          .flex_wrap()
-          .items_stretch()
-          .gap(tokens.spacing.md)
-          .child(
-            panel(tokens)
-              .flex_basis(0)
-              .flex_grow(4)
-              .min_w(320)
-              .child(
-                h_flex()
-                  .items_center()
-                  .justify_between()
-                  // A stated height, not one that falls out of the contents:
-                  // the card beside this one carries a 24px control in its
-                  // header and this one carries only text, so left to their
-                  // contents the two headings sat at different heights.
-                  .h(CARD_HEADER_HEIGHT)
-                  .px(tokens.spacing.md)
-                  .child(
-                    h_flex()
-                      .items_baseline()
-                      .gap(tokens.spacing.xs)
-                      .child(label(tokens, "Portfolio summary", 14).font_weight(700))
-                      .child(
-                        muted(tokens, account ? `Risk level ${account.risk}` : "Read only"),
-                      ),
-                  ),
-              )
-              .child(rule(tokens))
-              .child(
-                account
-                  ? portfolioSummary(tokens, account, presentation.summaries)
-                  : emptyPanel(
-                      tokens,
-                      "No account snapshot",
-                      "Waiting for Longbridge account assets.",
-                    ),
-              ),
-          )
-          .when(allocation.slices.length > 0 || allocation.unpriced.length > 0, (element) =>
-            element.child(
+    return (
+      v_flex()
+        .flex_1()
+        .min_h(0)
+        .gap(tokens.spacing.md)
+        // The summary and the ring share a row, four parts to six. They answer
+        // the same question -- what is in this account -- from two directions,
+        // and reading one under the other made the page a column of cards where
+        // it is really two views of one thing. The ring takes the larger share:
+        // it carries a legend beside it, and the summary is a handful of figures.
+        //
+        // `flex_wrap` because a narrow window cannot hold both: they stack rather
+        // than squeezing the legend out of the ring.
+        .child(
+          h_flex()
+            .flex_none()
+            .flex_wrap()
+            .items_stretch()
+            .gap(tokens.spacing.md)
+            .child(
               panel(tokens)
                 .flex_basis(0)
-                .flex_grow(6)
-                .min_w(380)
+                .flex_grow(4)
+                .min_w(320)
                 .child(
                   h_flex()
                     .items_center()
                     .justify_between()
+                    // A stated height, not one that falls out of the contents:
+                    // the card beside this one carries a 24px control in its
+                    // header and this one carries only text, so left to their
+                    // contents the two headings sat at different heights.
                     .h(CARD_HEADER_HEIGHT)
                     .px(tokens.spacing.md)
                     .child(
                       h_flex()
                         .items_baseline()
                         .gap(tokens.spacing.xs)
-                        .child(label(tokens, "Asset allocation", 14).font_weight(700))
-                        .child(muted(tokens, "Market value in USD")),
-                    )
-                    // The control stays opposite the heading; only the words
-                    // that describe the card moved next to its name.
-                    .child(this.allocationHelp(tokens, allocation)),
+                        .child(label(tokens, "Portfolio summary", 14).font_weight(700))
+                        .child(muted(tokens, account ? `Risk level ${account.risk}` : "Read only")),
+                    ),
                 )
                 .child(rule(tokens))
                 .child(
-                  h_flex()
-                    .flex_wrap()
-                    .items_start()
-                    .gap(tokens.spacing.xl)
-                    .p(tokens.spacing.md)
-                    .child(
-                      v_flex()
-                        .flex_basis(360)
-                        .flex_grow(1)
-                        .child(allocationChart(tokens, allocation)),
-                    ),
+                  account
+                    ? portfolioSummary(tokens, account, presentation.summaries)
+                    : emptyPanel(
+                        tokens,
+                        "No account snapshot",
+                        "Waiting for Longbridge account assets.",
+                      ),
                 ),
-            ),
-          ),
-      )
-      .child(
-        panel(tokens)
-          .flex_1()
-          .min_h(0)
-          .child(
-            tableToolbar(tokens)
-              .flex_none()
-              // The count sits with the title, not across the row from it. It
-              // says how much of *this* is here, so it reads as part of the
-              // heading; opposite the filter it read as a second control.
-              .child(
-                h_flex()
-                  .items_baseline()
-                  .gap(tokens.spacing.xs)
-                  .child(label(tokens, "Holdings", 14).font_weight(700))
-                  .child(
-                    muted(
-                      tokens,
-                      holdingRows.length === this.holdings.length
-                        ? `${this.holdings.length} positions`
-                        : `${holdingRows.length} of ${this.holdings.length} positions`,
-                    ),
-                  ),
-              )
-              .child(filterInput(tokens, this.holdingsFilter, 160)),
-          )
-          .child(rule(tokens))
-          .child(
-            this.instrumentTable(
-              tokens,
-              "holdings",
-              "Holdings",
-              holdingRows,
-              HOLDING_ROW_HEIGHT,
-              holdingsHeader(tokens),
-              (holding, index) => holdingRow(tokens, holding, index),
-              null,
-              this.holdingsQuery
-                ? emptyPanel(tokens, "No matches", "No holding matches that filter.")
-                : emptyPanel(
-                    tokens,
-                    "No stock positions",
-                    "This account currently reports no stock holdings.",
-                  ),
             )
-              // A definite height is what makes virtualization possible at all,
-              // and this page is a scrolling column with no leftover height to
-              // claim -- so it takes the leftover height of a page that no
-              // longer scrolls, rather than being sized from a row count and
-              // letting the page scroll past it.
+            .when(allocation.slices.length > 0 || allocation.unpriced.length > 0, (element) =>
+              element.child(
+                panel(tokens)
+                  .flex_basis(0)
+                  .flex_grow(6)
+                  .min_w(380)
+                  .child(
+                    h_flex()
+                      .items_center()
+                      .justify_between()
+                      .h(CARD_HEADER_HEIGHT)
+                      .px(tokens.spacing.md)
+                      .child(
+                        h_flex()
+                          .items_baseline()
+                          .gap(tokens.spacing.xs)
+                          .child(label(tokens, "Asset allocation", 14).font_weight(700))
+                          .child(muted(tokens, "Market value in USD")),
+                      )
+                      // The control stays opposite the heading; only the words
+                      // that describe the card moved next to its name.
+                      .child(this.allocationHelp(tokens, allocation)),
+                  )
+                  .child(rule(tokens))
+                  .child(
+                    h_flex()
+                      .flex_wrap()
+                      .items_start()
+                      .gap(tokens.spacing.xl)
+                      .p(tokens.spacing.md)
+                      .child(
+                        v_flex()
+                          .flex_basis(360)
+                          .flex_grow(1)
+                          .child(allocationChart(tokens, allocation)),
+                      ),
+                  ),
+              ),
+            ),
+        )
+        .child(
+          panel(tokens)
+            .flex_1()
+            .min_h(0)
+            .child(
+              tableToolbar(tokens)
+                .flex_none()
+                // The count sits with the title, not across the row from it. It
+                // says how much of *this* is here, so it reads as part of the
+                // heading; opposite the filter it read as a second control.
+                .child(
+                  h_flex()
+                    .items_baseline()
+                    .gap(tokens.spacing.xs)
+                    .child(label(tokens, "Holdings", 14).font_weight(700))
+                    .child(
+                      muted(
+                        tokens,
+                        holdingRows.length === this.holdings.length
+                          ? `${this.holdings.length} positions`
+                          : `${holdingRows.length} of ${this.holdings.length} positions`,
+                      ),
+                    ),
+                )
+                .child(filterInput(tokens, this.holdingsFilter, 160)),
+            )
+            .child(rule(tokens))
+            .child(
+              this.instrumentTable(
+                tokens,
+                "holdings",
+                "Holdings",
+                holdingRows,
+                HOLDING_ROW_HEIGHT,
+                holdingsHeader(tokens),
+                (holding, index) => holdingRow(tokens, holding, index),
+                null,
+                this.holdingsQuery
+                  ? emptyPanel(tokens, "No matches", "No holding matches that filter.")
+                  : emptyPanel(
+                      tokens,
+                      "No stock positions",
+                      "This account currently reports no stock holdings.",
+                    ),
+              )
+                // A definite height is what makes virtualization possible at all,
+                // and this page is a scrolling column with no leftover height to
+                // claim -- so it takes the leftover height of a page that no
+                // longer scrolls, rather than being sized from a row count and
+                // letting the page scroll past it.
                 .flex_1()
                 .min_h(0),
-            )
-        );
+            ),
+        )
+    );
   }
 
   /**
@@ -2468,6 +2751,7 @@ export default class LongbridgeApp extends View {
     const device = this.authorization;
     const stored = this.hasStoredTokens;
     const needsAttention = stored && this.status.state === "error";
+    const status = statusColors(tokens);
 
     // The chrome carries the identity -- the header above this is showing the
     // mark, the name and the tagline, and the footer is already saying the
@@ -2476,6 +2760,20 @@ export default class LongbridgeApp extends View {
     return panel(tokens)
       .p(tokens.spacing.xl)
       .gap(tokens.spacing.lg)
+      .child(
+        div()
+          .relative()
+          .self_center()
+          .w(40)
+          .h(40)
+          .accessibility_label("Longbridge")
+          .child(
+            svg("assets/logo-foreground.svg").absolute().inset_0().text_color(tokens.foreground),
+          )
+          .child(svg("assets/logo-info-cyan.svg").absolute().inset_0().text_color(status.info))
+          .child(svg("assets/logo-warning.svg").absolute().inset_0().text_color(status.warning))
+          .child(svg("assets/logo-danger.svg").absolute().inset_0().text_color(status.down)),
+      )
       .child(
         device
           ? this.deviceCode(tokens, device)
@@ -2514,7 +2812,10 @@ export default class LongbridgeApp extends View {
               "longbridge-sign-in",
               device ? "Waiting for approval" : stored ? "Retry connection" : "Sign in",
               (_event, cx) => (stored ? this.resume(cx) : this.signIn(cx)),
-              { variant: stored ? "default" : "primary", disabled: Boolean(device) },
+              {
+                variant: stored ? "default" : "primary",
+                disabled: Boolean(device),
+              },
             ).w_full(),
           )
           .when(stored || Boolean(device), (element) =>
@@ -2524,10 +2825,23 @@ export default class LongbridgeApp extends View {
                 "longbridge-sign-out",
                 device ? "Cancel" : "Clear session",
                 (_event, cx) => this.signOut(cx),
-                { variant: "destructive", quiet: true },
+                { variant: device ? "ghost" : "destructive", quiet: true },
               ).w_full(),
             ),
           ),
+      )
+      .child(
+        Button.new("longbridge-home-link")
+          .role("link")
+          .accessibility_label("Open https://longbridge.com")
+          .on_click((_event, cx) => cx.open_url("https://longbridge.com"))
+          .self_center()
+          .border(0)
+          .bg(tokens.surface)
+          .text_size(11)
+          .text_color(tokens.muted_foreground)
+          .hover((style) => style.text_color(tokens.foreground))
+          .child("https://longbridge.com"),
       );
   }
 
@@ -2562,7 +2876,8 @@ export default class LongbridgeApp extends View {
               tokens,
               "copy-authorization-link",
               "Copy link",
-              (_event, cx) => this.copyAuthorization(device.verificationUri, "Authorization link", cx),
+              (_event, cx) =>
+                this.copyAuthorization(device.verificationUri, "Authorization link", cx),
               { variant: "ghost" },
             ).flex_1(),
           ),
@@ -2650,24 +2965,26 @@ export default class LongbridgeApp extends View {
     const hints = KEY_BINDINGS.filter(
       (binding) => SHORTCUT_CAPTIONS[binding.action] && available(binding.action),
     );
-    return h_flex()
-      .items_center()
-      // It wraps rather than truncating or scrolling: a hint that ran off the
-      // edge of a narrow window would be a hint nobody has.
-      .flex_wrap()
-      .gap(tokens.spacing.md)
-      .children(
-        hints.map((binding) =>
-          h_flex()
-            // The cap and its caption are one hint, so they do not wrap apart
-            // from each other.
-            .flex_none()
-            .items_center()
-            .gap(tokens.spacing.xs)
-            .child(kbd(tokens, chordLabel(binding.keystroke)))
-            .child(muted(tokens, SHORTCUT_CAPTIONS[binding.action])),
-        ),
-      );
+    return (
+      h_flex()
+        .items_center()
+        // It wraps rather than truncating or scrolling: a hint that ran off the
+        // edge of a narrow window would be a hint nobody has.
+        .flex_wrap()
+        .gap(tokens.spacing.md)
+        .children(
+          hints.map((binding) =>
+            h_flex()
+              // The cap and its caption are one hint, so they do not wrap apart
+              // from each other.
+              .flex_none()
+              .items_center()
+              .gap(tokens.spacing.xs)
+              .child(kbd(tokens, chordLabel(binding.keystroke)))
+              .child(muted(tokens, SHORTCUT_CAPTIONS[binding.action])),
+          ),
+        )
+    );
   }
 
   /** Whether Escape has something of this application's to put away. */
@@ -2704,25 +3021,29 @@ export default class LongbridgeApp extends View {
     if (window.is_fullscreen()) parts.push("fullscreen");
     else if (window.is_maximized()) parts.push("zoomed");
     if (this.isNarrow()) parts.push("narrow");
-    return h_flex()
-      .items_center()
-      .gap(tokens.spacing.sm)
-      .child(muted(tokens, parts.join(" · ")))
-      .when(Boolean(this.lastKeystroke), (element) =>
-        element.child(
-          // Displayed the way the rail displays a chord, because it is the same
-          // kind of thing said in the same kind of cap. A key the keymap does
-          // not bind still arrives here -- `backspace`, a bare letter -- and
-          // reads as its own name.
-          kbd(tokens, chordLabel(this.lastKeystroke), {
-            down: this.keyDown,
-            held: this.keyHeld,
-          }),
-        ),
-      )
-      // Not through `chordLabel`: this is a button, not a chord, and the
-      // formatter would read the hyphen as a modifier and say `Mouse + Left`.
-      .when(this.pointerDown, (element) => element.child(kbd(tokens, "Mouse left", { down: true })));
+    return (
+      h_flex()
+        .items_center()
+        .gap(tokens.spacing.sm)
+        .child(muted(tokens, parts.join(" · ")))
+        .when(Boolean(this.lastKeystroke), (element) =>
+          element.child(
+            // Displayed the way the rail displays a chord, because it is the same
+            // kind of thing said in the same kind of cap. A key the keymap does
+            // not bind still arrives here -- `backspace`, a bare letter -- and
+            // reads as its own name.
+            kbd(tokens, chordLabel(this.lastKeystroke), {
+              down: this.keyDown,
+              held: this.keyHeld,
+            }),
+          ),
+        )
+        // Not through `chordLabel`: this is a button, not a chord, and the
+        // formatter would read the hyphen as a modifier and say `Mouse + Left`.
+        .when(this.pointerDown, (element) =>
+          element.child(kbd(tokens, "Mouse left", { down: true })),
+        )
+    );
   }
 
   /**
@@ -2747,7 +3068,14 @@ export default class LongbridgeApp extends View {
         this.diagnosticsOpen = open;
         this.redraw(cx);
       })
-      .trigger(menuTrigger(tokens, "shell-diagnostics-trigger", "Window diagnostics", this.diagnosticsOpen))
+      .trigger(
+        menuTrigger(
+          tokens,
+          "shell-diagnostics-trigger",
+          "Window diagnostics",
+          this.diagnosticsOpen,
+        ),
+      )
       .content(
         popoverSurface(tokens, { width: 300 })
           .child(label(tokens, "Window", 13).font_weight(700))
@@ -2795,7 +3123,9 @@ export default class LongbridgeApp extends View {
                 // it, and a control that offers a size the interface never
                 // draws in is offering a size nothing was measured against.
                 [12, 14, 16].map((size) =>
-                  command(`shell-rem-${size}`, `${size}px`, () => window.set_rem_size(size)).flex_1(),
+                  command(`shell-rem-${size}`, `${size}px`, () =>
+                    window.set_rem_size(size),
+                  ).flex_1(),
                 ),
               ),
           )

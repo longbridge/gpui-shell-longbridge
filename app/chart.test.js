@@ -1,7 +1,10 @@
 import { View } from "gpui";
 import {
+  compactFiveDaySeries,
   findNearestPricePoint,
+  formatMarketDate,
   formatMarketTime,
+  layoutIntradaySeries,
   layoutPriceSeries,
   mergeLiveQuote,
   prepareFiveDaySeries,
@@ -24,6 +27,69 @@ const candle = (iso, close, tradeSession = 0) => ({
 });
 
 function runVectors() {
+  // A renderer that concatenates sessions, loses a boundary, or scales without
+  // the previous close must fail these geometry-facing intraday assertions.
+  const intradayGeometry = layoutIntradaySeries(
+    {
+      candles: [
+        { ...candle("2026-08-28T20:00:00Z", 101, 3), geometry: Object.freeze({ close: 101 }) },
+        { ...candle("2026-08-29T13:30:00Z", 102, 1), geometry: Object.freeze({ close: 102 }) },
+        { ...candle("2026-08-29T14:30:00Z", 103, 0), geometry: Object.freeze({ close: 103 }) },
+        { ...candle("2026-08-29T20:00:00Z", 104, 2), geometry: Object.freeze({ close: 104 }) },
+      ],
+      sessionBoundaries: [
+        { index: 0, tradeSession: 3 },
+        { index: 1, tradeSession: 1 },
+        { index: 2, tradeSession: 0 },
+        { index: 3, tradeSession: 2 },
+      ],
+      previousClose: "100",
+    },
+    { width: 300, height: 100 },
+  );
+  check(
+    intradayGeometry.sessionSegments.map((segment) => segment.tradeSession).join(",") === "3,1,0,2",
+    "intraday line geometry keeps a segment for every provider session",
+  );
+  check(
+    intradayGeometry.sessionBoundaries.map((boundary) => boundary.x).join(",") === "0,100,200,300",
+    "intraday session boundaries occupy their chronological plot positions",
+  );
+  check(
+    intradayGeometry.previousClose.price === 100 && intradayGeometry.previousClose.y === 100,
+    "intraday geometry includes a previous-close reference line in the shared range",
+  );
+  check(
+    intradayGeometry.points[0].x === 0 && intradayGeometry.points.at(-1).x === 300,
+    "intraday line spans the complete session timeline",
+  );
+
+  const continuousIntraday = layoutIntradaySeries(
+    {
+      candles: [
+        { ...candle("2026-08-28T20:00:00Z", 101, 3), geometry: Object.freeze({ close: 101 }) },
+        { ...candle("2026-08-28T20:01:00Z", 102, 3), geometry: Object.freeze({ close: 102 }) },
+        { ...candle("2026-08-29T13:30:00Z", 103, 1), geometry: Object.freeze({ close: 103 }) },
+        { ...candle("2026-08-29T13:31:00Z", 104, 1), geometry: Object.freeze({ close: 104 }) },
+        { ...candle("2026-08-29T14:30:00Z", 105, 0), geometry: Object.freeze({ close: 105 }) },
+        { ...candle("2026-08-29T14:31:00Z", 106, 0), geometry: Object.freeze({ close: 106 }) },
+      ],
+      sessionBoundaries: [
+        { index: 0, tradeSession: 3 },
+        { index: 2, tradeSession: 1 },
+        { index: 4, tradeSession: 0 },
+      ],
+    },
+    { width: 300, height: 100 },
+  );
+  const drawablePairs = continuousIntraday.sessionSegments.flatMap((segment) =>
+    segment.points.slice(1).map((point, index) => `${segment.points[index].close}-${point.close}`),
+  );
+  check(
+    drawablePairs.join(",") === "101-102,102-103,103-104,104-105,105-106",
+    "session segments include every adjacent chronological pair, including boundaries",
+  );
+
   const series = prepareFiveDaySeries("700.HK", [
     candle("2026-08-19T02:00:00Z", 3),
     candle("2026-08-17T02:00:00Z", 1),
@@ -59,6 +125,14 @@ function runVectors() {
   check(
     formatMarketTime("700.HK", Number(unix("2026-08-24T02:00:00Z"))) === "10:00",
     "formats an HK hover time in Hong Kong time",
+  );
+  check(
+    formatMarketTime("AAPL.US", Number(unix("2026-01-09T14:30:45Z")), true) === "09:30:45",
+    "can retain seconds for a market-local trade tape",
+  );
+  check(
+    formatMarketDate("AAPL.US", Number(unix("2026-03-09T02:30:00Z"))) === "2026-03-08",
+    "formats the exchange date rather than the UTC or browser-local date",
   );
   const usLaidOut = layoutPriceSeries(us, { width: 500, height: 100, dayGap: 10 });
   check(
@@ -177,8 +251,24 @@ function runVectors() {
   const many = Array.from({ length: 4000 }, (_, index) =>
     candle(new Date(Date.parse("2026-08-24T02:00:00Z") + index * 60_000).toISOString(), index + 1),
   );
-  const wide = layoutPriceSeries(prepareFiveDaySeries("700.HK", many), box);
+  const preparedMany = prepareFiveDaySeries("700.HK", many);
+  const wide = layoutPriceSeries(preparedMany, box);
   check(wide.min === 1 && wide.max === 4000, "extremes hold for a full day of minute candles");
+  const compact = compactFiveDaySeries(preparedMany, box);
+  check(
+    compact.points.length <= box.width,
+    "the retained 5D child stays within the visible horizontal pixel budget",
+  );
+  check(
+    compact.points[0].timestamp === preparedMany.points[0].timestamp &&
+      compact.points.at(-1).timestamp === preparedMany.points.at(-1).timestamp,
+    "compaction preserves the visible time range",
+  );
+  check(
+    Math.min(...compact.points.map((point) => point.close)) === 1 &&
+      Math.max(...compact.points.map((point) => point.close)) === 4000,
+    "compaction preserves the visible price extrema",
+  );
 
   // New York daylight saving is resolved per year and remembered; a series that
   // steps over New Year must not be dated with the previous year's boundaries.

@@ -186,7 +186,10 @@ fn non_omarchy_application_keeps_manual_theme_switching(cx: &mut TestAppContext)
     let main_path = fixture.root.join("main.js");
     let main = fs::read_to_string(&main_path)
         .expect("copied main.js")
-        .replace("const fallback = themes[window.appearance()];", "const fallback = themes.dark;")
+        .replace(
+            "const fallback = themes[window.appearance()];",
+            "const fallback = themes.dark;",
+        )
         .replace(
             "this.syncSystemTheme(cx);",
             "this.syncSystemTheme(cx);\n      window.dispatch_action(\"workspace::toggle-theme\");",
@@ -314,6 +317,36 @@ fn chart_vectors_run_against_this_application(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn chart_mode_vectors_run_against_this_application(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("chart_modes.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let _loaded = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+}
+
+#[gpui::test]
+fn candlestick_geometry_vectors_run_against_this_application(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("candlestick_chart.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let _loaded = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+}
+
+#[gpui::test]
+fn chart_mode_state_vectors_run_against_this_application(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("chart_modes_state.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let _loaded = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+}
+
+#[gpui::test]
 fn reconnect_invalidates_the_superseded_chart_request_before_stopping(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -338,6 +371,26 @@ fn market_state_vectors_run_against_this_application(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
     let fixture = ApplicationFixture::new("market.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let _loaded = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+}
+
+#[gpui::test]
+fn market_detail_vectors_run_against_this_application(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("market_detail.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let _loaded = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+}
+
+#[gpui::test]
+fn market_detail_state_vectors_run_against_this_application(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("market_detail_state.test.js");
     let window = cx.add_window(|_, _| Empty);
     let mut context = VisualTestContext::from_window(*window.deref(), cx);
     let _loaded = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
@@ -470,6 +523,33 @@ fn watchlist_row_renders_scannable_market_columns(cx: &mut TestAppContext) {
     assert!(!closed.contains(":selected[Bool(true)]"), "{closed}");
     assert!(open.contains(":selected[Bool(true)]"), "{open}");
 
+    let compact = rendered
+        .split_once(r#"Table "probe-watchlist-compact""#)
+        .map(|(_, compact)| compact)
+        .expect("compact watchlist table");
+    for expected in ["INSTRUMENT", "LAST", "AAPL.US", "Apple", "188.00", "+4.44%"] {
+        assert!(
+            compact.contains(expected),
+            "missing compact {expected}:\n{compact}"
+        );
+    }
+    for hidden in ["CHANGE", "VOLUME", "SESSION", "8.59B", "Trading", "Avatar"] {
+        assert!(
+            !compact.contains(hidden),
+            "compact row must hide {hidden}:\n{compact}"
+        );
+    }
+    assert!(
+        compact.contains(".truncate") && compact.contains(".min_w[Number(0.0)]"),
+        "compact lanes must shrink and truncate rather than overlap:\n{compact}"
+    );
+    assert!(
+        compact.contains(".w[Str(\"60%\")]")
+            && compact.contains(".w[Str(\"40%\")]")
+            && compact.contains(".h[Number(44.0)]"),
+        "the minimum Watchlist layout keeps symbol/name and last/change in two aligned stacked lanes:\n{compact}"
+    );
+
     // And focus must not paint like open. A Popover hands the keyboard back to
     // its trigger when it dismisses, so a focus style that fills the control
     // the way `open` does leaves a closed menu looking open.
@@ -508,28 +588,15 @@ fn authenticated_workspace_materializes_a_scrollable_watchlist(cx: &mut TestAppC
             .unwrap_or_default()
     });
 
-    // The panes are dock panels, so the description of this view is the area
-    // and its chrome handlers — nothing else. Everything the panes draw belongs
-    // to their own snapshots, which is the whole reason a drag or a collapse no
-    // longer needs this view to render at all.
-    let area = rendered
-        .lines()
-        .find(|line| line.contains("dock_area"))
-        .expect("workspace dock area");
-    // `:dock(fn)` is here because it has to be: gpui-shell replaces base's
-    // `render_dock` whether or not this application supplies chrome, and its
-    // default hands back the content with none of the box base wraps a dock in.
-    // Without a handler a side dock has no width, stops being a column and
-    // falls into the flow below the centre.
-    for handler in [":tab_bar(fn)", ":empty_group(fn)", ":drop_indicator(fn)", ":dock(fn)"] {
-        assert!(
-            area.contains(handler),
-            "the dock draws its own {handler}: {area}"
-        );
-    }
     assert!(
-        !rendered.contains("h_resizable"),
-        "the resizable workspace was replaced by the dock: {rendered}"
+        rendered.contains(r#":id[Str("watchlist-panels")]"#)
+            && rendered.contains(r#":id[Str("watchlist-pane")]"#)
+            && rendered.contains(r#":id[Str("quote-details-panel")]"#)
+            && rendered.contains(r#":id[Str("chart-panel")]"#)
+            && rendered.contains(r#":id[Str("market-detail-panel")]"#)
+            && rendered.contains("Tabs \"chart-mode-tabs\"")
+            && !rendered.contains("dock_area"),
+        "the responsive page must materialize four plain Panels in priority order: {rendered}"
     );
 }
 
@@ -613,7 +680,12 @@ fn retained_price_chart_owns_its_indicator_and_dated_tooltip(cx: &mut TestAppCon
         })
     };
     let initial = tree(&mut context);
-    assert!(initial.contains("5D intraday"), "{initial}");
+    assert!(!initial.contains("5D intraday"), "{initial}");
+    assert!(
+        initial.contains("Button \"probe-chart-mode-5D\" .flex_1 :selected[Bool(true)]"),
+        "the retained chart starts in its default 5D mode:\n{initial}"
+    );
+    assert!(initial.contains("price-chart-5D"), "{initial}");
     assert!(initial.contains(":on_mouse_move(fn)"), "{initial}");
     assert!(initial.contains(":on_hover(fn)"), "{initial}");
 
@@ -656,6 +728,81 @@ fn retained_price_chart_owns_its_indicator_and_dated_tooltip(cx: &mut TestAppCon
         initial.matches("path stroke").count(),
         "leaving the replaced child snapshot must remove its indicator:\n{left}"
     );
+
+    context.simulate_click(
+        gpui::point(gpui::px(400.), gpui::px(14.)),
+        gpui::Modifiers::default(),
+    );
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    context.simulate_mouse_move(
+        gpui::point(gpui::px(100.), gpui::px(100.)),
+        None,
+        gpui::Modifiers::default(),
+    );
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    let candles = tree(&mut context);
+    assert!(!candles.contains("1m candles"), "{candles}");
+    assert!(
+        candles.contains("O 100  H 104") && candles.contains("Volume 42"),
+        "{candles}"
+    );
+    assert!(candles.contains("price-chart-candles"), "{candles}");
+    assert!(
+        candles.contains("03-09 09:30") && candles.contains("03-09 09:31"),
+        "candlestick charts need market-local date/time references along the bottom axis:\n{candles}"
+    );
+    assert!(
+        candles.contains("2026-03-09 09:30"),
+        "candlestick tooltips need a full market-local date and time:\n{candles}"
+    );
+    assert!(
+        candles.contains("candlestick-axis-tick-")
+            && candles.contains(r#".left[Number(-40.0)]"#)
+            && candles.contains(r#".w[Number(80.0)]"#),
+        "candlestick labels must stay centred on their wick without overlapping in a narrow Right Dock:\n{candles}"
+    );
+
+    context.simulate_click(
+        gpui::point(gpui::px(75.), gpui::px(14.)),
+        gpui::Modifiers::default(),
+    );
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    let intraday = tree(&mut context);
+    assert!(intraday.contains("Intraday"), "{intraday}");
+    assert!(
+        intraday.contains("Overnight")
+            && intraday.contains("Pre-market")
+            && intraday.contains("Regular")
+            && intraday.contains("Post-market"),
+        "the full-session line names every provider-labelled session:\n{intraday}"
+    );
+    assert!(intraday.contains("Previous close 98.5"), "{intraday}");
+    assert!(
+        intraday.contains("intraday-current-marker"),
+        "the current price must remain visible even before the pointer enters the plot:\n{intraday}"
+    );
+    for (x, session) in [
+        (75., "Overnight"),
+        (220., "Pre-market"),
+        (350., "Regular"),
+        (460., "Post-market"),
+    ] {
+        context.simulate_mouse_move(
+            gpui::point(gpui::px(x), gpui::px(100.)),
+            None,
+            gpui::Modifiers::default(),
+        );
+        context.run_until_parked();
+        context.update(|window, cx| window.draw(cx).clear(cx));
+        let tooltip = tree(&mut context);
+        assert!(
+            tooltip.contains(&format!("Session {session}")),
+            "the Intraday tooltip must retain the provider session name {session}:\n{tooltip}"
+        );
+    }
 }
 
 #[gpui::test]
@@ -751,6 +898,48 @@ fn retained_price_chart_hover_rebuilds_the_child_without_the_parent(cx: &mut Tes
     assert!(
         tree.contains("Parent renders: 1"),
         "hover rebuilt the parent:\n{tree}"
+    );
+}
+
+#[gpui::test]
+fn a_large_candlestick_publication_does_not_overflow_nested_view_rollback(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("price_chart_large.test.js");
+    let fixture_root = fixture.root.clone();
+    let window = cx.add_window(move |window, cx| {
+        WorkspaceRoot(
+            runtime
+                .try_load(&fixture_root, window, cx)
+                .expect("load large price-chart probe"),
+        )
+    });
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    context.simulate_click(
+        gpui::point(gpui::px(160.), gpui::px(20.)),
+        gpui::Modifiers::default(),
+    );
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    let root = window.root(&mut context).expect("large-chart root");
+    let rendered = root.read_with(&context, |root, cx| {
+        root.0
+            .read(cx)
+            .content()
+            .clone()
+            .downcast::<gpui_shell::ScriptView>()
+            .expect("large-chart script view")
+            .read(cx)
+            .snapshot()
+            .map(gpui_shell::RenderSnapshot::debug_tree)
+            .unwrap_or_default()
+    });
+    assert!(
+        rendered.contains("Publish 12,000 candles · published")
+            && !rendered.contains("rollback limit"),
+        "publishing a full minute window must not cross the nested-view rollback limit:\n{rendered}"
     );
 }
 
@@ -1003,7 +1192,7 @@ impl gpui::Render for WorkspaceRoot {
 }
 
 #[gpui::test]
-fn stock_details_keep_the_chart_visible_beside_collapsible_metadata(cx: &mut TestAppContext) {
+fn stock_details_keep_the_chart_visible_without_collapsible_metadata(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     grant_app_capabilities();
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -1025,56 +1214,240 @@ fn stock_details_keep_the_chart_visible_beside_collapsible_metadata(cx: &mut Tes
             .unwrap_or_default()
     });
 
-    // Quote and About remain semantic accordion sections.
+    // Each reading is its own responsive panel. Quote is always expanded and
+    // the redundant subtitle is gone.
     assert!(
-        rendered.contains("Accordion \"stock-detail-sections\""),
+        rendered.contains("quote-details-panel")
+            && rendered.contains("chart-panel")
+            && rendered.contains("market-detail-panel"),
         "{rendered}"
     );
-    assert!(rendered.contains("AccordionHeader :aria_level[Number(3.0)]"), "{rendered}");
     assert!(
-        rendered.contains("AccordionTrigger \"detail-quote-trigger\" :on_change(fn)"),
-        "{rendered}"
+        !rendered.contains("detail-quote-trigger") && !rendered.contains("Real-time quote"),
+        "Quote Details must be permanently expanded without duplicated copy:\n{rendered}"
     );
+    assert!(!rendered.contains("Accordion"), "{rendered}");
 
     // The chart is permanent content, not a disclosure with a title row.
     assert!(!rendered.contains("detail-chart-trigger"), "{rendered}");
     assert!(!rendered.contains("text \"Price chart\""), "{rendered}");
     assert!(rendered.contains("price-chart-wheel"), "{rendered}");
     assert!(
-        rendered.contains("AccordionPanel :keep_mounted[Bool(false)]"),
-        "{rendered}"
+        !rendered.contains("chart-mode-selector"),
+        "the selector belongs to the Chart Panel TitleBar, not its content:\n{rendered}"
     );
+    assert!(!rendered.contains("About this instrument"), "{rendered}");
 
-    // The third section is shut, and says so on the item rather than on each
-    // half of it: the item owns `open` and passes it down.
-    assert!(rendered.contains("text \"About this instrument\""), "{rendered}");
+    // Date picking chrome is intentionally absent; the bottom axis and hover
+    // tooltip carry the chart's time references instead.
+    assert!(!rendered.contains("chart-calendar-surface"), "{rendered}");
     assert!(
-        rendered.contains("AccordionItem :open[Bool(false)]"),
-        "the shut section must carry its state on the item:\n{rendered}"
-    );
-
-    // The month grid, read off the retained CalendarState. August 2026 opens
-    // on a Saturday, so its first week is six days of July and the 1st.
-    assert!(
-        rendered.contains("Button \"calendar-day-2026-07-26\"")
-            && rendered.contains("Button \"calendar-day-2026-08-01\""),
-        "the grid must carry the neighbouring month's days:\n{rendered}"
-    );
-    assert!(
-        rendered.contains("Button \"calendar-day-2026-08-14\" :selected[Bool(true)]"),
-        "the chosen day must be the selected cell:\n{rendered}"
-    );
-
-    // The surface is the script's own, so it closes on a press outside; and
-    // the wheel over the chart drives a value rather than a scroll container.
-    assert!(rendered.contains(":on_mouse_down_out(fn)"), "{rendered}");
-    assert!(
-        rendered.contains("div :id[Str(\"price-chart-wheel\")] :on_scroll_wheel(fn)"),
+        rendered.contains("div :id[Str(\"price-chart-wheel\")]")
+            && rendered.contains(":on_scroll_wheel(fn)"),
         "{rendered}"
     );
 
     // The retained chart child is still a child, and still not rebuilt here.
     assert!(rendered.contains("child_view #"), "{rendered}");
+
+    // Market Detail owns the one tape/order-book scroll and follows Chart.
+    // These assertions are intentionally written before the panel exists: the
+    // fixture contains two levels and 21 trades, so a correct UI must reverse
+    // asks, retain the best prices beside the ratio, and cap the rendered
+    // tape at 20 rows.
+    assert!(rendered.contains("Order Book"), "{rendered}");
+    assert!(rendered.contains("Time & Sales"), "{rendered}");
+    assert!(
+        rendered.find("Order Book") > rendered.find("child_view #"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.find("Time & Sales") > rendered.find("Order Book"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("188.20") && rendered.contains("188.10"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("Bid 59%") && rendered.contains("Ask 41%"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("↑") && rendered.contains("↓") && rendered.contains("•"),
+        "{rendered}"
+    );
+    let first_trade = rendered
+        .split_once(r#"time-sales-row-1700000000|188.00|100|T|0|0"#)
+        .map(|(_, row)| row)
+        .expect("first time-and-sales row");
+    assert!(
+        first_trade.contains("• Neutral"),
+        "Longbridge direction 0 must be neutral:\n{first_trade}"
+    );
+    let down_trade = rendered
+        .split_once(r#"time-sales-row-1699999999|188.01|200|T|1|0"#)
+        .map(|(_, row)| row)
+        .expect("down time-and-sales row");
+    assert!(
+        down_trade.contains("↓ Down"),
+        "Longbridge direction 1 must be down:\n{down_trade}"
+    );
+    let up_trade = rendered
+        .split_once(r#"time-sales-row-1699999998|188.02|300|T|2|0"#)
+        .map(|(_, row)| row)
+        .expect("up time-and-sales row");
+    assert!(
+        up_trade.contains("↑ Up"),
+        "Longbridge direction 2 must be up:\n{up_trade}"
+    );
+    for trade in [first_trade, down_trade, up_trade] {
+        assert!(
+            trade.contains(".bg[") && trade.contains(".opacity[Number("),
+            "each textual direction must also have a semantic, intensity-scaled volume marker:\n{trade}"
+        );
+    }
+    assert!(
+        rendered.contains("17:13:20"),
+        "Time & Sales must show selected market-local time, not UTC/browser local time:\n{rendered}"
+    );
+    assert_eq!(
+        rendered.matches("time-sales-row-").count(),
+        20,
+        "{rendered}"
+    );
+    assert_eq!(
+        rendered.matches(":overflow_y_scrollbar").count(),
+        3,
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("order-book-ask-level-1")
+            && rendered.contains("order-book-bid-level-1")
+            && rendered.contains("time-sales-row-")
+            && rendered.contains(".truncate"),
+        "market-detail rows keep domain identities and shrink instead of overlapping:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("order-book-ask-slot") && !rendered.contains("order-book-bid-slot"),
+        "missing depth must not reserve placeholder rows:\n{rendered}"
+    );
+    let order_book = rendered
+        .split_once(r#":id[Str("order-book-panel")]"#)
+        .and_then(|(_, section)| {
+            section
+                .split_once(r#":id[Str("time-sales-panel")]"#)
+                .map(|(section, _)| section)
+        })
+        .expect("order-book section");
+    assert!(
+        !order_book.contains(".border[") && !order_book.contains(".rounded["),
+        "detail sections must use hairlines inside the one detail panel, not nested cards:\n{order_book}"
+    );
+}
+
+#[gpui::test]
+fn market_detail_panels_name_loading_empty_and_error_states(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("detail_ui_states.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let (_root, view) = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+    context.run_until_parked();
+    let draw_view = view.clone();
+    context.draw(
+        gpui::Point::default(),
+        gpui::size(gpui::px(360.), gpui::px(480.)),
+        move |_, _| draw_view.into_any_element(),
+    );
+    let rendered = context.update(|_, cx| {
+        view.read(cx)
+            .snapshot()
+            .map(gpui_shell::RenderSnapshot::debug_tree)
+            .unwrap_or_default()
+    });
+    for expected in [
+        "Loading live market data…",
+        "Depth entitlement unavailable",
+        "No recent trades",
+        "Trade feed unavailable",
+        "Loading",
+        "Empty",
+        "Error",
+        "2 trades",
+    ] {
+        assert!(
+            rendered.contains(expected),
+            "missing {expected}:\n{rendered}"
+        );
+    }
+    assert!(
+        !rendered.contains("No order book data")
+            && !rendered.contains("order-book-ask-level-1")
+            && !rendered.contains("order-book-bid-level-1"),
+        "a ready book without valid price/volume levels should collapse instead of drawing fake rows or explanatory filler:\n{rendered}"
+    );
+}
+
+#[gpui::test]
+fn sparse_order_book_keeps_best_levels_next_to_the_spread(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("detail_ui_sparse.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let (_root, view) = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+    context.run_until_parked();
+    let draw_view = view.clone();
+    context.draw(
+        gpui::Point::default(),
+        gpui::size(gpui::px(360.), gpui::px(300.)),
+        move |_, _| draw_view.into_any_element(),
+    );
+    let rendered = context.update(|_, cx| {
+        view.read(cx)
+            .snapshot()
+            .map(gpui_shell::RenderSnapshot::debug_tree)
+            .unwrap_or_default()
+    });
+
+    assert!(rendered.contains("order-book-ask-level-1"), "{rendered}");
+    assert!(rendered.contains("order-book-bid-level-1"), "{rendered}");
+    assert!(!rendered.contains("order-book-ask-slot"), "{rendered}");
+    for row in ["order-book-ask-level-1", "order-book-bid-level-1"] {
+        let row = rendered
+            .split_once(row)
+            .map(|(_, row)| row.split("h_flex :id").next().unwrap_or(row))
+            .expect("depth row");
+        for lane in [r#".w[Str("28%")]"#, r#".w[Str("36%")]"#] {
+            assert!(
+                row.contains(lane),
+                "Ask and Bid must share the same level/price/volume lanes:\n{row}"
+            );
+        }
+        assert!(row.contains(r#".h[Number(22.0)]"#), "{row}");
+    }
+    let divider = rendered
+        .split_once(r#"order-book-ratio-divider"#)
+        .and_then(|(_, divider)| {
+            divider
+                .split_once("order-book-bid-level-1")
+                .map(|(divider, _)| divider)
+        })
+        .expect("single ratio divider");
+    assert!(
+        divider.contains(r#".h[Number(22.0)]"#)
+            && divider.matches(r#".w[Str("28%")]"#).count() == 2
+            && divider.contains("Bid 46%")
+            && divider.contains("Ask 54%"),
+        "ratio labels and bar must share one symmetric compact row:\n{divider}"
+    );
+    assert!(
+        rendered.find("140.30") < rendered.find("Bid 46%")
+            && rendered.find("Bid 46%") < rendered.find("140.20"),
+        "Ask 1 must hug the divider above and Bid 1 below it:\n{rendered}"
+    );
 }
 
 #[gpui::test]
@@ -1251,7 +1624,8 @@ fn the_window_readout_follows_the_window_it_is_measuring(cx: &mut TestAppContext
 
     let narrow = redraw(&mut context, 700., "ctrl-alt-u");
     assert!(
-        narrow.contains("700\u{d7}800 \u{b7} 16px/rem \u{b7} light \u{b7} background \u{b7} narrow"),
+        narrow
+            .contains("700\u{d7}800 \u{b7} 16px/rem \u{b7} light \u{b7} background \u{b7} narrow"),
         "the readout must follow the window:\n{narrow}"
     );
 }
@@ -1296,7 +1670,7 @@ fn escape_puts_away_what_the_workspace_opened_and_then_carries_on(cx: &mut TestA
     };
 
     let opened = tree(&mut context);
-    assert!(opened.contains("chart-calendar-surface"), "{opened}");
+    assert!(!opened.contains("chart-calendar-surface"), "{opened}");
     // Every avatar in the application is a fallback: it knows no faces, and
     // the product mark is already in the header rather than in a circle.
     // `avatar_slots.test.js` is where the image slot is checked.
@@ -1388,7 +1762,14 @@ fn the_diagnostics_popover_answers_every_window_measurement(cx: &mut TestAppCont
     // legal from `render`, which is the half of the window API a script can
     // reach from there.
     for reading in [
-        "Viewport", "Bounds", "Rem size", "Line height", "Pointer", "Appearance", "Active", "State",
+        "Viewport",
+        "Bounds",
+        "Rem size",
+        "Line height",
+        "Pointer",
+        "Appearance",
+        "Active",
+        "State",
     ] {
         assert!(
             rendered.contains(&format!("text \"{reading}\"")),
@@ -1504,5 +1885,48 @@ fn an_avatar_draws_its_image_when_it_has_one_and_its_fallback_otherwise(cx: &mut
         "the image slot must carry the application-relative path:\n{rendered}"
     );
     assert!(rendered.contains("AvatarFallback"), "{rendered}");
-    assert!(rendered.contains("text \"LB\"") && rendered.contains("text \"US\""), "{rendered}");
+    assert!(
+        rendered.contains("text \"LB\"") && rendered.contains("text \"US\""),
+        "{rendered}"
+    );
+}
+
+#[gpui::test]
+fn title_bar_draws_the_themed_official_svg_mark(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    grant_app_capabilities();
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("title_bar_ui.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let (_root, view) = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+    context.run_until_parked();
+    let draw_view = view.clone();
+    context.draw(
+        gpui::Point::default(),
+        gpui::size(gpui::px(640.), gpui::px(48.)),
+        move |_, _| draw_view.into_any_element(),
+    );
+    let rendered = context.update(|_, cx| {
+        view.read(cx)
+            .snapshot()
+            .map(gpui_shell::RenderSnapshot::debug_tree)
+            .unwrap_or_default()
+    });
+
+    assert!(
+        [
+            ("assets/logo-foreground.svg", "#f4f7ff"),
+            ("assets/logo-info-cyan.svg", "#20d9ff"),
+            ("assets/logo-warning.svg", "#f5c76d"),
+            ("assets/logo-danger.svg", "#ff758f"),
+        ]
+        .iter()
+        .all(|(asset, color)| {
+            rendered.contains(&format!(
+                "svg \"{asset}\" .absolute .inset_0 .text_color[Str(\"{color}\")]"
+            ))
+        }) && !rendered.contains(".absolute .left[Number(1.0)]"),
+        "the title bar must layer the semantic official SVG marks rather than reconstructing bars:\n{rendered}"
+    );
 }

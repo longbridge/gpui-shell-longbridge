@@ -1,7 +1,23 @@
 import { View } from "gpui";
 import { holdContext } from "./context.js";
 import { v_flex } from "gpui-base";
-import { COMMAND, FRAME_TYPE, decodeFrame, encodeAuthRequest, encodeFrame } from "./protocol.js";
+import {
+  COMMAND,
+  FRAME_TYPE,
+  PERIOD,
+  SUB_TYPE,
+  TRADE_SESSION,
+  decodeFrame,
+  encodeAuthRequest,
+  encodeFrame,
+  encodeHistoryCandlestickDateRequest,
+  encodeIntradayRequest,
+  encodeSecurityRequest,
+  encodeSecurityCandlestickRequest,
+  encodeSecurityTradeRequest,
+  encodeSubscribeRequest,
+  encodeUnsubscribeRequest,
+} from "./protocol.js";
 import { createQuoteStream } from "./quote_stream.js";
 
 const bytes = (...values) => Uint8Array.from(values);
@@ -129,7 +145,12 @@ class MockWebSocket {
     if (
       packet.command === COMMAND.AUTH ||
       packet.command === COMMAND.SUBSCRIBE ||
+      packet.command === COMMAND.UNSUBSCRIBE ||
       packet.command === COMMAND.REALTIME_QUOTE ||
+      packet.command === COMMAND.DEPTH ||
+      packet.command === COMMAND.TRADES ||
+      packet.command === COMMAND.INTRADAY ||
+      packet.command === COMMAND.CANDLESTICKS ||
       packet.command === COMMAND.HISTORY_CANDLESTICKS ||
       packet.command === COMMAND.HEARTBEAT
     ) {
@@ -181,10 +202,97 @@ class MockWebSocket {
                   0x80,
                   0x80,
                   0x20,
-                )
-              : packet.command === COMMAND.HISTORY_CANDLESTICKS
-                ? bytes(0x0a, 0x07, 0x41, 0x41, 0x50, 0x4c, 0x2e, 0x55, 0x53)
-                : bytes(),
+                  )
+              : packet.command === COMMAND.DEPTH
+                ? bytes(
+                    0x0a,
+                    0x07,
+                    0x41,
+                    0x41,
+                    0x50,
+                    0x4c,
+                    0x2e,
+                    0x55,
+                    0x53,
+                    0x12,
+                    0x0e,
+                    0x08,
+                    0x01,
+                    0x12,
+                    0x06,
+                    0x31,
+                    0x39,
+                    0x30,
+                    0x2e,
+                    0x30,
+                    0x30,
+                    0x18,
+                    0x05,
+                    0x20,
+                    0x02,
+                  )
+                : packet.command === COMMAND.TRADES
+                  ? bytes(
+                      0x0a,
+                      0x07,
+                      0x41,
+                      0x41,
+                      0x50,
+                      0x4c,
+                      0x2e,
+                      0x55,
+                      0x53,
+                      0x12,
+                      0x12,
+                      0x0a,
+                      0x06,
+                      0x31,
+                      0x39,
+                      0x30,
+                      0x2e,
+                      0x32,
+                      0x35,
+                      0x10,
+                      0x03,
+                      0x18,
+                      0x2a,
+                      0x22,
+                      0x04,
+                      0x54,
+                      0x49,
+                      0x4d,
+                      0x45,
+                    )
+              : packet.command === COMMAND.INTRADAY
+                ? bytes(
+                    0x0a,
+                    0x07,
+                    0x41,
+                    0x41,
+                    0x50,
+                    0x4c,
+                    0x2e,
+                    0x55,
+                    0x53,
+                    0x12,
+                    0x0c,
+                    0x0a,
+                    0x06,
+                    0x31,
+                    0x38,
+                    0x39,
+                    0x2e,
+                    0x35,
+                    0x30,
+                    0x10,
+                    0x01,
+                    0x30,
+                    0x03,
+                  )
+                : packet.command === COMMAND.CANDLESTICKS ||
+                    packet.command === COMMAND.HISTORY_CANDLESTICKS
+                  ? bytes(0x0a, 0x07, 0x41, 0x41, 0x50, 0x4c, 0x2e, 0x55, 0x53)
+                  : bytes(),
         }),
       );
     }
@@ -226,6 +334,46 @@ class MockWebSocket {
         ),
       );
     }
+  }
+}
+
+class DetailEntitlementWebSocket extends MockWebSocket {
+  respond(packet, socket) {
+    // Auth/Quote subscription is write 2; a later Subscribe is the selected
+    // symbol's Depth/Trades subscription and has its own entitlement.
+    if (packet.command === COMMAND.SUBSCRIBE && socket.writes.length > 2) {
+      socket.deliver(
+        encodeFrame({
+          type: FRAME_TYPE.RESPONSE,
+          command: packet.command,
+          requestId: packet.requestId,
+          status: 7,
+          body: bytes(),
+        }),
+      );
+      return;
+    }
+    super.respond(packet, socket);
+  }
+}
+
+class DeferredDetailWebSocket extends MockWebSocket {
+  constructor() {
+    super();
+    this.pendingDetailResponses = [];
+  }
+
+  respond(packet, socket) {
+    if (packet.command === COMMAND.DEPTH || packet.command === COMMAND.TRADES) {
+      this.pendingDetailResponses.push({ packet, socket });
+      return;
+    }
+    super.respond(packet, socket);
+  }
+
+  releaseDetailResponses() {
+    const pending = this.pendingDetailResponses.splice(0);
+    for (const { packet, socket } of pending) super.respond(packet, socket);
   }
 }
 
@@ -305,16 +453,101 @@ async function runVectors() {
     symbol: "AAPL.US",
     startDate: "20260817",
     endDate: "20260826",
+    period: PERIOD.DAY,
+    tradeSession: TRADE_SESSION.ALL,
   });
   check(history.symbol === "AAPL.US", "history query returns decoded candlesticks");
   check(
     decodeFrame(first.writes[3]).command === COMMAND.HISTORY_CANDLESTICKS,
     "history query uses command 27",
   );
+  check(
+    sameBytes(
+      decodeFrame(first.writes[3]).body,
+      encodeHistoryCandlestickDateRequest({
+        symbol: "AAPL.US",
+        startDate: "20260817",
+        endDate: "20260826",
+        period: PERIOD.DAY,
+        tradeSession: TRADE_SESSION.ALL,
+      }),
+    ),
+    "history query retains its requested period and trade session",
+  );
+
+  const intraday = await stream.queryIntraday({
+    symbol: "AAPL.US",
+    tradeSession: TRADE_SESSION.ALL,
+  });
+  check(
+    intraday.symbol === "AAPL.US" &&
+      intraday.lines.length === 4 &&
+      intraday.lines.map((line) => line.tradeSession).join(",") === "0,1,2,3" &&
+      intraday.lines.every((line) => line.price === "189.50"),
+    "all-session intraday query annotates every canonical response at the stream boundary",
+  );
+  const intradaySessions = [
+    TRADE_SESSION.NORMAL,
+    TRADE_SESSION.PRE,
+    TRADE_SESSION.POST,
+    TRADE_SESSION.OVERNIGHT,
+  ];
+  check(
+    intradaySessions.every(
+      (tradeSession, index) =>
+        decodeFrame(first.writes[4 + index]).command === COMMAND.INTRADAY &&
+        sameBytes(
+          decodeFrame(first.writes[4 + index]).body,
+          encodeIntradayRequest({ symbol: "AAPL.US", tradeSession }),
+        ),
+    ),
+    "all-session intraday query issues one command-18 request for every canonical session",
+  );
+
+  const postMarket = await stream.queryIntraday({
+    symbol: "AAPL.US",
+    tradeSession: TRADE_SESSION.POST,
+  });
+  check(
+    postMarket.lines.length === 1 && postMarket.lines[0].tradeSession === TRADE_SESSION.POST,
+    "single-session intraday query annotates canonical lines at the stream boundary",
+  );
+  check(
+    decodeFrame(first.writes[8]).command === COMMAND.INTRADAY &&
+      sameBytes(
+        decodeFrame(first.writes[8]).body,
+        encodeIntradayRequest({ symbol: "AAPL.US", tradeSession: TRADE_SESSION.POST }),
+      ),
+    "single-session intraday query keeps its request correlated",
+  );
+
+  const currentCandles = await stream.queryCandlesticks({
+    symbol: "AAPL.US",
+    period: PERIOD.FIFTEEN_MINUTE,
+    count: 120,
+    tradeSession: TRADE_SESSION.ALL,
+  });
+  check(
+    currentCandles.symbol === "AAPL.US",
+    "current candle query returns its correlated response",
+  );
+  check(
+    decodeFrame(first.writes[9]).command === COMMAND.CANDLESTICKS &&
+      sameBytes(
+        decodeFrame(first.writes[9]).body,
+        encodeSecurityCandlestickRequest({
+          symbol: "AAPL.US",
+          period: PERIOD.FIFTEEN_MINUTE,
+          count: 120,
+          tradeSession: TRADE_SESSION.ALL,
+        }),
+      ),
+    "current candle query uses command 19 with period and session",
+  );
 
   timers.fireHeartbeat();
   await settle();
-  check(decodeFrame(first.writes[4]).command === COMMAND.HEARTBEAT, "heartbeat write");
+  check(decodeFrame(first.writes[10]).command === COMMAND.HEARTBEAT, "heartbeat write");
 
   first.disconnect();
   await settle();
@@ -336,6 +569,288 @@ async function runVectors() {
   await stream.stop();
   check(second.closed, "stop closes the active socket");
   check(statuses.at(-1).state === "stopped", "stop status");
+
+  const detailTransport = new MockWebSocket();
+  const detailTimers = new MockTimers();
+  const depths = [];
+  const trades = [];
+  const detailStream = createQuoteStream({
+    accessToken: "test-token",
+    getOtp: async () => "detail-otp",
+    symbols: ["AAPL.US"],
+    onDepth: (depth) => depths.push(depth),
+    onTrades: (payload) => trades.push(payload),
+    WebSocket: detailTransport,
+    timers: detailTimers,
+    retryInitialMs: 10,
+    retryMaxMs: 40,
+  });
+  await detailStream.start();
+  const detailFirst = detailTransport.sockets[0];
+  await detailStream.selectDetailSymbol("AAPL.US");
+  await settle();
+  check(
+    detailFirst.writes.length === 6,
+    "selecting a detail symbol subscribes and requests both detail snapshots",
+  );
+  check(
+    decodeFrame(detailFirst.writes[3]).command === COMMAND.SUBSCRIBE &&
+      sameBytes(
+        decodeFrame(detailFirst.writes[3]).body,
+        encodeSubscribeRequest({
+          symbols: ["AAPL.US"],
+          subTypes: [SUB_TYPE.DEPTH, SUB_TYPE.TRADE],
+          isFirstPush: true,
+        }),
+      ),
+    "detail selection subscribes depth and trades with an initial push",
+  );
+  check(
+    decodeFrame(detailFirst.writes[4]).command === COMMAND.DEPTH &&
+      sameBytes(decodeFrame(detailFirst.writes[4]).body, encodeSecurityRequest("AAPL.US")),
+    "detail selection requests the correlated depth snapshot",
+  );
+  check(
+    decodeFrame(detailFirst.writes[5]).command === COMMAND.TRADES &&
+      sameBytes(
+        decodeFrame(detailFirst.writes[5]).body,
+        encodeSecurityTradeRequest({ symbol: "AAPL.US", count: 20 }),
+      ),
+    "detail selection requests the correlated trade snapshot",
+  );
+
+  detailFirst.deliver(
+    encodeFrame({
+      type: FRAME_TYPE.PUSH,
+      command: COMMAND.PUSH_DEPTH,
+      body: bytes(
+        0x0a, 0x07, 0x41, 0x41, 0x50, 0x4c, 0x2e, 0x55, 0x53, 0x10, 0x01, 0x1a, 0x0e,
+        0x08, 0x01, 0x12, 0x06, 0x31, 0x39, 0x30, 0x2e, 0x35, 0x30, 0x18, 0x07, 0x20, 0x03,
+      ),
+    }),
+  );
+  detailFirst.deliver(
+    encodeFrame({
+      type: FRAME_TYPE.PUSH,
+      command: COMMAND.PUSH_TRADE,
+      body: bytes(
+        0x0a, 0x07, 0x41, 0x41, 0x50, 0x4c, 0x2e, 0x55, 0x53, 0x10, 0x01, 0x1a, 0x12,
+        0x0a, 0x06, 0x31, 0x39, 0x30, 0x2e, 0x35, 0x30, 0x10, 0x07, 0x18, 0x2b, 0x22, 0x04,
+        0x54, 0x49, 0x4d, 0x45,
+      ),
+    }),
+  );
+  await settle();
+  check(
+    depths.some((depth) => depth.symbol === "AAPL.US" && depth.asks[0]?.price === "190.50"),
+    "depth pushes reach the detail callback",
+  );
+  check(
+    trades.some((payload) => payload.symbol === "AAPL.US" && payload.trades[0]?.timestamp === 43n),
+    "trade pushes reach the detail callback",
+  );
+
+  const callbacksBeforeSelectionChange = { depths: depths.length, trades: trades.length };
+  await detailStream.selectDetailSymbol("MSFT.US");
+  await settle();
+  check(
+    decodeFrame(detailFirst.writes[6]).command === COMMAND.UNSUBSCRIBE &&
+      sameBytes(
+        decodeFrame(detailFirst.writes[6]).body,
+        encodeUnsubscribeRequest({
+          symbols: ["AAPL.US"],
+          subTypes: [SUB_TYPE.DEPTH, SUB_TYPE.TRADE],
+        }),
+      ),
+    "changing detail selection removes old depth and trade fields first",
+  );
+  check(
+    decodeFrame(detailFirst.writes[7]).command === COMMAND.SUBSCRIBE &&
+      sameBytes(
+        decodeFrame(detailFirst.writes[7]).body,
+        encodeSubscribeRequest({
+          symbols: ["MSFT.US"],
+          subTypes: [SUB_TYPE.DEPTH, SUB_TYPE.TRADE],
+          isFirstPush: true,
+        }),
+      ),
+    "changing detail selection subscribes the new symbol after unsubscribe",
+  );
+  check(
+    depths.length === callbacksBeforeSelectionChange.depths &&
+      trades.length === callbacksBeforeSelectionChange.trades,
+    "mismatched detail snapshots do not reach callbacks after a selection change",
+  );
+
+  detailFirst.deliver(
+    encodeFrame({
+      type: FRAME_TYPE.PUSH,
+      command: COMMAND.PUSH_DEPTH,
+      body: bytes(
+        0x0a, 0x07, 0x41, 0x41, 0x50, 0x4c, 0x2e, 0x55, 0x53, 0x10, 0x02, 0x1a, 0x0e,
+        0x08, 0x01, 0x12, 0x06, 0x31, 0x39, 0x31, 0x2e, 0x30, 0x30, 0x18, 0x09, 0x20, 0x04,
+      ),
+    }),
+  );
+  detailFirst.deliver(
+    encodeFrame({
+      type: FRAME_TYPE.PUSH,
+      command: COMMAND.PUSH_TRADE,
+      body: bytes(
+        0x0a, 0x07, 0x41, 0x41, 0x50, 0x4c, 0x2e, 0x55, 0x53, 0x10, 0x02, 0x1a, 0x12,
+        0x0a, 0x06, 0x31, 0x39, 0x31, 0x2e, 0x30, 0x30, 0x10, 0x09, 0x18, 0x2c, 0x22, 0x04,
+        0x54, 0x49, 0x4d, 0x45,
+      ),
+    }),
+  );
+  await settle();
+  check(
+    depths.length === callbacksBeforeSelectionChange.depths &&
+      trades.length === callbacksBeforeSelectionChange.trades,
+    "delayed pushes for the old detail symbol do not reach callbacks",
+  );
+
+  const callbacksBeforeReconnect = { depths: depths.length, trades: trades.length };
+  detailFirst.disconnect();
+  await settle();
+  detailTimers.fireReconnect();
+  await settle();
+  await settle();
+  await settle();
+  const detailSecond = detailTransport.sockets[1];
+  check(
+    detailSecond && detailSecond.writes.length === 6,
+    "reconnect restores the selected detail subscription and snapshots",
+  );
+  check(
+    decodeFrame(detailSecond.writes[3]).command === COMMAND.SUBSCRIBE &&
+      sameBytes(
+        decodeFrame(detailSecond.writes[3]).body,
+        encodeSubscribeRequest({
+          symbols: ["MSFT.US"],
+          subTypes: [SUB_TYPE.DEPTH, SUB_TYPE.TRADE],
+          isFirstPush: true,
+        }),
+      ) &&
+      decodeFrame(detailSecond.writes[4]).command === COMMAND.DEPTH &&
+      decodeFrame(detailSecond.writes[5]).command === COMMAND.TRADES,
+    "reconnect restores detail fields after quote setup then refreshes both snapshots",
+  );
+  check(
+    depths.length === callbacksBeforeReconnect.depths &&
+      trades.length === callbacksBeforeReconnect.trades,
+    "mismatched reconnect snapshots do not publish under the retained detail selection",
+  );
+  await detailStream.stop();
+
+  const entitlementTransport = new DetailEntitlementWebSocket();
+  const entitlementTimers = new MockTimers();
+  const entitlementStatuses = [];
+  const detailErrors = [];
+  const entitlementStream = createQuoteStream({
+    accessToken: "test-token",
+    getOtp: async () => "entitlement-otp",
+    symbols: ["AAPL.US"],
+    onStatus: (status) => entitlementStatuses.push(status),
+    onDetailError: (detail) => detailErrors.push(detail),
+    WebSocket: entitlementTransport,
+    timers: entitlementTimers,
+    retryInitialMs: 10,
+    retryMaxMs: 40,
+  });
+  await entitlementStream.selectDetailSymbol("AAPL.US", 81);
+  await entitlementStream.start();
+  await settle();
+  check(
+    entitlementStatuses.filter((status) => status.state === "connected").length === 1,
+    "an initial detail entitlement failure leaves the Quote handshake connected",
+  );
+  check(
+    detailErrors.length === 1 && detailErrors[0].symbol === "AAPL.US" && detailErrors[0].generation === 81,
+    "an initial detail entitlement failure is reported locally with its selection generation",
+  );
+  entitlementTransport.sockets[0].disconnect();
+  await settle();
+  entitlementTimers.fireReconnect();
+  for (let index = 0; index < 4; index += 1) await settle();
+  check(
+    entitlementStatuses.filter((status) => status.state === "connected").length === 2,
+    "a reconnect detail entitlement failure leaves the restored Quote handshake connected",
+  );
+  check(
+    detailErrors.length === 2 && detailErrors[1].generation === 81,
+    "a reconnect detail entitlement failure remains local to the selected panels",
+  );
+  await entitlementStream.stop();
+
+  const barrierTransport = new DeferredDetailWebSocket();
+  const barrierTimers = new MockTimers();
+  const barrierDepths = [];
+  const barrierStream = createQuoteStream({
+    accessToken: "test-token",
+    getOtp: async () => "barrier-otp",
+    symbols: ["AAPL.US"],
+    onDepth: (depth, generation) => barrierDepths.push({ depth, generation }),
+    WebSocket: barrierTransport,
+    timers: barrierTimers,
+  });
+  await barrierStream.start();
+  const barrierSocket = barrierTransport.sockets[0];
+  void barrierStream.selectDetailSymbol("AAPL.US", 11);
+  await settle();
+  check(barrierTransport.pendingDetailResponses.length === 2, "first A snapshots are held");
+  barrierTransport.releaseDetailResponses();
+  await settle();
+  void barrierStream.selectDetailSymbol("MSFT.US", 12);
+  await settle();
+  check(barrierTransport.pendingDetailResponses.length === 2, "B snapshots are held");
+  barrierTransport.releaseDetailResponses();
+  await settle();
+  void barrierStream.selectDetailSymbol("AAPL.US", 13);
+  await settle();
+  check(
+    barrierTransport.pendingDetailResponses.length === 2,
+    "final A waits at its own snapshot barrier",
+  );
+  const beforeDelayedPush = barrierDepths.length;
+  barrierSocket.deliver(
+    encodeFrame({
+      type: FRAME_TYPE.PUSH,
+      command: COMMAND.PUSH_DEPTH,
+      body: bytes(
+        0x0a, 0x07, 0x41, 0x41, 0x50, 0x4c, 0x2e, 0x55, 0x53, 0x10, 0x02, 0x1a, 0x0e,
+        0x08, 0x01, 0x12, 0x06, 0x31, 0x39, 0x31, 0x2e, 0x30, 0x30, 0x18, 0x09, 0x20, 0x04,
+      ),
+    }),
+  );
+  await settle();
+  check(
+    barrierDepths.length === beforeDelayedPush,
+    "A pushes are dropped until final-A subscribe and snapshots form an ordered-socket barrier",
+  );
+  barrierTransport.releaseDetailResponses();
+  await settle();
+  check(
+    barrierDepths.at(-1)?.generation === 13,
+    "the final-A snapshot activates only its own generation",
+  );
+  const beforeFinalPush = barrierDepths.length;
+  barrierSocket.deliver(
+    encodeFrame({
+      type: FRAME_TYPE.PUSH,
+      command: COMMAND.PUSH_DEPTH,
+      body: bytes(
+        0x0a, 0x07, 0x41, 0x41, 0x50, 0x4c, 0x2e, 0x55, 0x53, 0x10, 0x03, 0x1a, 0x0e,
+        0x08, 0x01, 0x12, 0x06, 0x31, 0x39, 0x32, 0x2e, 0x30, 0x30, 0x18, 0x0a, 0x20, 0x05,
+      ),
+    }),
+  );
+  await settle();
+  check(
+    barrierDepths.length === beforeFinalPush + 1 && barrierDepths.at(-1)?.generation === 13,
+    "an A push after the final barrier is the final-A stream generation",
+  );
+  await barrierStream.stop();
 
   const retryTransport = new MockWebSocket();
   const retryTimers = new MockTimers();

@@ -26,8 +26,14 @@ export const COMMAND = Object.freeze({
   SUBSCRIBE: 6,
   UNSUBSCRIBE: 7,
   REALTIME_QUOTE: 11,
+  DEPTH: 14,
+  TRADES: 17,
+  INTRADAY: 18,
+  CANDLESTICKS: 19,
   HISTORY_CANDLESTICKS: 27,
   PUSH_QUOTE: 101,
+  PUSH_DEPTH: 102,
+  PUSH_TRADE: 104,
 });
 
 export const SUB_TYPE = Object.freeze({
@@ -35,6 +41,21 @@ export const SUB_TYPE = Object.freeze({
   DEPTH: 2,
   BROKERS: 3,
   TRADE: 4,
+});
+
+export const PERIOD = Object.freeze({
+  ONE_MINUTE: 1,
+  FIVE_MINUTE: 5,
+  FIFTEEN_MINUTE: 15,
+  DAY: 1000,
+});
+
+export const TRADE_SESSION = Object.freeze({
+  NORMAL: 0,
+  PRE: 1,
+  POST: 2,
+  OVERNIGHT: 3,
+  ALL: 100,
 });
 
 export class LongbridgeProtocolError extends Error {
@@ -62,6 +83,11 @@ function requireInteger(value, name, minimum, maximum) {
 
 function requireString(value, name) {
   if (typeof value !== "string") fail(`${name} must be a string`);
+  return value;
+}
+
+function requireEnum(value, name, values) {
+  if (!Object.values(values).includes(value)) fail(`${name} is not supported`);
   return value;
 }
 
@@ -399,6 +425,29 @@ export function encodeSubscribeRequest({
   return concat(parts);
 }
 
+/** Encodes quote.UnsubscribeRequest's compatible subscription fields for command 7. */
+export function encodeUnsubscribeRequest(options) {
+  return encodeSubscribeRequest({ ...options, isFirstPush: false });
+}
+
+/** Encodes quote.SecurityRequest, used by the depth command. */
+export function encodeSecurityRequest(symbol) {
+  return stringField(1, symbol, "symbol");
+}
+
+/** Encodes quote.SecurityTradeRequest for command 17. */
+export function encodeSecurityTradeRequest({ symbol, count }) {
+  return concat([
+    stringField(1, symbol, "symbol"),
+    varintField(
+      2,
+      BigInt(requireInteger(count, "count", -0x8000_0000, 0x7fff_ffff)),
+      "count",
+      true,
+    ),
+  ]);
+}
+
 /** Encodes quote.MultiSecurityRequest for real-time quote command 11. */
 export function encodeRealtimeQuoteRequest(symbols) {
   if (!Array.isArray(symbols)) fail("symbols must be an array");
@@ -412,19 +461,63 @@ function requireCompactDate(value, name) {
 }
 
 /**
- * Encodes quote.SecurityHistoryCandlestickRequest for a one-minute,
- * no-adjust, regular-session query by date (command 27).
+ * Encodes quote.SecurityIntradayRequest (command 18). The trade-session
+ * field is retained for newer Longbridge servers while a normal-session
+ * request remains wire-compatible with the one-field legacy request.
  */
-export function encodeHistoryCandlestickDateRequest({ symbol, startDate, endDate }) {
+export function encodeIntradayRequest({ symbol, tradeSession = TRADE_SESSION.NORMAL }) {
+  requireEnum(tradeSession, "tradeSession", TRADE_SESSION);
+  const parts = [stringField(1, symbol, "symbol")];
+  if (tradeSession !== TRADE_SESSION.NORMAL) {
+    parts.push(varintField(2, BigInt(tradeSession), "tradeSession"));
+  }
+  return concat(parts);
+}
+
+/** Encodes quote.SecurityCandlestickRequest for command 19. */
+export function encodeSecurityCandlestickRequest({
+  symbol,
+  period = PERIOD.ONE_MINUTE,
+  count = 120,
+  tradeSession = TRADE_SESSION.NORMAL,
+}) {
+  requireEnum(period, "period", PERIOD);
+  requireEnum(tradeSession, "tradeSession", TRADE_SESSION);
+  return concat([
+    stringField(1, symbol, "symbol"),
+    varintField(2, BigInt(period), "period"),
+    varintField(3, BigInt(requireInteger(count, "count", 1, 1000)), "count"),
+    ...(tradeSession === TRADE_SESSION.NORMAL
+      ? []
+      : [varintField(5, BigInt(tradeSession), "tradeSession")]),
+  ]);
+}
+
+/**
+ * Encodes quote.SecurityHistoryCandlestickRequest for a no-adjust query by
+ * date (command 27).
+ */
+export function encodeHistoryCandlestickDateRequest({
+  symbol,
+  startDate,
+  endDate,
+  period = PERIOD.ONE_MINUTE,
+  tradeSession = TRADE_SESSION.NORMAL,
+}) {
+  requireEnum(period, "period", PERIOD);
+  requireEnum(tradeSession, "tradeSession", TRADE_SESSION);
   const dateQuery = concat([
     stringField(1, requireCompactDate(startDate, "startDate"), "startDate"),
     stringField(2, requireCompactDate(endDate, "endDate"), "endDate"),
   ]);
   return concat([
     stringField(1, symbol, "symbol"),
-    varintField(2, 1n, "period"),
+    varintField(2, BigInt(period), "period"),
     varintField(4, 2n, "queryType"),
     bytesField(6, dateQuery),
+    ...(tradeSession === TRADE_SESSION.NORMAL
+      ? []
+      : [varintField(7, BigInt(tradeSession), "tradeSession")]),
   ]);
 }
 
@@ -508,6 +601,14 @@ function signed64(value) {
 function unsigned32(value, field) {
   if (value > 0xffff_ffffn) fail(`protobuf ${field} exceeds uint32`);
   return Number(value);
+}
+
+function signed32(value, field) {
+  const result = signed64(value);
+  if (result < -0x8000_0000n || result > 0x7fff_ffffn) {
+    fail(`protobuf ${field} exceeds int32`);
+  }
+  return Number(result);
 }
 
 function decodeMessage(data, readField) {
@@ -594,6 +695,106 @@ export function decodeSecurityQuoteResponse(data) {
   return quotes;
 }
 
+function decodeDepth(data) {
+  const depth = {};
+  decodeMessage(data, (reader, field, wireType) => {
+    if (field === 1) {
+      expectWireType(wireType, 0, field);
+      depth.position = signed32(reader.readVarint("depth position"), "depth position");
+    } else if (field === 2) {
+      expectWireType(wireType, 2, field);
+      depth.price = reader.readString("depth price");
+    } else if (field === 3 || field === 4) {
+      expectWireType(wireType, 0, field);
+      const name = field === 3 ? "volume" : "orderNum";
+      depth[name] = signed64(reader.readVarint(`depth ${name}`));
+    } else return false;
+    return true;
+  });
+  return depth;
+}
+
+function decodeSecurityDepth(data, push) {
+  const response = { asks: [], bids: [] };
+  decodeMessage(data, (reader, field, wireType) => {
+    if (field === 1) {
+      expectWireType(wireType, 2, field);
+      response.symbol = reader.readString("depth symbol");
+    } else if (push && field === 2) {
+      expectWireType(wireType, 0, field);
+      response.sequence = signed64(reader.readVarint("depth sequence"));
+    } else if (field === (push ? 3 : 2) || field === (push ? 4 : 3)) {
+      expectWireType(wireType, 2, field);
+      response[field === (push ? 3 : 2) ? "asks" : "bids"].push(
+        decodeDepth(reader.readBytes("depth level")),
+      );
+    } else return false;
+    return true;
+  });
+  return response;
+}
+
+/** Decodes quote.SecurityDepthResponse returned by command 14. */
+export function decodeSecurityDepthResponse(data) {
+  return decodeSecurityDepth(data, false);
+}
+
+/** Decodes quote.PushDepth delivered by push command 102. */
+export function decodePushDepth(data) {
+  return decodeSecurityDepth(data, true);
+}
+
+function decodeTrade(data) {
+  const trade = {};
+  decodeMessage(data, (reader, field, wireType) => {
+    if (field === 1 || field === 4) {
+      expectWireType(wireType, 2, field);
+      const name = field === 1 ? "price" : "tradeType";
+      trade[name] = reader.readString(`trade ${name}`);
+    } else if (field === 2 || field === 3) {
+      expectWireType(wireType, 0, field);
+      const name = field === 2 ? "volume" : "timestamp";
+      trade[name] = signed64(reader.readVarint(`trade ${name}`));
+    } else if (field === 5) {
+      expectWireType(wireType, 0, field);
+      trade.direction = signed32(reader.readVarint("trade direction"), "trade direction");
+    } else if (field === 6) {
+      expectWireType(wireType, 0, field);
+      trade.tradeSession = unsigned32(reader.readVarint("trade trade_session"), "trade_session");
+    } else return false;
+    return true;
+  });
+  return trade;
+}
+
+function decodeSecurityTrade(data, push) {
+  const response = { trades: [] };
+  decodeMessage(data, (reader, field, wireType) => {
+    if (field === 1) {
+      expectWireType(wireType, 2, field);
+      response.symbol = reader.readString("trade symbol");
+    } else if (push && field === 2) {
+      expectWireType(wireType, 0, field);
+      response.sequence = signed64(reader.readVarint("trade sequence"));
+    } else if (field === (push ? 3 : 2)) {
+      expectWireType(wireType, 2, field);
+      response.trades.push(decodeTrade(reader.readBytes("trade")));
+    } else return false;
+    return true;
+  });
+  return response;
+}
+
+/** Decodes quote.SecurityTradeResponse returned by command 17. */
+export function decodeSecurityTradeResponse(data) {
+  return decodeSecurityTrade(data, false);
+}
+
+/** Decodes quote.PushTrade delivered by push command 104. */
+export function decodePushTrade(data) {
+  return decodeSecurityTrade(data, true);
+}
+
 function decodeCandlestick(data) {
   const candlestick = { tradeSession: 0 };
   decodeMessage(data, (reader, field, wireType) => {
@@ -618,6 +819,39 @@ function decodeCandlestick(data) {
     return true;
   });
   return candlestick;
+}
+
+function decodeIntradayLine(data) {
+  const line = {};
+  decodeMessage(data, (reader, field, wireType) => {
+    if (field === 1 || field === 4 || field === 5) {
+      expectWireType(wireType, 2, field);
+      const names = { 1: "price", 4: "turnover", 5: "avgPrice" };
+      line[names[field]] = reader.readString(`intraday ${names[field]}`);
+    } else if (field === 2 || field === 3) {
+      expectWireType(wireType, 0, field);
+      const name = field === 2 ? "timestamp" : "volume";
+      line[name] = signed64(reader.readVarint(`intraday ${name}`));
+    } else return false;
+    return true;
+  });
+  return line;
+}
+
+/** Decodes quote.SecurityIntradayResponse returned by command 18. */
+export function decodeSecurityIntradayResponse(data) {
+  const response = { lines: [] };
+  decodeMessage(data, (reader, field, wireType) => {
+    if (field === 1) {
+      expectWireType(wireType, 2, field);
+      response.symbol = reader.readString("intraday response symbol");
+    } else if (field === 2) {
+      expectWireType(wireType, 2, field);
+      response.lines.push(decodeIntradayLine(reader.readBytes("intraday line")));
+    } else return false;
+    return true;
+  });
+  return response;
 }
 
 /** Decodes quote.SecurityCandlestickResponse returned by commands 19 and 27. */
