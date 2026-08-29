@@ -129,7 +129,7 @@ Scrollbars and other behavior primitives read the palette projected into
 The application talks directly to [Longbridge OpenAPI](https://open.longbridge.com/):
 
 1. OAuth device authorization obtains and durably stores rotating tokens.
-2. Authenticated HTTP loads Watchlist, account, and holdings snapshots.
+2. Authenticated HTTP loads Watchlist, account, holdings, and order snapshots.
 3. A WebSocket session authenticates with an OTP, subscribes to quote pushes,
    and requests the initial quote snapshot.
 4. Partial protobuf pushes are folded onto the snapshot using sequence and
@@ -152,10 +152,13 @@ process execution or trading mutation API is exposed to the JavaScript layer.
 | `app/protocol.js`     | Binary frame and protobuf codecs                           |
 | `app/quote_stream.js` | WebSocket lifecycle, heartbeat, snapshot and reconnect     |
 | `app/market.js`       | Pure Watchlist normalization, quote reduction and ordering |
+| `app/orders.js`       | Pure order normalization, statuses and history window      |
 | `app/ui.js`           | Theme-aware presentation components                        |
 
-Watchlist and Portfolio are intentionally read-only example surfaces. There are
-no symbol mutations, chart/order-book features, or order placement APIs.
+Watchlist, Portfolio and Orders are intentionally read-only example surfaces.
+Orders reads `/v1/trade/order/today` and `/v1/trade/order/history` and nothing
+else in the trade API: there are no symbol mutations and no way to submit,
+change or withdraw an order.
 
 ### Script surface under exercise
 
@@ -174,18 +177,18 @@ the binding solves, it is what solves it.
 | `on_scroll_wheel`                                            | A wheel over the price chart walks its window a day at a time                         |
 | `cx.stop_propagation` / `cx.propagate`                       | The copy stops at the pane; `escape` carries on when nothing is open                  |
 | `Avatar` + `AvatarImage` / `AvatarFallback`                  | The session menu's mark, and the Watchlist rows' market badges                        |
-| `Accordion` and its four parts, `aria_level`, `keep_mounted` | The three sections of the stock-detail pane                                           |
+| `Accordion` and its four parts, `aria_level`, `keep_mounted` | The readings Quote Details folds away until they are asked for                        |
 | `Pagination`, `pagination_items`                             | The Holdings panel, eight positions to a page                                         |
 | `CalendarState`                                              | The month behind the price chart's date picker                                        |
 | `window.viewport_size`                                       | Stacks the two panes in a short window, which a resizable group cannot do by wrapping |
 | Every other `Window` read and command                        | The diagnostics popover in the footer's right corner                                  |
 
-The keymap is eight chords. Linux uses `ctrl` for application commands; macOS
+The keymap is nine chords. Linux uses `ctrl` for application commands; macOS
 uses the corresponding `cmd` chords:
 
-| Chord                 | Action                                                             |
-| --------------------- | ------------------------------------------------------------------ |
-| `ctrl-1` / `ctrl-2`   | `workspace::watchlist` / `workspace::portfolio`                    |
+| Chord                            | Action                                                             |
+| -------------------------------- | ------------------------------------------------------------------ |
+| `ctrl-1` / `ctrl-2` / `ctrl-3`   | `workspace::watchlist` / `workspace::portfolio` / `workspace::orders` |
 | `ctrl-r`              | `workspace::reconnect`                                             |
 | `ctrl-t`              | `workspace::toggle-theme`                                          |
 | `ctrl-shift-f`        | `workspace::toggle-fullscreen`                                     |

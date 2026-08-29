@@ -397,6 +397,282 @@ fn market_detail_state_vectors_run_against_this_application(cx: &mut TestAppCont
 }
 
 #[gpui::test]
+fn orders_page_stacks_today_over_history_as_one_filtered_reading(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    grant_app_capabilities();
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("orders_ui.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let (_root, view) = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+    context.run_until_parked();
+    let draw_view = view.clone();
+    context.draw(
+        gpui::Point::default(),
+        gpui::size(gpui::px(1000.), gpui::px(760.)),
+        move |_, _| draw_view.into_any_element(),
+    );
+    let rendered = context.update(|_, cx| {
+        view.read(cx)
+            .snapshot()
+            .map(gpui_shell::RenderSnapshot::debug_tree)
+            .unwrap_or_default()
+    });
+
+    // Two panels, Today first: what is working now is the shorter list and the
+    // one read first, and the record underneath it is the one worth scrolling.
+    assert!(
+        rendered.contains(r#":id[Str("today-orders")]"#)
+            && rendered.contains(r#":id[Str("history-orders")]"#),
+        "{rendered}"
+    );
+    assert!(
+        rendered.find("Today Orders") < rendered.find("History Orders"),
+        "{rendered}"
+    );
+    // A filter each: the two lists answer different questions, and one box for
+    // the two of them hid the short list whenever the long one was narrowed.
+    assert_eq!(
+        rendered.matches("Input #").count(),
+        2,
+        "each list carries its own filter:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("text \"2 orders\"")
+            && rendered.contains("text \"2 orders · last 365 days\""),
+        "each table says how much of the account it is showing:\n{rendered}"
+    );
+
+    // Both lists are the virtualized table the rest of the application uses:
+    // the rows are built during layout for the range on screen, and the table
+    // announces the whole collection rather than the window onto it.
+    assert!(
+        rendered.contains("v_virtual_list \"today-orders-rows\" \u{00d7}2")
+            && rendered.contains("v_virtual_list \"history-orders-rows\" \u{00d7}2")
+            && rendered.contains(r#"Table "today-orders-table""#)
+            && rendered.contains(r#"Table "history-orders-table""#)
+            && rendered.matches(":row_count[Number(3.0)]").count() == 2,
+        "{rendered}"
+    );
+
+    // The Longbridge terminal's columns, folded in half: a desktop row has two
+    // lines where a TUI row has one, so each pair that is only ever read
+    // together shares a column instead of taking one of its own.
+    for column in [
+        "INSTRUMENT",
+        "SIDE",
+        "STATUS",
+        "FILLED",
+        "PRICE",
+        "SUBMITTED",
+    ] {
+        assert!(
+            rendered.contains(column),
+            "missing {column} column:\n{rendered}"
+        );
+    }
+
+    // What one row draws, read off the probe's directly-built table.
+    let filled = rendered
+        .split_once(r#"TableRow "order-884955210000""#)
+        .and_then(|(_, rows)| rows.split_once(r#"TableRow "order-884955209000""#))
+        .map(|(row, _)| row)
+        .unwrap_or_else(|| panic!("the filled order's row:\n{rendered}"));
+    for reading in [
+        "AAPL.US",
+        "Apple Inc.",
+        "Filled",
+        "LO",
+        "of 10",
+        "188.500",
+        "188.480",
+        // Market-local wall clock over the market's own calendar date, never
+        // UTC and never the reader's zone.
+        "17:13:20",
+        "2023-11-14",
+    ] {
+        assert!(filled.contains(reading), "missing {reading}:\n{filled}");
+    }
+
+    // A market order named no price, and zero is not one.
+    let working = rendered
+        .split_once(r#"TableRow "order-884955210001""#)
+        .and_then(|(_, rows)| rows.split_once(r#"TableRow "order-884955210000""#))
+        .map(|(row, _)| row)
+        .unwrap_or_else(|| panic!("the working order's row:\n{rendered}"));
+    assert!(
+        working.contains("MO")
+            && working.contains("Working at the exchange")
+            && working.contains("text \"--\""),
+        "an order with no price shows none:\n{working}"
+    );
+
+    // Rows are keyed by order, not by instrument: an account holds several
+    // orders on one symbol, and an instrument key would collapse them.
+    for order in [
+        "order-884955210000",
+        "order-884955210001",
+        "order-884955209000",
+        "order-884955209001",
+    ] {
+        assert!(
+            rendered.contains(&format!("TableRow \"{order}\"")),
+            "missing row {order}:\n{rendered}"
+        );
+    }
+    assert!(
+        rendered.contains("Rejected")
+            && rendered.contains("Insufficient buying power")
+            && rendered.contains("Cancelled"),
+        "an order that never filled says why:\n{rendered}"
+    );
+
+    // A click on a row is answered beside the lists: one order in full, with
+    // the way out of it and the way through to its instrument.
+    assert!(
+        rendered.contains(
+            r#":id[Str("orders-page-split")] .flex_1 .min_h[Number(0.0)] .items_stretch"#
+        ) && rendered.contains(r#":id[Str("order-detail-panel")]"#)
+            && rendered.contains(r#":id[Str("order-detail-884955210000")]"#),
+        "the selected order opens a sheet on the right:\n{rendered}"
+    );
+    // Quiet icon controls rather than captioned buttons: a panel title row has
+    // room for the mark and not for the word.
+    assert!(
+        rendered.contains(r#"Button "order-detail-close""#)
+            && rendered.contains(r#"Button "order-detail-quote""#)
+            && rendered.contains(r#"svg "assets/x.svg" .w[Number(11.0)]"#)
+            && rendered.contains(r#"svg "assets/chart-line.svg" .w[Number(11.0)]"#)
+            && rendered.contains(r#".w[Number(20.0)] .h[Number(20.0)]"#),
+        "the sheet carries its own way out, and the way through to the quote:\n{rendered}"
+    );
+    assert!(
+        rendered.contains(r#":tooltip[Str("Close order detail")]"#)
+            && rendered.contains(r#":accessibility_label[Str("Open this instrument")]"#),
+        "an icon control says what it does in its tooltip and its label:\n{rendered}"
+    );
+    let sheet = rendered
+        .split_once(r#":id[Str("order-detail-884955210000")]"#)
+        .and_then(|(_, section)| {
+            section
+                .split_once(r#"Table "probe-orders""#)
+                .map(|(section, _)| section)
+        })
+        .unwrap_or_else(|| panic!("the open sheet:\n{rendered}"));
+    for reading in [
+        "ORDER",
+        "EXECUTION",
+        "TIMING",
+        "Time in force",
+        "Filled price",
+        "188.480 USD",
+        "Last done",
+        "2023-11-14 17:13:20",
+        "Order ID",
+        "884955210000",
+        "desk ticket",
+    ] {
+        assert!(sheet.contains(reading), "missing {reading}:\n{sheet}");
+    }
+    // A row whose value the API never sent is left out, rather than drawn as a
+    // dash: a sheet of dashes reads as missing data, when what is true is that
+    // this order has no trigger and was never amended.
+    assert!(
+        sheet.contains("Updated") && sheet.contains("2023-11-14 17:13:50"),
+        "an order that was amended says when:\n{sheet}"
+    );
+    assert!(
+        !sheet.contains("Trigger price") && !sheet.contains("Outside RTH"),
+        "the sheet states what the order has, not what it lacks:\n{sheet}"
+    );
+}
+
+#[gpui::test]
+fn an_empty_today_gives_its_height_back_to_the_history(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    grant_app_capabilities();
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("orders_empty_ui.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let (_root, view) = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+    context.run_until_parked();
+    let draw_view = view.clone();
+    context.draw(
+        gpui::Point::default(),
+        gpui::size(gpui::px(1000.), gpui::px(760.)),
+        move |_, _| draw_view.into_any_element(),
+    );
+    let rendered = context.update(|_, cx| {
+        view.read(cx)
+            .snapshot()
+            .map(gpui_shell::RenderSnapshot::debug_tree)
+            .unwrap_or_default()
+    });
+
+    let today = rendered
+        .split_once(r#":id[Str("today-orders")]"#)
+        .and_then(|(_, section)| {
+            section
+                .split_once(r#":id[Str("history-orders")]"#)
+                .map(|(section, _)| section)
+        })
+        .unwrap_or_else(|| panic!("the Today panel:\n{rendered}"));
+
+    // Most days there is nothing working, so an empty Today is the ordinary
+    // case: it keeps its heading and its filter, says one line, and claims no
+    // height for the rows it does not have.
+    assert!(
+        today.contains(".flex_none")
+            && !today.contains(".flex_grow[Number(2.0)]")
+            && !today.contains(".min_h[Number(160.0)]"),
+        "an empty Today must not reserve a table's height:\n{today}"
+    );
+    assert!(
+        today.contains(r#":id[Str("today-orders-state")]"#) && today.contains("No orders today."),
+        "{today}"
+    );
+    assert!(
+        !today.contains(r#"TableHeader "today-orders-header""#)
+            && !today.contains("v_virtual_list \"today-orders-rows\"")
+            && !today.contains("Nothing to show"),
+        "no column heads and no empty card over no rows:\n{today}"
+    );
+    assert!(
+        today.contains("Today Orders") && today.contains("0 orders") && today.contains("Input #"),
+        "the heading still carries the count and the filter:\n{today}"
+    );
+
+    // The list that does have rows is unchanged, and now has the page to
+    // itself.
+    let history = rendered
+        .split_once(r#":id[Str("history-orders")]"#)
+        .map(|(_, section)| section)
+        .expect("the History panel");
+    assert!(
+        history.contains(".flex_grow[Number(3.0)]")
+            && history.contains("v_virtual_list \"history-orders-rows\" \u{00d7}2")
+            && history.contains(r#"TableHeader "history-orders-header""#),
+        "{history}"
+    );
+    assert_eq!(
+        rendered.matches("Input #").count(),
+        2,
+        "both lists keep a filter of their own, empty or not:\n{rendered}"
+    );
+}
+
+#[gpui::test]
+fn order_vectors_run_against_this_application(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("orders.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let _loaded = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+}
+
+#[gpui::test]
 fn portfolio_vectors_run_against_this_application(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -442,13 +718,20 @@ fn watchlist_row_renders_scannable_market_columns(cx: &mut TestAppContext) {
         "+4.44%",
         "8.59B",
         "Trading",
-        // Field labels beside their values, which stay sentence case.
+        // Field labels beside their values, which stay sentence case. The
+        // last six are the folded half of the pane, drawn because the probe
+        // renders the disclosure open.
         "Previous close",
         "Open",
-        "Day range",
+        "High",
+        "Low",
         "Volume",
-        "Session",
         "Turnover",
+        "More detail",
+        "Day range",
+        "Amplitude",
+        "Average price",
+        "From open",
         "Last market update",
         "Data health",
         "181.00 — 190.25",
@@ -1192,7 +1475,7 @@ impl gpui::Render for WorkspaceRoot {
 }
 
 #[gpui::test]
-fn stock_details_keep_the_chart_visible_without_collapsible_metadata(cx: &mut TestAppContext) {
+fn stock_details_lead_with_the_price_and_fold_their_secondary_readings(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     grant_app_capabilities();
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -1226,7 +1509,76 @@ fn stock_details_keep_the_chart_visible_without_collapsible_metadata(cx: &mut Te
         !rendered.contains("detail-quote-trigger") && !rendered.contains("Real-time quote"),
         "Quote Details must be permanently expanded without duplicated copy:\n{rendered}"
     );
-    assert!(!rendered.contains("Accordion"), "{rendered}");
+
+    // The identity and the price are one row, and the price is the largest
+    // figure in the pane, set against its right edge.
+    let heading = rendered
+        .split_once(r#":id[Str("quote-detail-heading")]"#)
+        .and_then(|(_, section)| {
+            section
+                .split_once(r#":id[Str("quote-detail-stats")]"#)
+                .map(|(section, _)| section)
+        })
+        .expect("quote heading");
+    assert!(
+        heading.contains("Apple Inc.")
+            && heading.contains("US · AAPL.US · USD")
+            && heading.contains(".text_size[Number(22.0)]")
+            && heading.contains("+3.00 · +1.62%"),
+        "the quote heading carries the instrument and its price:\n{heading}"
+    );
+
+    // The session figures are a wrapping grid of label-over-value readings, so
+    // a 320px pane shows two columns of them and a wider one shows more.
+    let stats = rendered
+        .split_once(r#":id[Str("quote-detail-stats")]"#)
+        .and_then(|(_, section)| section.split_once("Accordion").map(|(section, _)| section))
+        .expect("quote stat grid");
+    assert!(
+        stats.contains(".flex_wrap") && stats.contains(".flex_basis[Number(104.0)]"),
+        "{stats}"
+    );
+    for reading in [
+        "Previous close",
+        "Open",
+        "High",
+        "Low",
+        "Volume",
+        "Turnover",
+    ] {
+        assert!(
+            stats.contains(reading),
+            "missing {reading} reading:\n{stats}"
+        );
+    }
+
+    // Everything a reader consults rather than watches is behind one
+    // disclosure, closed by default, and the pane never repeats a reading it
+    // already shows: the session is on the trigger row, not in the panel.
+    let more = rendered
+        .split_once(r#"AccordionTrigger "quote-detail-more-trigger""#)
+        .map(|(_, section)| section)
+        .expect("quote disclosure");
+    assert!(
+        rendered.contains("AccordionItem :open[Bool(false)]") && more.contains("More detail"),
+        "{rendered}"
+    );
+    for reading in [
+        "Day range",
+        "Amplitude",
+        "Average price",
+        "From open",
+        "Last market update",
+        "Data health",
+        "Stream sequence",
+    ] {
+        assert!(more.contains(reading), "missing {reading} reading:\n{more}");
+    }
+    assert_eq!(
+        rendered.matches("Trading").count(),
+        1,
+        "the session reads once, on the disclosure it summarizes:\n{rendered}"
+    );
 
     // The chart is permanent content, not a disclosure with a title row.
     assert!(!rendered.contains("detail-chart-trigger"), "{rendered}");
@@ -1316,9 +1668,12 @@ fn stock_details_keep_the_chart_visible_without_collapsible_metadata(cx: &mut Te
         20,
         "{rendered}"
     );
+    // Two scrolls, not three: the Chart and the tape each own theirs, and
+    // Quote Details owns none -- it is as tall as its readings, and the column
+    // holding the three panels is what scrolls past them.
     assert_eq!(
         rendered.matches(":overflow_y_scrollbar").count(),
-        3,
+        2,
         "{rendered}"
     );
     assert!(
@@ -1543,6 +1898,16 @@ fn a_bound_chord_reaches_the_action_that_switches_page(cx: &mut TestAppContext) 
     // reaches `on_key_down`, and arrives already unparsed as the whole chord —
     // spelled `cmd` on every platform, this one included.
     assert!(!after.contains("text \"ctrl-2\""), "{after}");
+
+    context.simulate_keystrokes("ctrl-3");
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    let orders = tree(&mut context);
+    assert!(
+        orders.contains("Today Orders") && orders.contains("History Orders"),
+        "ctrl-3 must reach `workspace::orders`:\n{orders}"
+    );
+
     context.simulate_keystrokes("ctrl-alt-y");
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));

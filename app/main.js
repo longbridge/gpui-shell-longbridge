@@ -49,6 +49,7 @@ import {
 } from "./chart_modes.js";
 import { PERIOD, TRADE_SESSION } from "./protocol.js";
 import { depthRatio, mergeTrades, normalizeDepth, validDepthLevel } from "./market_detail.js";
+import { HISTORY_WINDOW_DAYS, historyRange, normalizeOrders } from "./orders.js";
 import { allocationInUsd, normalizeUsdRates, portfolioPresentation } from "./portfolio.js";
 import PriceChartView, {
   PRICE_CHART_LAYOUT,
@@ -77,6 +78,11 @@ import {
   step,
   menuItem,
   menuTrigger,
+  iconAction,
+  ORDER_ROW_HEIGHT,
+  orderDetail,
+  orderRow,
+  ordersHeader,
   calendarGrid,
   muted,
   panel,
@@ -216,6 +222,7 @@ const TITLE_BAR_LEADING = MACOS ? 96 : 8;
 const PAGES = Object.freeze([
   { key: "watchlist", caption: "Watchlist" },
   { key: "portfolio", caption: "Portfolio" },
+  { key: "orders", caption: "Orders" },
 ]);
 
 /**
@@ -238,6 +245,9 @@ function motion(element, property) {
 const NARROW_VIEWPORT = 960;
 const COMPACT_WATCHLIST_WIDTH = 440;
 
+/** What the Orders filter narrows on: the instrument, and how an order went. */
+const ORDER_FILTER_FIELDS = Object.freeze(["symbol", "name", "statusLabel", "sideLabel"]);
+
 /** How many holdings one page of the Holdings panel shows. */
 
 /**
@@ -256,6 +266,7 @@ const PRIMARY_MODIFIER = MACOS ? "cmd" : "ctrl";
 export const KEY_BINDINGS = Object.freeze([
   { keystroke: `${PRIMARY_MODIFIER}-1`, action: "workspace::watchlist", context: "Workspace" },
   { keystroke: `${PRIMARY_MODIFIER}-2`, action: "workspace::portfolio", context: "Workspace" },
+  { keystroke: `${PRIMARY_MODIFIER}-3`, action: "workspace::orders", context: "Workspace" },
   { keystroke: `${PRIMARY_MODIFIER}-r`, action: "workspace::reconnect", context: "Workspace" },
   { keystroke: `${PRIMARY_MODIFIER}-t`, action: "workspace::toggle-theme", context: "Workspace" },
   {
@@ -320,6 +331,7 @@ export function chordLabel(keystroke) {
 const SHORTCUT_CAPTIONS = Object.freeze({
   "workspace::watchlist": "Watchlist",
   "workspace::portfolio": "Portfolio",
+  "workspace::orders": "Orders",
   "workspace::reconnect": "Reconnect",
   "workspace::toggle-theme": "Switch theme",
   "workspace::toggle-fullscreen": "Full screen",
@@ -438,6 +450,7 @@ export default class LongbridgeApp extends View {
     this.fxRates = new Map([["USD", 1]]);
     /** @type {LongbridgeHoldingRow[]} */
     this.holdings = [];
+    this.initOrdersState();
     this.error = "";
     this.streamError = "";
     this.stream = null;
@@ -937,7 +950,10 @@ export default class LongbridgeApp extends View {
   initInteractionState() {
     this.userMenuOpen = false;
     this.allocationHelpOpen = false;
+    this.todayOrdersQuery = "";
+    this.historyOrdersQuery = "";
     /** Which stock-detail sections are expanded. */
+    this.detailSections = { more: false };
     this.watchlistQuery = "";
     this.holdingsQuery = "";
     this.watchlistFilter = InputState.new({ placeholder: "Filter watchlist" });
@@ -948,6 +964,21 @@ export default class LongbridgeApp extends View {
     this.holdingsFilter = InputState.new({ placeholder: "Filter holdings" });
     this.holdingsFilter.on("change", (_event, cx) => {
       this.holdingsQuery = this.holdingsFilter.value();
+      this.redraw(cx);
+    });
+    // A filter each, rather than one serving both. The two lists answer
+    // different questions -- what is working now, and what an account has done
+    // -- and a shared box made narrowing the long one hide the short one at
+    // the same time. It is also one `InputState` per `Input`: a single state
+    // drawn in two panels is one control rendered twice.
+    this.todayOrdersFilter = InputState.new({ placeholder: "Filter orders" });
+    this.todayOrdersFilter.on("change", (_event, cx) => {
+      this.todayOrdersQuery = this.todayOrdersFilter.value();
+      this.redraw(cx);
+    });
+    this.historyOrdersFilter = InputState.new({ placeholder: "Filter orders" });
+    this.historyOrdersFilter.on("change", (_event, cx) => {
+      this.historyOrdersQuery = this.historyOrdersFilter.value();
       this.redraw(cx);
     });
   }
@@ -998,6 +1029,10 @@ export default class LongbridgeApp extends View {
     this.status = { state: "restoring_token" };
     this.error = "";
     this.streamError = "";
+    // Orders are read rather than streamed, so a reconnect has to ask for them
+    // again -- but only where they are on screen, since the page asks for them
+    // itself on the way in.
+    if (this.page === "orders") this.loadOrders(cx);
     this.redraw(cx);
     cx.spawn(async (cx) => {
       try {
@@ -1309,6 +1344,88 @@ export default class LongbridgeApp extends View {
     this.redraw(cx);
   }
 
+  /**
+   * The orders the account has, and how the reading of them went.
+   *
+   * Held as one value rather than three fields because a panel draws all of
+   * it at once: a list that is loading, one that failed, and one that is
+   * simply empty are three different things to say and the status is what
+   * separates them. Bumping the generation invalidates whatever is in flight,
+   * which is what makes signing out safe while a read is outstanding.
+   */
+  initOrdersState() {
+    this.ordersGeneration = (this.ordersGeneration ?? 0) + 1;
+    /** @type {LongbridgeOrdersState} */
+    this.ordersState = { status: "idle", today: [], history: [], error: "" };
+    /** The order whose sheet the right-hand panel is showing, if any. */
+    this.selectedOrderId = null;
+  }
+
+  /** The order the detail panel is showing, or null once a reload drops it. */
+  selectedOrder() {
+    if (!this.selectedOrderId) return null;
+    return (
+      [...this.ordersState.today, ...this.ordersState.history].find(
+        (order) => order.orderId === this.selectedOrderId,
+      ) ?? null
+    );
+  }
+
+  /**
+   * Opens an order's sheet, or closes the one already open for it.
+   *
+   * A second click on the row that opened the panel closes it, so the row is
+   * the control for its own detail rather than something that can only ever
+   * open one.
+   *
+   * @param {string} orderId @param {import("gpui").Context} cx
+   */
+  selectOrder(orderId, cx) {
+    this.selectedOrderId = this.selectedOrderId === orderId ? null : orderId;
+    this.redraw(cx);
+  }
+
+  /**
+   * Reads both order lists, on the page that shows them.
+   *
+   * Orders are not streamed -- there is no push channel for them in the quote
+   * protocol -- so this is a read, and the page asks for it when it opens and
+   * when the session reconnects rather than on a timer nobody asked for.
+   *
+   * @param {import("gpui").Context} cx
+   */
+  loadOrders(cx) {
+    if (!this.hasStoredTokens) return;
+    const generation = (this.ordersGeneration ?? 0) + 1;
+    this.ordersGeneration = generation;
+    this.ordersState = { ...this.ordersState, status: "loading", error: "" };
+    this.redraw(cx);
+    cx.spawn(async (cx) => {
+      try {
+        const { today, history } = await this.refreshOrders();
+        if (generation !== this.ordersGeneration) return;
+        this.ordersState = { status: "ready", today, history, error: "" };
+      } catch (error) {
+        if (generation !== this.ordersGeneration) return;
+        this.ordersState = {
+          ...this.ordersState,
+          status: "error",
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+      this.redraw(cx);
+    });
+  }
+
+  async refreshOrders() {
+    // Sequential for the same reason the portfolio reads are: two requests
+    // that discover an expired access token together would rotate the refresh
+    // token twice.
+    const today = normalizeOrders(await get("/v1/trade/order/today"));
+    const history = normalizeOrders(await get("/v1/trade/order/history", historyRange()));
+    return { today, history };
+  }
+
   /** @param {import("gpui").Context} cx */
   loadPortfolio(cx) {
     cx.spawn(async (cx) => {
@@ -1390,6 +1507,7 @@ export default class LongbridgeApp extends View {
     this.account = null;
     this.fxRates = new Map([["USD", 1]]);
     this.holdings = [];
+    this.initOrdersState();
     this.status = { state: "offline" };
     this.streamError = "";
     this.hasStoredTokens = false;
@@ -1423,6 +1541,7 @@ export default class LongbridgeApp extends View {
     return element
       .on_action("workspace::watchlist", (_event, cx) => this.showPage("watchlist", cx))
       .on_action("workspace::portfolio", (_event, cx) => this.showPage("portfolio", cx))
+      .on_action("workspace::orders", (_event, cx) => this.showPage("orders", cx))
       .on_action("workspace::reconnect", (_event, cx) => this.resume(cx))
       .when(!this.followsSystemTheme, (workspace) =>
         workspace.on_action("workspace::toggle-theme", (_event, cx) =>
@@ -1457,16 +1576,54 @@ export default class LongbridgeApp extends View {
       this.redraw(cx);
       return;
     }
-    const filter = this.page === "portfolio" ? this.holdingsFilter : this.watchlistFilter;
-    const query = this.page === "portfolio" ? this.holdingsQuery : this.watchlistQuery;
-    if (query) {
-      filter.set_value("");
-      if (this.page === "portfolio") this.holdingsQuery = "";
-      else this.watchlistQuery = "";
+    if (this.page === "orders" && this.selectedOrderId) {
+      this.selectedOrderId = null;
+      this.redraw(cx);
+      return;
+    }
+    const filter = this.pageFilter();
+    if (filter.query) {
+      filter.clear();
       this.redraw(cx);
       return;
     }
     cx.propagate();
+  }
+
+  /**
+   * The list filter belonging to the page on screen: the handle, what it
+   * currently holds, and how to empty the copy this view renders from.
+   */
+  pageFilter() {
+    if (this.page === "portfolio") {
+      return {
+        query: this.holdingsQuery,
+        clear: () => {
+          this.holdingsFilter.set_value("");
+          this.holdingsQuery = "";
+        },
+      };
+    }
+    if (this.page === "orders") {
+      // Both, because Escape puts away what the page is narrowed by and the
+      // page is narrowed by either of them.
+      return {
+        query: this.todayOrdersQuery || this.historyOrdersQuery,
+        clear: () => {
+          this.todayOrdersFilter.set_value("");
+          this.todayOrdersQuery = "";
+          this.historyOrdersFilter.set_value("");
+          this.historyOrdersQuery = "";
+        },
+      };
+    }
+    return {
+      query: this.watchlistQuery,
+      clear: () => {
+        this.watchlistFilter.set_value("");
+        this.watchlistQuery = "";
+      },
+    };
   }
 
   /** @param {LongbridgePage} page @param {import("gpui").Context} cx */
@@ -1474,6 +1631,7 @@ export default class LongbridgeApp extends View {
     if (this.page === page) return;
     this.page = page;
     if (page === "portfolio") this.loadPortfolio(cx);
+    if (page === "orders") this.loadOrders(cx);
     this.redraw(cx);
   }
 
@@ -1784,7 +1942,9 @@ export default class LongbridgeApp extends View {
     const page =
       this.page === "portfolio"
         ? this.portfolioPage(tokens).id("workspace-page")
-        : this.watchlistPage(tokens);
+        : this.page === "orders"
+          ? this.ordersPage(tokens).id("workspace-page")
+          : this.watchlistPage(tokens);
     return v_flex()
       .flex_1()
       .min_h(0)
@@ -1839,7 +1999,13 @@ export default class LongbridgeApp extends View {
   watchlistPage(tokens) {
     const { sideBySide } = responsivePanelWidths(window.viewport_size().width);
     const watchlist = workspacePanel(tokens, "Watchlist", this.watchlist(tokens));
-    const quote = workspacePanel(tokens, "Quote Details", this.quoteDetailsPanel(tokens));
+    // Quote Details is a fixed block of readings, so it takes its own height
+    // in both layouts and the column around it does the scrolling. Grown to
+    // fill a tall window it drew a band of empty panel under its last row;
+    // pinned to a stated height it clipped the disclosure when that opened.
+    const quote = workspacePanel(tokens, "Quote Details", this.quoteDetailsPanel(tokens), null, {
+      grow: false,
+    });
     const chart = workspacePanel(
       tokens,
       "Chart",
@@ -1847,7 +2013,6 @@ export default class LongbridgeApp extends View {
       this.chartModeTabs(tokens),
     );
     const market = workspacePanel(tokens, "Market Detail", this.marketDetailPanel(tokens));
-
     if (!sideBySide) {
       return v_flex()
         .id("watchlist-panels-stacked")
@@ -1856,8 +2021,8 @@ export default class LongbridgeApp extends View {
         .gap(WORKSPACE_PANEL_GAP)
         .overflow_y_scrollbar()
         .child(watchlist.h(440).flex_none())
-        .child(quote.h(250).flex_none())
-        .child(chart.h(290).flex_none())
+        .child(quote.flex_none())
+        .child(chart.h(320).flex_none())
         .child(market.h(360).flex_none());
     }
 
@@ -1878,9 +2043,9 @@ export default class LongbridgeApp extends View {
           .min_h(0)
           .gap(WORKSPACE_PANEL_GAP)
           .overflow_y_scrollbar()
-          .child(quote.flex_basis(180).flex_grow(1).min_h(160))
-          .child(chart.h(290).flex_none())
-          .child(market.flex_basis(220).flex_grow(1).min_h(180)),
+          .child(quote.flex_none())
+          .child(chart.flex_basis(290).flex_grow(1).min_h(290))
+          .child(market.flex_basis(240).flex_grow(1).min_h(200)),
       );
   }
 
@@ -1964,6 +2129,9 @@ export default class LongbridgeApp extends View {
    * @param {(row: any, index: number) => import("gpui").Element} renderRow
    * @param {((key: string, cx: import("gpui").Context) => void) | null} onSelect
    * @param {import("gpui").Element} empty
+   * @param {number} [columnCount]
+   * @param {(row: any, index: number) => string} [rowKey] The identity a row is
+   *   reported by, which is what `onSelect` is handed.
    */
   instrumentTable(
     tokens,
@@ -1976,6 +2144,7 @@ export default class LongbridgeApp extends View {
     onSelect,
     empty,
     columnCount = 5,
+    rowKey = (row, index) => String(row?.symbol ?? index),
   ) {
     const body = TableBody.new(`${id}-body`)
       .relative()
@@ -1994,7 +2163,7 @@ export default class LongbridgeApp extends View {
           // reorder under it — the watchlist by session, holdings by market
           // value — and a key taken from the index would move a click onto
           // whatever slid into that slot.
-          (index) => String(rows[index]?.symbol ?? index),
+          (index) => rowKey(rows[index], index),
           (range) =>
             rows
               .slice(range.start, range.end)
@@ -2256,17 +2425,22 @@ export default class LongbridgeApp extends View {
     return panel(tokens)
       .id("quote-details-panel")
       .border_t(0)
-      .flex_1()
+      .flex_none()
       .min_w(0)
-      .min_h(0)
       .bg(tokens.background)
       .child(
         quote
           ? v_flex()
-              .flex_1()
-              .min_h(0)
-              .overflow_y_scrollbar()
-              .child(quoteDetail(tokens, quote, this.lastTick, this.quotePulse ?? 1))
+              .flex_none()
+              .child(
+                quoteDetail(tokens, quote, this.lastTick, this.quotePulse ?? 1, {
+                  open: this.detailSections.more,
+                  onToggle: (open, cx) => {
+                    this.detailSections = { ...this.detailSections, more: open };
+                    this.redraw(cx);
+                  },
+                }),
+              )
           : emptyPanel(
               tokens,
               "Watchlist is empty",
@@ -2691,6 +2865,278 @@ export default class LongbridgeApp extends View {
   }
 
   /**
+   * Today's orders over the account's history, which is how the Longbridge
+   * terminal stacks them: what is working now is read first and is the shorter
+   * list, and the record underneath it is the one worth scrolling.
+   *
+   * One filter serves both. They are two windows onto the same collection --
+   * the same instruments, the same statuses -- and a filter per table would
+   * ask a reader to say "AAPL" twice to answer one question.
+   *
+   * @param {import("gpui-base").Theme} tokens
+   */
+  ordersPage(tokens) {
+    const state = this.ordersState;
+    const today = filterRows(state.today, this.todayOrdersQuery, ORDER_FILTER_FIELDS);
+    const history = filterRows(state.history, this.historyOrdersQuery, ORDER_FILTER_FIELDS);
+    const selected = this.selectedOrder();
+    // An account with nothing working is the ordinary case, not an error, and
+    // most days Today is empty: a panel that still reserved a table's height
+    // for it spent a third of the page saying so and took that height from the
+    // history underneath, which is the list actually being read. So a list
+    // with no rows to draw keeps its heading -- which is where the count and
+    // the filter live -- and gives everything below it back.
+    const todayPanel = this.ordersPanel(tokens, {
+      id: "today-orders",
+      title: "Today Orders",
+      rows: today,
+      total: state.today.length,
+      filter: this.todayOrdersFilter,
+      query: this.todayOrdersQuery,
+      empty: "No orders today.",
+    });
+    const historyPanel = this.ordersPanel(tokens, {
+      id: "history-orders",
+      title: "History Orders",
+      note: `last ${HISTORY_WINDOW_DAYS} days`,
+      rows: history,
+      total: state.history.length,
+      filter: this.historyOrdersFilter,
+      query: this.historyOrdersQuery,
+      empty: `No orders in the last ${HISTORY_WINDOW_DAYS} days.`,
+    });
+    const sheet = selected ? this.orderDetailPanel(tokens, selected) : null;
+    const todayCollapsed = this.ordersCollapsed(today);
+    const historyCollapsed = this.ordersCollapsed(history);
+
+    // A narrow window scrolls the panels at stated heights rather than sharing
+    // one height between them, which is what the stacked Watchlist does and
+    // for the same reason: three panels dividing a short window leaves each of
+    // them too short to read, and a sheet opening under them takes the height
+    // out of the lists that were being read.
+    if (this.isNarrow()) {
+      return v_flex()
+        .id("orders-page-stacked")
+        .flex_1()
+        .min_h(0)
+        .gap(tokens.spacing.md)
+        .overflow_y_scrollbar()
+        .child(todayCollapsed ? todayPanel.flex_none() : todayPanel.h(260).flex_none())
+        .child(historyCollapsed ? historyPanel.flex_none() : historyPanel.h(400).flex_none())
+        .when(Boolean(sheet), (element) => element.child(sheet.h(460).flex_none()));
+    }
+
+    const lists = v_flex()
+      .id("orders-lists")
+      .flex_1()
+      .min_h(0)
+      .min_w(0)
+      .gap(tokens.spacing.md)
+      .child(
+        todayCollapsed ? todayPanel.flex_none() : todayPanel.flex_basis(0).flex_grow(2).min_h(160),
+      )
+      .child(
+        historyCollapsed
+          ? historyPanel.flex_none()
+          : historyPanel.flex_basis(0).flex_grow(3).min_h(200),
+      );
+    if (!sheet) return lists;
+    // Beside the lists, where there is room for a column of its own.
+    return (
+      h_flex()
+        .id("orders-page-split")
+        .flex_1()
+        .min_h(0)
+        // `h_flex` centres its children, and a centred panel is one as tall as
+        // its own content: the lists collapsed to their headers and the sheet
+        // drew a title over nothing.
+        .items_stretch()
+        .gap(tokens.spacing.md)
+        .child(lists)
+        .child(sheet.w(320).flex_none())
+    );
+  }
+
+  /**
+   * The right-hand sheet: one order in full, with the way out of it.
+   *
+   * The close control is the panel's, not the row's -- a reader who opened
+   * this by clicking a row that has since scrolled away still has to be able
+   * to put it back. Escape does the same thing, which is what `dismiss` is
+   * for.
+   *
+   * @param {import("gpui-base").Theme} tokens
+   * @param {LongbridgeOrderRow} order
+   */
+  orderDetailPanel(tokens, order) {
+    const known = this.quotes.some((quote) => quote.symbol === order.symbol);
+    return panel(tokens)
+      .id("order-detail-panel")
+      .min_h(0)
+      .child(
+        h_flex()
+          .h(CARD_HEADER_HEIGHT)
+          .flex_none()
+          .items_center()
+          .justify_between()
+          .gap(tokens.spacing.sm)
+          .px(tokens.spacing.md)
+          .child(label(tokens, "Order", 14).font_weight(700))
+          .child(
+            h_flex()
+              .items_center()
+              .gap(tokens.spacing.xs)
+              .when(known, (element) =>
+                element.child(
+                  iconAction(
+                    tokens,
+                    "order-detail-quote",
+                    "Open this instrument",
+                    "assets/chart-line.svg",
+                    (_event, cx) => this.showOrderInstrument(order.orderId, cx),
+                  ),
+                ),
+              )
+              .child(
+                iconAction(
+                  tokens,
+                  "order-detail-close",
+                  "Close order detail",
+                  "assets/x.svg",
+                  (_event, cx) => {
+                    this.selectedOrderId = null;
+                    this.redraw(cx);
+                  },
+                ),
+              ),
+          ),
+      )
+      .child(rule(tokens))
+      .child(v_flex().flex_1().min_h(0).overflow_y_scrollbar().child(orderDetail(tokens, order)));
+  }
+
+  /**
+   * One order table, with the state of the read written where the rows would
+   * be. A list that is loading, one that failed and one that is simply empty
+   * are three different things to say, and saying none of them would leave a
+   * failed request looking like an account that has never traded.
+   *
+   * @param {import("gpui-base").Theme} tokens
+   * @param {{
+   *   id: string,
+   *   title: string,
+   *   note?: string,
+   *   rows: readonly LongbridgeOrderRow[],
+   *   total: number,
+   *   filter: import("gpui-base").InputStateHandle,
+   *   query: string,
+   *   empty: string,
+   * }} options
+   */
+  ordersPanel(tokens, options) {
+    const { id, title, note = "", rows, total, filter, query, empty } = options;
+    const counted = total === 1 ? "1 order" : `${total} orders`;
+    const summary = query ? `${rows.length} of ${counted}` : counted;
+    return panel(tokens)
+      .id(id)
+      .flex_1()
+      .min_h(0)
+      .child(
+        tableToolbar(tokens)
+          .flex_none()
+          .child(
+            h_flex()
+              .items_baseline()
+              .gap(tokens.spacing.xs)
+              .child(label(tokens, title, 14).font_weight(700))
+              .child(muted(tokens, note ? `${summary} · ${note}` : summary)),
+          )
+          // Both lists carry one, because each narrows itself: they answer
+          // different questions, and one box for the two of them hid the short
+          // list every time the long one was narrowed.
+          .child(filterInput(tokens, filter, 160)),
+      )
+      .child(rule(tokens))
+      .child(
+        this.ordersCollapsed(rows)
+          ? // No column heads over no rows: what is left to say is one line,
+            // and the heading above it already says whose line it is.
+            h_flex()
+              .id(`${id}-state`)
+              .items_center()
+              .px(tokens.spacing.sm)
+              .py(tokens.spacing.sm)
+              .child(muted(tokens, this.ordersEmptyLine(query, empty)))
+          : this.instrumentTable(
+              tokens,
+              id,
+              title,
+              rows,
+              ORDER_ROW_HEIGHT,
+              ordersHeader(tokens, id),
+              (order, index) =>
+                orderRow(tokens, order, index, order.orderId === this.selectedOrderId),
+              (orderId, cx) => this.selectOrder(orderId, cx),
+              this.ordersEmpty(tokens, empty),
+              6,
+              (order, index) => String(order?.orderId ?? index),
+            )
+              .flex_1()
+              .min_h(0),
+      );
+  }
+
+  /**
+   * Whether a list has nothing to draw and should give its height back.
+   *
+   * Not while the read is in flight: a panel that shrank on the way to its
+   * rows and grew again when they arrived would move the list underneath it
+   * twice per page open.
+   *
+   * @param {readonly LongbridgeOrderRow[]} rows
+   */
+  ordersCollapsed(rows) {
+    return rows.length === 0 && this.ordersState.status !== "loading";
+  }
+
+  /** The one line a collapsed list says instead of its rows. */
+  ordersEmptyLine(query, empty) {
+    if (this.ordersState.status === "error") return this.ordersState.error;
+    if (query) return "No order matches that filter.";
+    return empty;
+  }
+
+  /** @param {import("gpui-base").Theme} tokens @param {string} empty */
+  ordersEmpty(tokens, empty) {
+    const state = this.ordersState;
+    if (state.status === "loading") {
+      return emptyPanel(tokens, "Loading orders", "Reading this account's orders from Longbridge.");
+    }
+    if (state.status === "error") {
+      return emptyPanel(tokens, "Orders unavailable", state.error);
+    }
+    return emptyPanel(tokens, "Nothing to show", empty);
+  }
+
+  /**
+   * An order names an instrument, and the instrument is what the rest of the
+   * application is about -- so clicking one opens it, the way Return does in
+   * the terminal. Only when the Watchlist holds it: the detail panes are drawn
+   * from a streamed quote, and selecting a symbol that has none would leave
+   * them showing another instrument's readings under this one's name.
+   *
+   * @param {string} orderId @param {import("gpui").Context} cx
+   */
+  showOrderInstrument(orderId, cx) {
+    const order = [...this.ordersState.today, ...this.ordersState.history].find(
+      (row) => row.orderId === orderId,
+    );
+    if (!order || !this.quotes.some((quote) => quote.symbol === order.symbol)) return;
+    this.selectQuote(order.symbol, cx);
+    this.showPage("watchlist", cx);
+  }
+
+  /**
    * The second `Popover` in the application, and deliberately a different
    * shape from the Watchlist menu: a card of explanatory text rather than a
    * list of commands, so it announces itself as a group and not a menu.
@@ -2947,6 +3393,7 @@ export default class LongbridgeApp extends View {
       switch (action) {
         case "workspace::watchlist":
         case "workspace::portfolio":
+        case "workspace::orders":
         case "workspace::reconnect":
           return this.hasStoredTokens;
         case "workspace::toggle-theme":
@@ -2990,7 +3437,8 @@ export default class LongbridgeApp extends View {
   /** Whether Escape has something of this application's to put away. */
   hasSomethingToDismiss() {
     if (this.calendarOpen || this.userMenuOpen || this.allocationHelpOpen) return true;
-    return Boolean(this.page === "portfolio" ? this.holdingsQuery : this.watchlistQuery);
+    if (this.page === "orders" && this.selectedOrderId) return true;
+    return Boolean(this.pageFilter().query);
   }
 
   /**

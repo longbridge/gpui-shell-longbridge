@@ -1,7 +1,10 @@
 import { View } from "gpui";
 import {
+  amplitude,
   applyQuote,
   applyQuotes,
+  averagePrice,
+  changeFromOpen,
   formatCompactNumber,
   initialQuotes,
   mergeQuote,
@@ -337,6 +340,44 @@ function runVectors() {
       error: "authentication rejected",
     }) === "Retrying in 2s · authentication rejected",
     "reconnect reason stays visible",
+  );
+
+  const session = {
+    last: "188.00",
+    prevClose: "185.00",
+    open: "185.50",
+    high: "189.25",
+    low: "184.75",
+    volume: 1_000_000n,
+    turnover: "188000000",
+  };
+  check(amplitude(session) === "2.43%", "amplitude spans the day against the previous close");
+  check(
+    averagePrice(session) === "188.00",
+    "average price is turnover over volume at the last price's precision",
+  );
+  check(
+    changeFromOpen(session) === "+1.35%",
+    "movement since the open is signed and independent of the previous close",
+  );
+  check(
+    changeFromOpen({ ...session, last: "185.00" }) === "-0.27%",
+    "a fall from the open keeps its own sign",
+  );
+  const unpriced = initialQuotes([
+    { symbol: "AAPL.US", code: "AAPL", name: "Apple", market: "US" },
+  ]);
+  check(
+    amplitude(unpriced[0]) === "--" &&
+      averagePrice(unpriced[0]) === "--" &&
+      changeFromOpen(unpriced[0]) === "--",
+    "derived readings stay blank until the snapshot can support them",
+  );
+  check(
+    amplitude({ ...session, prevClose: "0" }) === "--" &&
+      averagePrice({ ...session, volume: 0n }) === "--" &&
+      changeFromOpen({ ...session, open: "0" }) === "--",
+    "derived readings never divide by zero",
   );
 }
 

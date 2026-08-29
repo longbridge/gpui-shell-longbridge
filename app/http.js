@@ -1,6 +1,7 @@
 // The Longbridge REST boundary. Only authenticated GET is exposed here: OAuth
 // owns the two necessary form POSTs in auth.js, and no order-writing method is
-// available from this module.
+// available from this module. The two trade paths below read an account's own
+// order history; nothing here can submit, change or withdraw one.
 
 import { context } from "./context.js";
 import { OPENAPI_BASE_URL, accessToken, refreshAccessToken } from "./auth.js";
@@ -19,6 +20,8 @@ const READ_ONLY_PATHS = new Set([
   "/v1/asset/exchange_rates",
   "/v1/asset/stock",
   "/v1/socket/token",
+  "/v1/trade/order/history",
+  "/v1/trade/order/today",
   "/v1/watchlist/groups",
 ]);
 

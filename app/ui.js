@@ -22,8 +22,15 @@ import {
   h_flex,
   v_flex,
 } from "gpui-base";
-import { formatCompactNumber, quoteFreshness, tradeStatusLabel } from "./market.js";
-import { formatMarketTime } from "./chart.js";
+import {
+  amplitude,
+  averagePrice,
+  changeFromOpen,
+  formatCompactNumber,
+  quoteFreshness,
+  tradeStatusLabel,
+} from "./market.js";
+import { formatMarketDate, formatMarketTime } from "./chart.js";
 import { validDepthLevel } from "./market_detail.js";
 import { tradeIdentity, tradeVolumeRatio } from "./market_detail.js";
 import { allocationColor, avatarColor, changeTone, statusColors, valueTone } from "./palette.js";
@@ -73,28 +80,33 @@ export const smallCaps = (tokens, value) =>
   muted(tokens, String(value).toUpperCase()).font_weight(700);
 
 /**
- * The box every 24px icon control in this file is drawn in, so that a toggle,
- * a menu trigger and a dock's collapse control are one family rather than
- * three sizes. The border is always drawn and only ever changes colour: a
- * control that grows a border on hover moves its neighbours.
+ * The box every icon control in this file is drawn in, so that a toggle, a
+ * menu trigger and a dock's collapse control are one family rather than three
+ * sizes. The border is always drawn and only ever changes colour: a control
+ * that grows a border on hover moves its neighbours.
+ *
+ * Two sizes: 24 for a control that stands on its own in window chrome, and 20
+ * for one sitting inside a panel's own title row, where a 24 crowds the
+ * heading beside it.
  *
  * @param {import("gpui-base").Theme} tokens
  * @template {import("gpui").Element} E
  * @param {E} element
+ * @param {number} [size]
  */
-const iconBox = (tokens, element) =>
+const iconBox = (tokens, element, size = 24) =>
   element
     .flex()
     .items_center()
     .justify_center()
-    .w(24)
-    .h(24)
+    .w(size)
+    .h(size)
     .flex_none()
     .rounded(tokens.radius.sm)
     .border(1);
 
-/** @param {string} asset */
-const icon = (asset) => svg(asset).w(12).h(12).flex_none();
+/** @param {string} asset @param {number} [size] */
+const icon = (asset, size = 12) => svg(asset).w(size).h(size).flex_none();
 
 /** @param {import("gpui-base").Theme} tokens */
 export const rule = (tokens) => div().w_full().h(1).bg(tokens.border);
@@ -184,6 +196,35 @@ export function action(tokens, id, caption, onClick, options = {}) {
  * @param {import("gpui-base").Theme} tokens
  * @param {(event: import("gpui").ClickEvent, cx: import("gpui").Context) => void} onClick
  */
+/**
+ * A quiet icon control: `action`'s ghost variant, one step smaller, with the
+ * caption moved into the tooltip and the accessibility label.
+ *
+ * Where a panel's title row carries its own controls there is room for the
+ * mark and not for the word: two 28px captioned buttons beside a heading read
+ * as the point of the panel rather than as the way out of it. The border is
+ * drawn in the panel's own fill so that lighting it on hover moves nothing.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {string} id
+ * @param {string} hint What the control does, for the tooltip and the label.
+ * @param {string} asset
+ * @param {(event: import("gpui").ClickEvent, cx: import("gpui").Context) => void} onClick
+ */
+export function iconAction(tokens, id, hint, asset, onClick) {
+  return iconBox(tokens, Button.new(id), 20)
+    .accessibility_label(hint)
+    .tooltip(hint)
+    .on_click(onClick)
+    .border_color(tokens.surface)
+    .bg(tokens.surface)
+    .text_color(tokens.muted_foreground)
+    .transition("opacity", MOTION)
+    .hover((style) => style.bg(tokens.accent).text_color(tokens.accent_foreground))
+    .focus((style) => style.bg(tokens.accent).text_color(tokens.accent_foreground))
+    .child(icon(asset, 11));
+}
+
 export function themeButton(tokens, onClick) {
   const dark = tokens.appearance === "dark";
   const hint = dark ? "Switch to light theme" : "Switch to dark theme";
@@ -293,6 +334,11 @@ const COLUMN_HINTS = Object.freeze({
   "Last / Cost": "Latest price over the average cost of the position",
   "Today's P/L": "Move since the previous close, in USD",
   "Total P/L": "Move against cost, in USD and percent",
+  Side: "Buy or sell, over the order type",
+  Status: "Where the order stands, over whatever the broker said about it",
+  Filled: "Shares executed, of the quantity ordered",
+  Price: "Price ordered, over the price it executed at",
+  Submitted: "When the order was placed, in the market's own time",
 });
 
 /**
@@ -902,59 +948,147 @@ function metricRows(tokens, entries) {
     );
 }
 
-/** @param {import("gpui-base").Theme} tokens @param {LongbridgeQuoteRow} quote @param {number} [now] */
-export function quoteDetail(tokens, quote, now = Date.now(), pulseOpacity = 1) {
+/**
+ * One reading: a muted field label above its figure.
+ *
+ * The basis is what makes the block responsive without a media query. At the
+ * 320px the detail pane is allowed to shrink to, two of these fit a row; a
+ * wider pane fits three or four, and the row rewraps rather than squeezing
+ * every figure into the same few pixels.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {{ title: string, value: string, tone?: string }} entry
+ */
+function statCell(tokens, entry) {
+  const figure = numeric(tokens, entry.value, 13).truncate();
+  return v_flex()
+    .min_w(0)
+    .flex_basis(104)
+    .flex_grow(1)
+    .gap(tokens.spacing.xxs)
+    .child(muted(tokens, entry.title).truncate())
+    .child(entry.tone ? figure.text_color(entry.tone) : figure);
+}
+
+/**
+ * The selected instrument, as one column: who it is and what it costs, then
+ * the readings that change during a session, then everything else behind a
+ * disclosure.
+ *
+ * The identity and the price share the first row rather than stacking in a
+ * cell of their own. They are the two halves of one sentence — this security,
+ * this price — and the widest thing on screen is the price, so it is set
+ * against the pane's right edge where a column of figures would be. What
+ * follows is a wrapping grid: the same readings whatever the pane's width,
+ * arranged by how much width there is.
+ *
+ * The disclosure is the pane's own state, passed in, because a section that
+ * remembered whether it was open would forget every time the quote ticked.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {LongbridgeQuoteRow} quote
+ * @param {number} [now]
+ * @param {number} [pulseOpacity]
+ * @param {{ open?: boolean, onToggle?: (open: boolean, cx: import("gpui").Context) => void }} [disclosure]
+ */
+export function quoteDetail(tokens, quote, now = Date.now(), pulseOpacity = 1, disclosure = {}) {
   const tone = changeTone(tokens, quote.change);
-  const cell = (content) =>
-    v_flex().min_w(0).flex_basis(130).flex_grow(1).gap(tokens.spacing.sm).child(content);
-  return h_flex()
+  const { open = false, onToggle = () => {} } = disclosure ?? {};
+  const dayRange =
+    quote.low === "--" || quote.high === "--" ? "--" : `${quote.low} — ${quote.high}`;
+  return v_flex()
     .id("quote-detail-content")
-    .flex_1()
-    .flex_wrap()
-    .items_stretch()
-    .p(tokens.spacing.sm)
-    .gap(tokens.spacing.sm)
+    .w_full()
+    .min_w(0)
     .child(
-      cell(
-        v_flex()
-          .gap(tokens.spacing.sm)
-          .child(label(tokens, quote.name, 16).font_weight(700))
-          .child(muted(tokens, `${quote.market} · ${quote.symbol} · ${quote.currency}`))
-          .child(
-            v_flex()
-              .id("quote-detail-price")
-              .gap(tokens.spacing.xs)
-              .opacity(quote.receivedAt ? pulseOpacity : 0.72)
-              .transition("opacity", MOTION)
-              .child(numeric(tokens, quote.last, 24))
-              .child(
-                numeric(tokens, `${quote.change} · ${quote.changePercent}`, 13).text_color(tone),
-              ),
-          ),
-      ),
+      h_flex()
+        .id("quote-detail-heading")
+        .items_start()
+        .justify_between()
+        .gap(tokens.spacing.md)
+        .px(tokens.spacing.sm)
+        .pt(tokens.spacing.sm)
+        .pb(tokens.spacing.xs)
+        .child(
+          v_flex()
+            .flex_1()
+            .min_w(0)
+            .gap(tokens.spacing.xxs)
+            .child(label(tokens, quote.name, 15).font_weight(700).truncate())
+            .child(
+              muted(tokens, `${quote.market} · ${quote.symbol} · ${quote.currency}`).truncate(),
+            ),
+        )
+        .child(
+          v_flex()
+            .id("quote-detail-price")
+            .flex_none()
+            .items_end()
+            .gap(tokens.spacing.xxs)
+            .opacity(quote.receivedAt ? pulseOpacity : 0.72)
+            .transition("opacity", MOTION)
+            .child(numeric(tokens, quote.last, 22))
+            .child(
+              numeric(tokens, `${quote.change} · ${quote.changePercent}`, 12).text_color(tone),
+            ),
+        ),
     )
+    .child(rule(tokens))
     .child(
-      cell(
-        metricRows(tokens, [
-          { title: "Previous close", value: quote.prevClose },
-          { title: "Open", value: quote.open },
-          {
-            title: "Day range",
-            value:
-              quote.low === "--" || quote.high === "--" ? "--" : `${quote.low} — ${quote.high}`,
-          },
-          { title: "Session", value: tradeStatusLabel(quote) },
-        ]),
-      ),
+      h_flex()
+        .id("quote-detail-stats")
+        .flex_wrap()
+        .items_start()
+        .px(tokens.spacing.sm)
+        .py(tokens.spacing.sm)
+        .gap_x(tokens.spacing.md)
+        .gap_y(tokens.spacing.sm)
+        .children(
+          [
+            { title: "Previous close", value: quote.prevClose },
+            { title: "Open", value: quote.open },
+            { title: "High", value: quote.high },
+            { title: "Low", value: quote.low },
+            { title: "Volume", value: formatCompactNumber(quote.volume) },
+            { title: "Turnover", value: formatCompactNumber(quote.turnover) },
+          ].map((entry) => statCell(tokens, entry)),
+        ),
     )
+    .child(rule(tokens))
     .child(
-      cell(
-        metricRows(tokens, [
-          { title: "Volume", value: formatCompactNumber(quote.volume) },
-          { title: "Turnover", value: formatCompactNumber(quote.turnover) },
-          { title: "Last market update", value: marketTime(quote.updatedAt) },
-          { title: "Data health", value: dataHealth(quote, now) },
-        ]),
+      accordionGroup("quote-detail-sections").child(
+        accordionSection(tokens, {
+          id: "quote-detail-more",
+          title: "More detail",
+          detail: tradeStatusLabel(quote, now),
+          level: 3,
+          open,
+          inset: tokens.spacing.sm,
+          onToggle,
+          body: h_flex()
+            .id("quote-detail-more-stats")
+            .flex_wrap()
+            .items_start()
+            .px(tokens.spacing.sm)
+            .py(tokens.spacing.sm)
+            .gap_x(tokens.spacing.md)
+            .gap_y(tokens.spacing.sm)
+            .children(
+              [
+                { title: "Day range", value: dayRange },
+                { title: "Amplitude", value: amplitude(quote) },
+                { title: "Average price", value: averagePrice(quote) },
+                {
+                  title: "From open",
+                  value: changeFromOpen(quote),
+                  tone: changeTone(tokens, changeFromOpen(quote)),
+                },
+                { title: "Last market update", value: marketTime(quote.updatedAt) },
+                { title: "Data health", value: dataHealth(quote, now) },
+                { title: "Stream sequence", value: String(quote.sequence ?? "--") },
+              ].map((entry) => statCell(tokens, entry)),
+            ),
+        }),
       ),
     );
 }
@@ -1245,6 +1379,273 @@ export function holdingRow(tokens, holding, rowIndex = 0) {
     );
 }
 
+const ORDER_COLUMNS = [
+  { title: "Instrument", size: (el) => el.w("25%") },
+  { title: "Side", size: (el) => el.w("12%") },
+  { title: "Status", size: (el) => el.w("19%") },
+  { title: "Filled", size: (el) => el.w("14%"), align: (el) => el.justify_end() },
+  { title: "Price", size: (el) => el.w("15%"), align: (el) => el.justify_end() },
+  { title: "Submitted", size: (el) => el.flex_1(), align: (el) => el.justify_end() },
+];
+
+/**
+ * The two order tables are one table twice, so the id is a parameter: a header
+ * that named itself would give Today and History the same cell identities.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {string} id
+ */
+export function ordersHeader(tokens, id) {
+  return tableHeaderRow(tokens, id, ORDER_COLUMNS);
+}
+
+/** The height Orders rows are drawn at. Two lines and a hairline, as Holdings. */
+export const ORDER_ROW_HEIGHT = 42;
+
+/**
+ * The colour an order's outcome is drawn in.
+ *
+ * A status is not a signed number, so it does not go through `valueTone`: it
+ * is filled, still working, refused, or over. Only the first two are readings
+ * a market colour belongs to; the rest stay in the interface's own foregrounds
+ * so a list of cancellations does not look like a list of losses.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {string} kind
+ */
+export function orderStatusTone(tokens, kind) {
+  const status = statusColors(tokens);
+  if (kind === "filled") return status.up;
+  if (kind === "working") return status.info;
+  if (kind === "rejected") return status.down;
+  return tokens.muted_foreground;
+}
+
+/**
+ * One order, as two lines per column: what was asked for over what happened.
+ *
+ * The columns are the Longbridge terminal's -- instrument, side, type, status,
+ * quantity, executed quantity, price and time -- folded in half. A desktop row
+ * has two lines where a TUI row has one, so each pair that is only ever read
+ * together shares a column instead of taking one of its own.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {LongbridgeOrderRow} order
+ * @param {number} rowIndex
+ * @param {boolean} [selected] Whether the detail panel is showing this order.
+ */
+export function orderRow(tokens, order, rowIndex = 0, selected = false) {
+  const status = statusColors(tokens);
+  const sideTone =
+    order.sideKind === "buy"
+      ? status.up
+      : order.sideKind === "sell"
+        ? status.down
+        : tokens.foreground;
+  const seconds = order.submittedAt > 0 ? Math.trunc(order.submittedAt / 1_000) : null;
+  const time = seconds === null ? "--" : formatMarketTime(order.symbol, seconds, true);
+  const day = seconds === null ? "" : formatMarketDate(order.symbol, seconds);
+  const cell = (column, build) => build(TableCell.new(`order-${order.orderId}-${column}`, column));
+  return interactiveTableRow(
+    tokens,
+    TableRow.new(`order-${order.orderId}`, rowIndex + 2)
+      .flex()
+      .items_center()
+      .w_full()
+      .h(ORDER_ROW_HEIGHT)
+      .gap(tokens.spacing.sm)
+      .px(tokens.spacing.sm)
+      .py(tokens.spacing.xs)
+      .border_b(1)
+      .border_color(tokens.border),
+    selected,
+  )
+    .child(
+      cell(1, (element) =>
+        element
+          .flex()
+          .flex_col()
+          .w("25%")
+          .min_w(0)
+          .gap(tokens.spacing.xxs)
+          .child(label(tokens, order.symbol).truncate())
+          .child(muted(tokens, order.name).truncate()),
+      ),
+    )
+    .child(
+      cell(2, (element) =>
+        element
+          .flex()
+          .flex_col()
+          .w("12%")
+          .min_w(0)
+          .gap(tokens.spacing.xxs)
+          .child(label(tokens, order.sideLabel).text_color(sideTone).truncate())
+          .child(muted(tokens, order.type).truncate()),
+      ),
+    )
+    .child(
+      cell(3, (element) =>
+        element
+          .flex()
+          .flex_col()
+          .w("19%")
+          .min_w(0)
+          .gap(tokens.spacing.xxs)
+          .child(
+            label(tokens, order.statusLabel)
+              .text_color(orderStatusTone(tokens, order.statusKind))
+              .truncate(),
+          )
+          .child(muted(tokens, order.message || order.remark || "").truncate()),
+      ),
+    )
+    .child(
+      cell(4, (element) =>
+        element
+          .flex()
+          .flex_col()
+          .w("14%")
+          .min_w(0)
+          .items_end()
+          .gap(tokens.spacing.xxs)
+          .child(numeric(tokens, order.executedQuantity).truncate())
+          .child(muted(tokens, `of ${order.quantity}`).truncate()),
+      ),
+    )
+    .child(
+      cell(5, (element) =>
+        element
+          .flex()
+          .flex_col()
+          .w("15%")
+          .min_w(0)
+          .items_end()
+          .gap(tokens.spacing.xxs)
+          .child(numeric(tokens, order.price).truncate())
+          .child(muted(tokens, order.executedPrice).truncate()),
+      ),
+    )
+    .child(
+      cell(6, (element) =>
+        element
+          .flex()
+          .flex_col()
+          .flex_1()
+          .min_w(0)
+          .items_end()
+          .gap(tokens.spacing.xxs)
+          .child(numeric(tokens, time).truncate())
+          .child(muted(tokens, day).truncate()),
+      ),
+    );
+}
+
+/**
+ * One order in full, as the sheet a right-hand panel carries.
+ *
+ * The Longbridge terminal answers a click with a label/value sheet in three
+ * groups -- what was ordered, what happened to it, and when -- and this is
+ * that sheet. Rows whose value the API did not send are left out rather than
+ * drawn as a dash: a panel of dashes reads as missing data, and what is
+ * actually true is that the order has no trigger and was never amended.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {LongbridgeOrderRow} order
+ */
+export function orderDetail(tokens, order) {
+  const status = statusColors(tokens);
+  const sideTone =
+    order.sideKind === "buy"
+      ? status.up
+      : order.sideKind === "sell"
+        ? status.down
+        : tokens.foreground;
+  const stamp = (value) => {
+    if (!value) return "";
+    const seconds = Math.trunc(value / 1_000);
+    return `${formatMarketDate(order.symbol, seconds)} ${formatMarketTime(order.symbol, seconds, true)}`;
+  };
+  const section = (title, entries) =>
+    v_flex()
+      .gap(tokens.spacing.sm)
+      .child(smallCaps(tokens, title))
+      .child(
+        detailGrid(
+          tokens,
+          entries.filter((entry) => entry.value),
+        ),
+      );
+  const amount = (value) =>
+    value === "--" || value === "" ? "" : order.currency ? `${value} ${order.currency}` : value;
+  return v_flex()
+    .id(`order-detail-${order.orderId}`)
+    .w_full()
+    .gap(tokens.spacing.md)
+    .px(tokens.spacing.md)
+    .py(tokens.spacing.md)
+    .child(
+      v_flex()
+        .gap(tokens.spacing.xxs)
+        .child(label(tokens, order.symbol, 14).font_weight(700).truncate())
+        .child(muted(tokens, order.name).truncate())
+        .child(
+          h_flex()
+            .items_center()
+            .gap(tokens.spacing.xs)
+            .child(
+              label(tokens, order.statusLabel).text_color(
+                orderStatusTone(tokens, order.statusKind),
+              ),
+            )
+            .child(muted(tokens, "·"))
+            .child(label(tokens, order.sideLabel).text_color(sideTone))
+            .child(muted(tokens, order.type)),
+        ),
+    )
+    .child(rule(tokens))
+    .child(
+      section("Order", [
+        { title: "Time in force", value: order.timeInForce },
+        { title: "Currency", value: order.currency },
+        { title: "Outside RTH", value: order.outsideRth },
+        { title: "Channel", value: order.tag },
+      ]),
+    )
+    .child(
+      section("Execution", [
+        { title: "Quantity", value: order.quantity },
+        { title: "Filled", value: order.executedQuantity },
+        { title: "Price", value: amount(order.price) },
+        { title: "Filled price", value: amount(order.executedPrice) },
+        { title: "Last done", value: amount(order.lastDone) },
+        { title: "Trigger price", value: amount(order.triggerPrice) },
+      ]),
+    )
+    .child(
+      section("Timing", [
+        { title: "Submitted", value: stamp(order.submittedAt) },
+        { title: "Updated", value: stamp(order.updatedAt) },
+      ]),
+    )
+    .child(rule(tokens))
+    .child(
+      v_flex()
+        .gap(tokens.spacing.xxs)
+        .child(muted(tokens, "Order ID"))
+        .child(numeric(tokens, order.orderId).truncate()),
+    )
+    .when(Boolean(order.remark), (element) =>
+      element.child(
+        v_flex()
+          .gap(tokens.spacing.xxs)
+          .child(muted(tokens, "Remark"))
+          .child(label(tokens, order.remark)),
+      ),
+    )
+    .when(Boolean(order.message), (element) => element.child(muted(tokens, order.message)));
+}
+
 /**
  * The device code, as the thing the sign-in screen is actually about.
  *
@@ -1463,6 +1864,10 @@ export function sessionAvatar(tokens, id, hint, open = false) {
  * view, and a panel that left the tree on every collapse would tear it down
  * and rebuild it.
  *
+ * `inset` is the horizontal padding of the trigger row, so a disclosure can
+ * line its chevron up with whatever content it sits under rather than with
+ * whatever this file happened to choose.
+ *
  * @param {import("gpui-base").Theme} tokens
  * @param {{
  *   id: string,
@@ -1471,12 +1876,23 @@ export function sessionAvatar(tokens, id, hint, open = false) {
  *   open: boolean,
  *   level?: number,
  *   keepMounted?: boolean,
+ *   inset?: number,
  *   onToggle: (open: boolean, cx: import("gpui").Context) => void,
  *   body: import("gpui").Element,
  * }} options
  */
 export function accordionSection(tokens, options) {
-  const { id, title, detail = "", open, level = 3, keepMounted = false, onToggle, body } = options;
+  const {
+    id,
+    title,
+    detail = "",
+    open,
+    level = 3,
+    keepMounted = false,
+    inset = tokens.spacing.md,
+    onToggle,
+    body,
+  } = options;
   return AccordionItem.new()
     .open(open)
     .w_full()
@@ -1498,7 +1914,7 @@ export function accordionSection(tokens, options) {
               .items_center()
               .justify_between()
               .gap(tokens.spacing.sm)
-              .px(tokens.spacing.md)
+              .px(inset)
               .py(tokens.spacing.sm)
               .hover((style) => style.bg(tokens.accent))
               .child(
@@ -1699,8 +2115,23 @@ export function kbd(tokens, keystroke, state = {}) {
 export const PANE_INSET = 4;
 export const WATCHLIST_MIN_WIDTH = 400;
 
-/** A plain titled Panel with an optional compact TitleBar accessory. */
-export function workspacePanel(tokens, title, content, accessory = null) {
+/**
+ * A plain titled Panel with an optional compact TitleBar accessory.
+ *
+ * `grow` is how the content is sized. A pane whose content fills whatever it
+ * is given -- a table, a plot, a tape -- grows into the panel; a pane that is
+ * a fixed block of readings takes its own height instead, because a block of
+ * readings stretched to fill a tall window is a band of empty panel under the
+ * last row of it.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {string} title
+ * @param {import("gpui").Element} content
+ * @param {import("gpui").Element | null} [accessory]
+ * @param {{ grow?: boolean }} [options]
+ */
+export function workspacePanel(tokens, title, content, accessory = null, options = {}) {
+  const { grow = true } = options;
   return panel(tokens)
     .min_w(0)
     .min_h(0)
@@ -1717,5 +2148,5 @@ export function workspacePanel(tokens, title, content, accessory = null) {
         .child(label(tokens, title, 13).font_weight(700))
         .when(accessory, (element) => element.child(accessory)),
     )
-    .child(content.border(0).flex_1().min_h(0));
+    .child(grow ? content.border(0).flex_1().min_h(0) : content.border(0).flex_none());
 }

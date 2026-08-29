@@ -48,7 +48,43 @@ interface LongbridgeHoldingRow {
   currency: string;
 }
 
-type LongbridgePage = "watchlist" | "portfolio";
+interface LongbridgeOrderRow {
+  orderId: string;
+  symbol: string;
+  code: string;
+  market: string;
+  name: string;
+  side: string;
+  sideKind: "buy" | "sell" | "unknown";
+  sideLabel: string;
+  type: string;
+  status: string;
+  statusLabel: string;
+  statusKind: "filled" | "working" | "rejected" | "ended" | "unknown";
+  quantity: string;
+  executedQuantity: string;
+  price: string;
+  executedPrice: string;
+  lastDone: string;
+  triggerPrice: string;
+  currency: string;
+  timeInForce: string;
+  outsideRth: string;
+  tag: string;
+  submittedAt: number;
+  updatedAt: number;
+  message: string;
+  remark: string;
+}
+
+interface LongbridgeOrdersState {
+  status: "idle" | "loading" | "ready" | "error";
+  today: readonly LongbridgeOrderRow[];
+  history: readonly LongbridgeOrderRow[];
+  error: string;
+}
+
+type LongbridgePage = "watchlist" | "portfolio" | "orders";
 type PriceChartMode = "intraday" | "5D" | "1m" | "5m" | "15m" | "1D";
 
 interface PriceChartPreparedPoint {

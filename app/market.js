@@ -310,6 +310,47 @@ export function tradeStatusLabel(quote, now = Date.now()) {
   return marketIsOpen(quote.market, now) ? "Trading" : "Closed";
 }
 
+/**
+ * The day's high-low span as a share of the previous close.
+ *
+ * Derived here rather than at the call site because it is a reading about the
+ * session, not a way of drawing one: the same rule -- an unusable input is
+ * "--", never a number worked out from a partial snapshot -- applies to every
+ * derived figure in this module.
+ *
+ * @param {LongbridgeQuoteRow} quote
+ */
+export function amplitude(quote) {
+  const high = Number(quote?.high);
+  const low = Number(quote?.low);
+  const previous = Number(quote?.prevClose);
+  if (!Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(previous)) return "--";
+  if (previous === 0) return "--";
+  return `${(((high - low) / previous) * 100).toFixed(2)}%`;
+}
+
+/** Turnover over volume: what the average share changed hands at today. */
+export function averagePrice(quote) {
+  const turnover = Number(quote?.turnover);
+  const volume = typeof quote?.volume === "bigint" ? Number(quote.volume) : Number(quote?.volume);
+  if (!Number.isFinite(turnover) || !Number.isFinite(volume) || volume <= 0) return "--";
+  return (turnover / volume).toFixed(decimals(quote?.last));
+}
+
+/**
+ * Movement since the open, which the day's change -- measured against the
+ * previous close -- hides whenever a session gaps.
+ *
+ * @param {LongbridgeQuoteRow} quote
+ */
+export function changeFromOpen(quote) {
+  const last = Number(quote?.last);
+  const open = Number(quote?.open);
+  if (!Number.isFinite(last) || !Number.isFinite(open) || open === 0) return "--";
+  const percent = ((last - open) / open) * 100;
+  return `${percent > 0 ? "+" : ""}${percent.toFixed(2)}%`;
+}
+
 export function formatCompactNumber(value) {
   const number = typeof value === "bigint" ? Number(value) : Number(value);
   if (!Number.isFinite(number) || number === 0) return "--";
