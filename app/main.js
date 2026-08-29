@@ -127,15 +127,6 @@ function responsivePanelWidths(viewportWidth) {
   return { available, sideBySide, watchlist: content - detail, detail };
 }
 
-function accountDisplayName(account) {
-  if (!account || typeof account !== "object") return "Connected account";
-  for (const key of ["account_name", "accountName", "account_id", "accountId", "account_no"]) {
-    const value = account[key];
-    if (typeof value === "string" && value.trim()) return value.trim();
-  }
-  const currency = account.currency;
-  return typeof currency === "string" && currency ? `${currency} account` : "Connected account";
-}
 /**
  * How long the steps before the stream exists may take before the window says
  * so. Generous: it covers a token refresh, the watchlist read and the account
@@ -443,8 +434,6 @@ export default class LongbridgeApp extends View {
     this.status = { state: this.hasStoredTokens ? "saved session" : "offline" };
     this.authorization = null;
     this.authorizationGeneration = 0;
-    this.switchingAccount = false;
-    this.switchAccountSnapshot = null;
     this.account = null;
     this.fxRates = new Map([["USD", 1]]);
     /** @type {LongbridgeHoldingRow[]} */
@@ -1056,8 +1045,6 @@ export default class LongbridgeApp extends View {
         if (generation !== this.authorizationGeneration) return;
         this.hasStoredTokens = true;
         this.authorization = null;
-        this.switchingAccount = false;
-        this.switchAccountSnapshot = null;
         await this.connect(tokens.accessToken, cx);
       } catch (error) {
         if (generation !== this.authorizationGeneration) return;
@@ -1067,30 +1054,6 @@ export default class LongbridgeApp extends View {
         this.redraw(cx);
       }
     });
-  }
-
-  /** Starts a reversible authorization flow while the current account remains live. */
-  switchAccount(cx) {
-    if (this.switchingAccount) return;
-    this.switchAccountSnapshot = { status: this.status, error: this.error };
-    this.switchingAccount = true;
-    this.authorization = null;
-    this.signIn(cx);
-  }
-
-  /** Cancels account switching and returns to the untouched current session. */
-  cancelAccountSwitch(cx) {
-    if (!this.switchingAccount) return;
-    this.authorizationGeneration = (this.authorizationGeneration ?? 0) + 1;
-    this.authorization = null;
-    this.switchingAccount = false;
-    const snapshot = this.switchAccountSnapshot;
-    this.switchAccountSnapshot = null;
-    if (snapshot) {
-      this.status = snapshot.status;
-      this.error = snapshot.error;
-    }
-    this.redraw(cx);
   }
 
   /** @param {string} token @param {import("gpui").AsyncContext} cx */
@@ -1611,11 +1574,7 @@ export default class LongbridgeApp extends View {
                   .relative()
                   .flex_1()
                   .min_h(0)
-                  .child(
-                    this.hasStoredTokens && !this.switchingAccount
-                      ? this.workspace(tokens)
-                      : this.loginGate(tokens),
-                  )
+                  .child(this.hasStoredTokens ? this.workspace(tokens) : this.loginGate(tokens))
                   .when(this.fpsVisible, (element) =>
                     element.child(fps_monitor().anchor("bottom_left")),
                   ),
@@ -1699,9 +1658,7 @@ export default class LongbridgeApp extends View {
         )
         // The switch is only a switch once there is something to switch between,
         // and both pages need a session.
-        .when(this.hasStoredTokens && !this.switchingAccount, (element) =>
-          element.child(this.pageSwitch(tokens)),
-        )
+        .when(this.hasStoredTokens, (element) => element.child(this.pageSwitch(tokens)))
         .child(
           h_flex()
             .flex_1()
@@ -1720,9 +1677,7 @@ export default class LongbridgeApp extends View {
             // The menu belongs to the session, not to the Watchlist: it signs out
             // and switches theme, and neither is a property of a list. The
             // window's own corner is where a session's controls live.
-            .when(this.hasStoredTokens && !this.switchingAccount, (element) =>
-              element.child(this.userMenu(tokens)),
-            ),
+            .when(this.hasStoredTokens, (element) => element.child(this.userMenu(tokens))),
         )
     );
   }
@@ -2211,14 +2166,6 @@ export default class LongbridgeApp extends View {
             }),
           )
           .child(rule(tokens))
-          .child(
-            // Account switching starts from a clean authorization session;
-            // otherwise Longbridge would silently reuse the current account.
-            menuItem(tokens, "user-menu-switch-account", "Switch account…", (_event, cx) => {
-              close(cx);
-              this.switchAccount(cx);
-            }),
-          )
           .child(
             menuItem(
               tokens,
@@ -2802,8 +2749,7 @@ export default class LongbridgeApp extends View {
    */
   authPanel(tokens) {
     const device = this.authorization;
-    const switching = Boolean(this.switchingAccount);
-    const stored = this.hasStoredTokens && !switching;
+    const stored = this.hasStoredTokens;
     const needsAttention = stored && this.status.state === "error";
     const status = statusColors(tokens);
 
@@ -2839,11 +2785,9 @@ export default class LongbridgeApp extends View {
                   tokens,
                   needsAttention
                     ? "Session needs attention"
-                    : switching
-                      ? "Switch Longbridge account"
-                      : stored
-                        ? "Restoring your session"
-                        : "Sign in to continue",
+                    : stored
+                      ? "Restoring your session"
+                      : "Sign in to continue",
                   14,
                 ).font_weight(700),
               )
@@ -2852,15 +2796,10 @@ export default class LongbridgeApp extends View {
                   tokens,
                   needsAttention
                     ? "Retry the saved session, or clear it and sign in again."
-                    : switching
-                      ? "Your current account stays connected until the new account is approved."
-                      : stored
-                        ? "Reconnecting with the saved Longbridge session."
-                        : "Authorize this device with your Longbridge account.",
+                    : stored
+                      ? "Reconnecting with the saved Longbridge session."
+                      : "Authorize this device with your Longbridge account.",
                 ),
-              )
-              .when(switching, (element) =>
-                element.child(muted(tokens, `Current: ${accountDisplayName(this.account)}`)),
               ),
       )
       .when(Boolean(this.error), (element) => element.child(errorMessage(tokens, this.error)))
@@ -2871,28 +2810,22 @@ export default class LongbridgeApp extends View {
             action(
               tokens,
               "longbridge-sign-in",
-              device
-                ? "Waiting for approval"
-                : switching
-                  ? "Starting authorization"
-                  : stored
-                    ? "Retry connection"
-                    : "Sign in",
+              device ? "Waiting for approval" : stored ? "Retry connection" : "Sign in",
               (_event, cx) => (stored ? this.resume(cx) : this.signIn(cx)),
               {
                 variant: stored ? "default" : "primary",
-                disabled: Boolean(device) || switching,
+                disabled: Boolean(device),
               },
             ).w_full(),
           )
-          .when(stored || switching || Boolean(device), (element) =>
+          .when(stored || Boolean(device), (element) =>
             element.child(
               action(
                 tokens,
                 "longbridge-sign-out",
-                switching || device ? "Cancel" : "Clear session",
-                (_event, cx) => (switching ? this.cancelAccountSwitch(cx) : this.signOut(cx)),
-                { variant: switching || device ? "ghost" : "destructive", quiet: true },
+                device ? "Cancel" : "Clear session",
+                (_event, cx) => this.signOut(cx),
+                { variant: device ? "ghost" : "destructive", quiet: true },
               ).w_full(),
             ),
           ),
