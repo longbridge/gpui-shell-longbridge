@@ -959,9 +959,6 @@ export default class LongbridgeApp extends View {
         if (Number.isFinite(detail?.size)) {
           this.workspaceDock.set_dock_size("right", detail.size);
         }
-        if (detail?.open === false && this.workspaceDock.is_dock_open("right")) {
-          this.workspaceDock.toggle_dock("right");
-        }
       }
     } catch {
       this.layoutStorage = false;
@@ -987,7 +984,6 @@ export default class LongbridgeApp extends View {
               right_dock: {
                 placement: "right",
                 size: this.workspaceDock.dock_size("right") ?? DETAIL_DOCK_WIDTH,
-                open: this.workspaceDock.is_dock_open("right"),
               },
               detail_tiles: this.detailTileLayout,
             }),

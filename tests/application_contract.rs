@@ -226,6 +226,11 @@ fn application_exposes_api_backed_read_only_views() {
         "the details pane's width must be written back to storage"
     );
     assert!(
+        !main.contains("detail?.open === false")
+            && !main.contains("open: this.workspaceDock.is_dock_open"),
+        "a temporary collapsed detail dock must not strand the workspace after restart or resize"
+    );
+    assert!(
         !main.contains("workspaceDock.load("),
         "restoring panels loses the handles that repaint them; see the note above"
     );
@@ -480,7 +485,8 @@ fn dock_tab_bar_hides_one_tab_but_keeps_multi_tab_navigation() {
 fn title_mark_preserves_official_multicolor_roles_with_live_semantic_tokens() {
     let root = app_dir();
     let main = fs::read_to_string(root.join("main.js")).expect("main.js");
-    let official = fs::read_to_string(root.join("assets/logo-light.svg")).expect("official light logo");
+    let official =
+        fs::read_to_string(root.join("assets/logo-light.svg")).expect("official light logo");
     let layers: [(&str, &str, &[&str]); 4] = [
         (
             "logo-foreground.svg",
@@ -515,8 +521,7 @@ fn title_mark_preserves_official_multicolor_roles_with_live_semantic_tokens() {
         layers.iter().all(|(asset, token, _)| {
             main.contains(&format!("svg(\"assets/{asset}\")"))
                 && main.contains(&format!(".text_color({token})"))
-        })
-            && main.contains("const status = statusColors(tokens);")
+        }) && main.contains("const status = statusColors(tokens);")
             && !main.contains("assets/logo-info.svg")
             && main.contains("this.titleBar(tokens)")
             && !main.contains(".child(div().absolute().left(1)")
@@ -544,7 +549,8 @@ fn title_mark_preserves_official_multicolor_roles_with_live_semantic_tokens() {
     let all_layer_rects = layers
         .iter()
         .flat_map(|(asset, _, _)| {
-            let layer = fs::read_to_string(root.join("assets").join(asset)).expect("title logo layer");
+            let layer =
+                fs::read_to_string(root.join("assets").join(asset)).expect("title logo layer");
             [
                 "x=\"0\" y=\"0\" width=\"3\" height=\"69\"",
                 "x=\"21\" y=\"60\" width=\"9\" height=\"9\"",
@@ -574,7 +580,10 @@ fn title_mark_preserves_official_multicolor_roles_with_live_semantic_tokens() {
         "x=\"7\" y=\"0\" width=\"10\" height=\"69\"",
     ] {
         assert_eq!(
-            all_layer_rects.iter().filter(|candidate| candidate.as_str() == rect).count(),
+            all_layer_rects
+                .iter()
+                .filter(|candidate| candidate.as_str() == rect)
+                .count(),
             1,
             "official rectangle {rect} must appear in exactly one semantic layer"
         );

@@ -772,7 +772,10 @@ fn retained_price_chart_owns_its_indicator_and_dated_tooltip(cx: &mut TestAppCon
     context.update(|window, cx| window.draw(cx).clear(cx));
     let candles = tree(&mut context);
     assert!(candles.contains("1m candles"), "{candles}");
-    assert!(candles.contains("O 100  H 104") && candles.contains("Volume 42"), "{candles}");
+    assert!(
+        candles.contains("O 100  H 104") && candles.contains("Volume 42"),
+        "{candles}"
+    );
     assert!(candles.contains("price-chart-candles"), "{candles}");
 
     context.simulate_click(
@@ -1923,8 +1926,7 @@ fn title_bar_draws_the_themed_official_svg_mark(cx: &mut TestAppContext) {
             rendered.contains(&format!(
                 "svg \"{asset}\" .absolute .inset_0 .text_color[Str(\"{color}\")]"
             ))
-        })
-            && !rendered.contains(".absolute .left[Number(1.0)]"),
+        }) && !rendered.contains(".absolute .left[Number(1.0)]"),
         "the title bar must layer the semantic official SVG marks rather than reconstructing bars:\n{rendered}"
     );
 }
