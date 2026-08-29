@@ -231,8 +231,9 @@ fn application_exposes_api_backed_read_only_views() {
         "a temporary collapsed detail dock must not strand the workspace after restart or resize"
     );
     assert!(
-        !main.contains("workspaceDock.load("),
-        "restoring panels loses the handles that repaint them; see the note above"
+        main.matches("workspaceDock.load(").count() == 1
+            && main.contains("workspaceDock.load(EMPTY_WORKSPACE_DOCK_LAYOUT)"),
+        "only the panel-free container skeleton may be loaded; saved panels would replace live handles"
     );
 
     // A row inside a virtual list cannot register a handler: it is rebuilt on
@@ -423,8 +424,11 @@ fn v3_detail_tile_layout_round_trips_through_app_owned_storage() {
         "restoration must recreate topology with the existing live panel handles, not DockArea.load"
     );
     assert!(
-        !main.contains("workspaceDock.load("),
-        "restoring a v3 layout must not replace handles used for targeted invalidation"
+        main.matches("workspaceDock.load(").count() == 1
+            && main.contains("workspaceDock.load(EMPTY_WORKSPACE_DOCK_LAYOUT)")
+            && main.contains("children: []")
+            && main.contains("info: { tiles: { metas: [] } }"),
+        "restoration may seed an empty tiles canvas but must not load saved panels over live handles"
     );
 }
 
