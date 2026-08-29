@@ -307,6 +307,33 @@ fn fps_visibility_preference_defaults_off_and_round_trips(cx: &mut TestAppContex
 }
 
 #[gpui::test]
+fn the_chosen_chart_interval_outlives_the_session(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    grant_app_capabilities();
+    let fixture = ApplicationFixture::new("chart_mode_preference.test.js");
+    gpui_shell::set_storage_path(fixture.root.join("chart-mode-store.json"));
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let (_root, view) = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+
+    context.run_until_parked();
+    let draw_view = view.clone();
+    context.draw(
+        gpui::Point::default(),
+        gpui::size(gpui::px(400.), gpui::px(300.)),
+        move |_, _| draw_view.into_any_element(),
+    );
+    let rendered = context.update(|_, cx| {
+        view.read(cx)
+            .snapshot()
+            .map(gpui_shell::RenderSnapshot::debug_tree)
+            .unwrap_or_default()
+    });
+    assert!(rendered.contains("text \"ok\""), "{rendered}");
+}
+
+#[gpui::test]
 fn chart_vectors_run_against_this_application(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -441,6 +468,14 @@ fn orders_page_stacks_today_over_history_as_one_filtered_reading(cx: &mut TestAp
         rendered.contains("text \"2 orders\"")
             && rendered.contains("text \"2 orders · last 365 days\""),
         "each table says how much of the account it is showing:\n{rendered}"
+    );
+    // Today is as tall as the rows it has -- its chrome plus two of them --
+    // rather than taking a share of the page and spending it on nothing.
+    assert!(
+        rendered.contains(
+            r#":id[Str("today-orders")] .flex_1 .min_h[Number(0.0)] .h[Number(153.0)] .flex_none"#
+        ),
+        "Today is sized from its rows:\n{rendered}"
     );
 
     // Both lists are the virtualized table the rest of the application uses:
@@ -622,11 +657,12 @@ fn an_empty_today_gives_its_height_back_to_the_history(cx: &mut TestAppContext) 
     // Most days there is nothing working, so an empty Today is the ordinary
     // case: it keeps its heading and its filter, says one line, and claims no
     // height for the rows it does not have.
+    // The panel's own line, so the assertion reads its box and not the boxes
+    // of the controls inside it.
+    let today_box = today.lines().next().unwrap_or_default();
     assert!(
-        today.contains(".flex_none")
-            && !today.contains(".flex_grow[Number(2.0)]")
-            && !today.contains(".min_h[Number(160.0)]"),
-        "an empty Today must not reserve a table's height:\n{today}"
+        today_box.contains(".flex_none") && !today_box.contains(".h[Number("),
+        "an empty Today must not reserve a table's height:\n{today_box}"
     );
     assert!(
         today.contains(r#":id[Str("today-orders-state")]"#) && today.contains("No orders today."),
@@ -650,7 +686,7 @@ fn an_empty_today_gives_its_height_back_to_the_history(cx: &mut TestAppContext) 
         .map(|(_, section)| section)
         .expect("the History panel");
     assert!(
-        history.contains(".flex_grow[Number(3.0)]")
+        history.contains(".flex_1 .min_h[Number(200.0)]")
             && history.contains("v_virtual_list \"history-orders-rows\" \u{00d7}2")
             && history.contains(r#"TableHeader "history-orders-header""#),
         "{history}"

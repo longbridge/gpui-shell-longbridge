@@ -56,6 +56,7 @@ import PriceChartView, {
   compactIntradaySeriesForView,
 } from "./price_chart_view.js";
 import { loadFpsVisible, saveFpsVisible } from "./fps_preference.js";
+import { DEFAULT_CHART_MODE, loadChartMode, saveChartMode } from "./chart_mode_preference.js";
 import { omarchyBaseColors, omarchyMarketColors, omarchyTheme } from "./system_theme.js";
 import { setOmarchyAvatarColors, setOmarchyMarketColors, statusColors } from "./palette.js";
 import {
@@ -244,6 +245,20 @@ function motion(element, property) {
  */
 const NARROW_VIEWPORT = 960;
 const COMPACT_WATCHLIST_WIDTH = 440;
+
+/**
+ * How tall Today Orders is: its own rows, to a ceiling of five of them.
+ *
+ * The list is short by nature -- what is working right now -- and most days it
+ * is empty. Given a fixed share of the page it spent that share on nothing,
+ * and then gave it all back the moment the day's orders arrived, which is a
+ * page that jumps. Sized from its rows it is only ever as tall as it has
+ * something to say, and the history underneath keeps the rest.
+ */
+const TODAY_ORDERS_VISIBLE_ROWS = 5;
+
+/** A panel's toolbar, hairline, column heads and its own border. */
+const ORDERS_PANEL_CHROME = 69;
 
 /** What the Orders filter narrows on: the instrument, and how an order went. */
 const ORDER_FILTER_FIELDS = Object.freeze(["symbol", "name", "statusLabel", "sideLabel"]);
@@ -568,18 +583,20 @@ export default class LongbridgeApp extends View {
     });
   }
 
-  /** Initializes session-only chart selection and its bounded response cache. */
+  /** Restores the chosen chart interval, and opens its bounded response cache. */
   initChartModeState() {
-    // This deliberately never reads or writes localStorage: a chosen chart
-    // mode belongs to this running application session, not the login session.
-    this.chartMode = "5D";
+    // The interval is remembered; the responses are not. An interval is how
+    // someone reads a market -- the same choice for every symbol and every
+    // session -- so it survives a restart, while the candles behind it are a
+    // cache belonging to this running application.
+    this.chartMode = loadChartMode();
     this.chartModeMenuOpen = false;
     this.chartCache = new Map();
   }
 
   /** @returns {keyof typeof CHART_MODES} */
   activeChartMode() {
-    return CHART_MODES[this.chartMode] ? this.chartMode : "5D";
+    return CHART_MODES[this.chartMode] ? this.chartMode : DEFAULT_CHART_MODE;
   }
 
   chartIdentityEndDate() {
@@ -631,8 +648,12 @@ export default class LongbridgeApp extends View {
   setChartMode(mode, cx) {
     if (!CHART_MODES[mode] || mode === this.activeChartMode()) return;
     this.chartMode = mode;
+    // Written after the paint is asked for, not before it: the choice is on
+    // screen at the next frame whatever the store does, and a slow flush
+    // cannot hold up the chart it selected.
     this.loadSelectedChart(cx);
     this.redraw(cx);
+    cx.spawn(async () => saveChartMode(mode));
   }
 
   /** Invalidates only the currently visible request from the session cache. */
@@ -2908,6 +2929,8 @@ export default class LongbridgeApp extends View {
     const sheet = selected ? this.orderDetailPanel(tokens, selected) : null;
     const todayCollapsed = this.ordersCollapsed(today);
     const historyCollapsed = this.ordersCollapsed(history);
+    const todayHeight =
+      ORDERS_PANEL_CHROME + Math.min(today.length, TODAY_ORDERS_VISIBLE_ROWS) * ORDER_ROW_HEIGHT;
 
     // A narrow window scrolls the panels at stated heights rather than sharing
     // one height between them, which is what the stacked Watchlist does and
@@ -2921,7 +2944,7 @@ export default class LongbridgeApp extends View {
         .min_h(0)
         .gap(tokens.spacing.md)
         .overflow_y_scrollbar()
-        .child(todayCollapsed ? todayPanel.flex_none() : todayPanel.h(260).flex_none())
+        .child(todayCollapsed ? todayPanel.flex_none() : todayPanel.h(todayHeight).flex_none())
         .child(historyCollapsed ? historyPanel.flex_none() : historyPanel.h(400).flex_none())
         .when(Boolean(sheet), (element) => element.child(sheet.h(460).flex_none()));
     }
@@ -2932,14 +2955,8 @@ export default class LongbridgeApp extends View {
       .min_h(0)
       .min_w(0)
       .gap(tokens.spacing.md)
-      .child(
-        todayCollapsed ? todayPanel.flex_none() : todayPanel.flex_basis(0).flex_grow(2).min_h(160),
-      )
-      .child(
-        historyCollapsed
-          ? historyPanel.flex_none()
-          : historyPanel.flex_basis(0).flex_grow(3).min_h(200),
-      );
+      .child(todayCollapsed ? todayPanel.flex_none() : todayPanel.h(todayHeight).flex_none())
+      .child(historyCollapsed ? historyPanel.flex_none() : historyPanel.flex_1().min_h(200));
     if (!sheet) return lists;
     // Beside the lists, where there is room for a column of its own.
     return (
