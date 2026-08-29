@@ -388,6 +388,20 @@ fn tiled_detail_dock_exposes_drag_and_resize_chrome() {
 }
 
 #[test]
+fn tiled_detail_dock_hit_geometry_matches_the_current_dock_api() {
+    let ui = fs::read_to_string(app_dir().join("ui.js")).expect("ui.js");
+
+    assert!(
+        ui.contains("const DOCK_TILE_DRAG_BAR_HEIGHT = 30")
+            && ui.contains("const DOCK_TILE_HANDLE_SIZE = 5")
+            && ui.contains(".h(DOCK_TILE_DRAG_BAR_HEIGHT)")
+            && ui.matches(".w(DOCK_TILE_HANDLE_SIZE)").count() == 1
+            && ui.matches(".h(DOCK_TILE_HANDLE_SIZE)").count() == 1,
+        "tile chrome must keep Dock's mandated 30px drag hit band and 5px resize hit edges"
+    );
+}
+
+#[test]
 fn v3_detail_tile_layout_round_trips_through_app_owned_storage() {
     let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
 

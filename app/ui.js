@@ -1816,18 +1816,24 @@ export function dockTabBar(tokens, group) {
   );
 }
 
-/** A tile's compact drag strip; panel content keeps the visible reading title. */
+// Mirrors gpui-component's private Dock Tiles constants in
+// `src/dock/tiles.rs`: DRAG_BAR_HEIGHT = 30px, HANDLE_SIZE = 5px. They are not
+// exported through the current JavaScript facade, so keeping the values here
+// makes the replacement chrome match base's snap and hit-test geometry.
+const DOCK_TILE_DRAG_BAR_HEIGHT = 30;
+const DOCK_TILE_HANDLE_SIZE = 5;
+
+/** A tile's full-size drag hit band with a compact visible hairline. */
 export function dockTileDragBar(tokens, tile) {
   return h_flex()
     .id(`dock-tile-drag-${tile.panel.id}`)
-    .h(8)
+    .h(DOCK_TILE_DRAG_BAR_HEIGHT)
     .w_full()
+    .items_center()
     .cursor_row_resize()
-    .bg(tokens.surface)
-    .border_b(1)
-    .border_color(tokens.border)
     .move_tile(tile)
-    .hover((style) => style.bg(tokens.muted));
+    .hover((style) => style.bg(tokens.muted))
+    .child(div().h(1).w_full().bg(tokens.border));
 }
 
 /** Visible edge handles for the free-form tile canvas. */
@@ -1842,7 +1848,7 @@ export function dockTileResizeHandles(tokens, tile) {
         .right(0)
         .top(0)
         .bottom(0)
-        .w(4)
+        .w(DOCK_TILE_HANDLE_SIZE)
         .cursor_col_resize()
         .resize_tile(tile, "right")
         .hover((style) => style.bg(tokens.primary)),
@@ -1853,7 +1859,7 @@ export function dockTileResizeHandles(tokens, tile) {
         .left(0)
         .right(0)
         .bottom(0)
-        .h(4)
+        .h(DOCK_TILE_HANDLE_SIZE)
         .cursor_row_resize()
         .resize_tile(tile, "bottom")
         .hover((style) => style.bg(tokens.primary)),
