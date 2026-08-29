@@ -2710,6 +2710,21 @@ export default class LongbridgeApp extends View {
     // is the later of that and the clock, which is right either way.
     const today = [this.chartCalendar.today(), calendarDay(new Date())].sort().at(-1);
     const end = this.chartEndDate ?? today;
+    const mode = this.activeChartMode();
+    const modeDescription =
+      mode === "intraday"
+        ? `Trading day ${end}`
+        : mode === "5D"
+          ? `Five sessions to ${end}`
+          : `${mode} bars ending ${end}`;
+    const chartModes = [
+      ["intraday", "Intraday"],
+      ["5D", "5D"],
+      ["1m", "1m"],
+      ["5m", "5m"],
+      ["15m", "15m"],
+      ["1D", "1D"],
+    ];
     return (
       v_flex()
         .relative()
@@ -2721,11 +2736,37 @@ export default class LongbridgeApp extends View {
         .child(
           h_flex()
             .items_center()
-            .justify_between()
             .gap(tokens.spacing.sm)
-            .child(muted(tokens, `Five sessions to ${end}`))
             .child(
               h_flex()
+                .id("chart-mode-selector")
+                .flex_1()
+                .min_w(0)
+                // Six compact commands remain one row at every dock width.
+                // This viewport owns only horizontal overflow; vertical wheel
+                // input remains with the Chart panel and cannot become a second
+                // chart-height-consuming row of controls.
+                .overflow_x_scroll()
+                .child(
+                  h_flex()
+                    .flex_none()
+                    .gap(tokens.spacing.xxs)
+                    .children(
+                      chartModes.map(([id, caption]) =>
+                        action(
+                          tokens,
+                          `chart-mode-${id}`,
+                          caption,
+                          (_event, cx) => this.setChartMode(id, cx),
+                          { variant: "ghost", selected: mode === id },
+                        ).flex_none(),
+                      ),
+                    ),
+                ),
+            )
+            .child(
+              h_flex()
+                .flex_none()
                 .items_center()
                 .gap(tokens.spacing.xs)
                 .child(
@@ -2755,6 +2796,7 @@ export default class LongbridgeApp extends View {
                 ),
             ),
         )
+        .child(muted(tokens, modeDescription))
         .child(
           div()
             .id("price-chart-wheel")

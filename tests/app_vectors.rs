@@ -709,6 +709,11 @@ fn retained_price_chart_owns_its_indicator_and_dated_tooltip(cx: &mut TestAppCon
     };
     let initial = tree(&mut context);
     assert!(initial.contains("5D intraday"), "{initial}");
+    assert!(
+        initial.contains("Button \"probe-chart-mode-5D\" .flex_1 :selected[Bool(true)]"),
+        "the retained chart starts in its default 5D mode:\n{initial}"
+    );
+    assert!(initial.contains("price-chart-5D"), "{initial}");
     assert!(initial.contains(":on_mouse_move(fn)"), "{initial}");
     assert!(initial.contains(":on_hover(fn)"), "{initial}");
 
@@ -751,6 +756,41 @@ fn retained_price_chart_owns_its_indicator_and_dated_tooltip(cx: &mut TestAppCon
         initial.matches("path stroke").count(),
         "leaving the replaced child snapshot must remove its indicator:\n{left}"
     );
+
+    context.simulate_click(
+        gpui::point(gpui::px(400.), gpui::px(14.)),
+        gpui::Modifiers::default(),
+    );
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    context.simulate_mouse_move(
+        gpui::point(gpui::px(100.), gpui::px(100.)),
+        None,
+        gpui::Modifiers::default(),
+    );
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    let candles = tree(&mut context);
+    assert!(candles.contains("1m candles"), "{candles}");
+    assert!(candles.contains("O 100  H 104") && candles.contains("Volume 42"), "{candles}");
+    assert!(candles.contains("price-chart-candles"), "{candles}");
+
+    context.simulate_click(
+        gpui::point(gpui::px(75.), gpui::px(14.)),
+        gpui::Modifiers::default(),
+    );
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    let intraday = tree(&mut context);
+    assert!(intraday.contains("Intraday"), "{intraday}");
+    assert!(
+        intraday.contains("Overnight")
+            && intraday.contains("Pre-market")
+            && intraday.contains("Regular")
+            && intraday.contains("Post-market"),
+        "the full-session line names every provider-labelled session:\n{intraday}"
+    );
+    assert!(intraday.contains("Previous close 98.5"), "{intraday}");
 }
 
 #[gpui::test]
@@ -1141,6 +1181,16 @@ fn stock_details_keep_the_chart_visible_beside_collapsible_metadata(cx: &mut Tes
     assert!(!rendered.contains("detail-chart-trigger"), "{rendered}");
     assert!(!rendered.contains("text \"Price chart\""), "{rendered}");
     assert!(rendered.contains("price-chart-wheel"), "{rendered}");
+    assert!(
+        rendered.contains("chart-mode-selector")
+            && rendered.contains("Button \"chart-mode-intraday\"")
+            && rendered.contains("Button \"chart-mode-5D\""),
+        "the chart selector stays present above every chart state:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("chart-mode-selector") && rendered.contains(":overflow_x_scroll"),
+        "a narrow detail pane scrolls the one-row selector instead of wrapping it:\n{rendered}"
+    );
     assert!(
         rendered.contains("AccordionPanel :keep_mounted[Bool(false)]"),
         "{rendered}"
