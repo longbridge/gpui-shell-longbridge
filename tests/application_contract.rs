@@ -303,19 +303,17 @@ fn watchlist_and_detail_panes_do_not_depend_on_window_viewport_width() {
         .and_then(|source| source.split("  /**\n   * The chart").next())
         .expect("detail section render method");
 
+    assert!(!detail.contains("this.isNarrow()"));
     assert!(
-        !watchlist.contains("this.isNarrow()") && !detail.contains("this.isNarrow()"),
-        "dock panes must not use the window viewport as a proxy for their independently-resized width"
-    );
-    assert!(
-        watchlist.contains("watchlistHeader(tokens, true)"),
-        "Watchlist must keep only pane-safe primary lanes"
+        watchlist.contains("const compact = this.isWatchlistCompact()")
+            && watchlist.contains("watchlistHeader(tokens, compact)"),
+        "Watchlist must keep full columns when wide and primary lanes when compact"
     );
     assert!(
         watchlist.contains("quoteRow(")
             && watchlist.contains("this.lastTick,")
-            && watchlist.contains("true,"),
-        "virtual Watchlist rows must render pane-safe primary lanes without a host sizing call"
+            && watchlist.contains("compact,"),
+        "virtual Watchlist rows must reuse the pane sizing decision without a host call"
     );
     assert_eq!(
         watchlist.matches("this.isNarrow()").count(),

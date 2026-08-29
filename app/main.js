@@ -149,6 +149,34 @@ const DEFAULT_DETAIL_TILES = Object.freeze([
 ]);
 const DETAIL_TILE_NAMES = new Set(DEFAULT_DETAIL_TILES.map((tile) => tile.name));
 
+/**
+ * Seed only the containers that live panel handles will enter next.
+ *
+ * A bounded `add_panel` is an `add_tile` at the host boundary. It deliberately
+ * refuses a region that is not already a tiles canvas, so the first bounded
+ * panel cannot create its own right dock. Loading this panel-free skeleton is
+ * safe: unlike loading a saved panel tree it constructs no replacement views,
+ * and queued dock edits preserve the load -> add order.
+ */
+const EMPTY_WORKSPACE_DOCK_LAYOUT = Object.freeze({
+  version: WORKSPACE_LAYOUT_VERSION,
+  center: {
+    panel_name: "StackPanel",
+    children: [],
+    info: { stack: { sizes: [], axis: 0 } },
+  },
+  right_dock: {
+    panel: {
+      panel_name: "Tiles",
+      children: [],
+      info: { tiles: { metas: [] } },
+    },
+    placement: "right",
+    size: DETAIL_DOCK_WIDTH,
+    open: true,
+  },
+});
+
 function finiteTileNumber(value, fallback) {
   return Number.isFinite(value) ? value : fallback;
 }
@@ -366,6 +394,7 @@ function motion(element, property) {
  * which is where the question is asked.
  */
 const NARROW_VIEWPORT = 960;
+const COMPACT_WATCHLIST_WIDTH = 620;
 
 /** How many holdings one page of the Holdings panel shows. */
 
@@ -879,6 +908,10 @@ export default class LongbridgeApp extends View {
     this.workspaceDock = DockArea.new("longbridge-workspace", {
       version: WORKSPACE_LAYOUT_VERSION,
     });
+    // Establish the empty right-side tiles canvas before the bounded panel
+    // additions queued below. This load contains no panel names, so every
+    // panel in the resulting area is still the live entity created here.
+    this.workspaceDock.load(EMPTY_WORKSPACE_DOCK_LAYOUT);
     // Read before adding any panel. `add_panel` is asynchronous from the
     // layout's point of view, so a dump in this turn still describes the old
     // tree; seeding with these values is the only way to retain live entity
@@ -2061,6 +2094,17 @@ export default class LongbridgeApp extends View {
     return window.viewport_size().width < NARROW_VIEWPORT;
   }
 
+  /**
+   * Estimate the center region once per Watchlist paint. The result is passed
+   * into every virtual row, avoiding the per-row host sizing calls that cut
+   * Release throughput while still letting a wide Watchlist show its columns.
+   */
+  isWatchlistCompact() {
+    const viewportWidth = window.viewport_size().width;
+    const detailWidth = this.isDetailOpen() ? (this.workspaceDock.dock_size("right") ?? 0) : 0;
+    return viewportWidth - detailWidth < COMPACT_WATCHLIST_WIDTH;
+  }
+
   /** @param {import("gpui-base").Theme} tokens */
   workspace(tokens) {
     // Each page owns its own scrolling. Watchlist is a master-detail layout
@@ -2224,6 +2268,7 @@ export default class LongbridgeApp extends View {
   watchlist(tokens) {
     const status = streamStatusSummary({ state: this.status.state, delay: this.status.delay });
     const rows = filterRows(this.quotes, this.watchlistQuery, ["code", "name", "symbol"]);
+    const compact = this.isWatchlistCompact();
     return this.pane(tokens, "right").child(
       panel(tokens)
         .id("watchlist-pane")
@@ -2256,7 +2301,7 @@ export default class LongbridgeApp extends View {
             "Watchlist",
             rows,
             QUOTE_ROW_HEIGHT,
-            watchlistHeader(tokens, true),
+            watchlistHeader(tokens, compact),
             (quote, index) =>
               quoteRow(
                 tokens,
@@ -2264,7 +2309,7 @@ export default class LongbridgeApp extends View {
                 quote.symbol === this.selectedSymbol,
                 index,
                 this.lastTick,
-                true,
+                compact,
               ),
             (symbol, cx) => this.selectQuote(symbol, cx),
             this.watchlistQuery

@@ -626,6 +626,11 @@ fn authenticated_workspace_materializes_a_scrollable_watchlist(cx: &mut TestAppC
         !rendered.contains("h_resizable"),
         "the resizable workspace was replaced by the dock: {rendered}"
     );
+    assert!(
+        rendered.contains(r#":id[Str("workspace-panel-count")]"#)
+            && rendered.contains(r#"text "4""#),
+        "the live DockArea must contain Watchlist plus all three detail panels: {rendered}"
+    );
 }
 
 /// The panes still draw what they always drew; they simply draw it inside a
