@@ -28,6 +28,15 @@ const QUOTE = Object.freeze({
   changePercent: "+1.62%",
 });
 
+const SECOND_QUOTE = Object.freeze({
+  ...QUOTE,
+  symbol: "MSFT.US",
+  code: "MSFT",
+  name: "Microsoft Corp.",
+  last: "420.00",
+  sequence: 8n,
+});
+
 export default class KeymapUiProbe extends LongbridgeApp {
   init(_props, cx) {
     // The status bar is off by default in the application -- the rail and the
@@ -40,8 +49,14 @@ export default class KeymapUiProbe extends LongbridgeApp {
     this.initChartCalendar(cx);
     this.instruments = [
       { symbol: QUOTE.symbol, code: QUOTE.code, name: QUOTE.name, market: QUOTE.market },
+      {
+        symbol: SECOND_QUOTE.symbol,
+        code: SECOND_QUOTE.code,
+        name: SECOND_QUOTE.name,
+        market: SECOND_QUOTE.market,
+      },
     ];
-    this.quotes = [QUOTE];
+    this.quotes = [QUOTE, SECOND_QUOTE];
     this.portfolioQuotes = [];
     this.selectedSymbol = QUOTE.symbol;
     this.page = "watchlist";
@@ -50,7 +65,24 @@ export default class KeymapUiProbe extends LongbridgeApp {
     this.authorization = null;
     this.account = null;
     this.fxRates = new Map([["USD", 1]]);
-    this.holdings = [];
+    this.holdings = [
+      {
+        symbol: QUOTE.symbol,
+        name: QUOTE.name,
+        quantity: "10",
+        available: "10",
+        costPrice: "180",
+        currency: "USD",
+      },
+      {
+        symbol: SECOND_QUOTE.symbol,
+        name: SECOND_QUOTE.name,
+        quantity: "20",
+        available: "20",
+        costPrice: "400",
+        currency: "USD",
+      },
+    ];
     this.initOrdersState();
     this.ordersState = {
       status: "ready",

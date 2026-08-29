@@ -1391,9 +1391,10 @@ export const HOLDING_ROW_HEIGHT = 42;
 /**
  * @param {import("gpui-base").Theme} tokens
  * @param {LongbridgeHoldingRow} holding
+ * @param {boolean} selected
  * @param {number} rowIndex
  */
-export function holdingRow(tokens, holding, rowIndex = 0) {
+export function holdingRow(tokens, holding, selected = false, rowIndex = 0) {
   const todayTone = valueTone(tokens, holding.todayPnlValue);
   const totalTone = valueTone(tokens, holding.totalPnlValue);
   const cell = (column, build) =>
@@ -1410,6 +1411,7 @@ export function holdingRow(tokens, holding, rowIndex = 0) {
       .py(tokens.spacing.xs)
       .border_b(1)
       .border_color(tokens.border),
+    selected,
   )
     .child(
       cell(1, (element) =>

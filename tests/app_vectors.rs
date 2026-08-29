@@ -1025,6 +1025,7 @@ fn retained_price_chart_owns_its_indicator_and_dated_tooltip(cx: &mut TestAppCon
     );
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));
+
     let hovered = tree(&mut context);
     assert!(hovered.contains("2026-03-09 09:30"), "{hovered}");
     assert!(!hovered.contains("UTC"), "{hovered}");
@@ -1758,13 +1759,16 @@ fn stock_details_lead_with_the_price_and_fold_their_secondary_readings(cx: &mut 
         20,
         "{rendered}"
     );
-    // Two scrolls, not three: the Chart and the tape each own theirs, and
-    // Quote Details owns none -- it is as tall as its readings, and the column
-    // holding the three panels is what scrolls past them.
+    // One scroll owns the whole detail column. Quote Details, Chart and Market
+    // Detail expand inside it rather than nesting competing scroll regions.
     assert_eq!(
         rendered.matches(":overflow_y_scrollbar").count(),
-        2,
+        0,
         "{rendered}"
+    );
+    assert!(
+        !rendered.contains(":overflow_x_scroll"),
+        "Chart interval controls must use the compact menu before they need horizontal scrolling:\n{rendered}"
     );
     assert!(
         rendered.contains("order-book-ask-level-1")
@@ -1975,6 +1979,30 @@ fn a_bound_chord_reaches_the_action_that_switches_page(cx: &mut TestAppContext) 
         "the application must inherit the platform font without an override:\n{before}"
     );
 
+    context.simulate_keystrokes("ctrl-k");
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    let shortcuts = tree(&mut context);
+    assert!(
+        shortcuts.contains(r#":id[Str("keyboard-shortcuts-overlay")]"#)
+            && shortcuts.contains(r#":key_context[Str("ShortcutHelp")]"#)
+            && shortcuts.contains(":track_focus[")
+            && shortcuts.contains("Keyboard shortcuts")
+            && shortcuts.contains("Ctrl + K")
+            && shortcuts.contains("Arrow Up / K")
+            && shortcuts.contains("Home / G G")
+            && !shortcuts.contains("Shift + F10"),
+        "ctrl-k must open help generated from the application keymap:\n{shortcuts}"
+    );
+
+    context.simulate_keystrokes("escape");
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        !tree(&mut context).contains(r#":id[Str("keyboard-shortcuts-overlay")]"#),
+        "escape must close keyboard help"
+    );
+
     context.simulate_keystrokes("ctrl-2");
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));
@@ -1989,6 +2017,15 @@ fn a_bound_chord_reaches_the_action_that_switches_page(cx: &mut TestAppContext) 
     // spelled `cmd` on every platform, this one included.
     assert!(!after.contains("text \"ctrl-2\""), "{after}");
 
+    context.simulate_keystrokes("end enter");
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    let holding_opened = tree(&mut context);
+    assert!(
+        holding_opened.contains("watchlist-pane") && holding_opened.contains("Microsoft Corp."),
+        "Holdings must support last-row selection and keyboard activation:\n{holding_opened}"
+    );
+
     context.simulate_keystrokes("ctrl-3");
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));
@@ -1996,6 +2033,34 @@ fn a_bound_chord_reaches_the_action_that_switches_page(cx: &mut TestAppContext) 
     assert!(
         orders.contains("Today Orders") && orders.contains("History Orders"),
         "ctrl-3 must reach `workspace::orders`:\n{orders}"
+    );
+
+    context.simulate_keystrokes("enter");
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    let no_order_selected = tree(&mut context);
+    assert!(
+        !no_order_selected.contains(r#":id[Str("order-detail-panel")]"#),
+        "Enter must not open an Orders row before one is selected:\n{no_order_selected}"
+    );
+
+    context.simulate_keystrokes("down");
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    let selected_order = tree(&mut context);
+    assert!(
+        !selected_order.contains(r#":id[Str("order-detail-panel")]"#),
+        "moving through Orders must select without opening detail:\n{selected_order}"
+    );
+
+    context.simulate_keystrokes("o");
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    let opened_order = tree(&mut context);
+    assert!(
+        opened_order.contains(r#":id[Str("order-detail-panel")]"#)
+            && opened_order.contains("884955210000"),
+        "O must open the selected Orders row like Enter:\n{opened_order}"
     );
 
     context.simulate_keystrokes("ctrl-alt-y");
@@ -2019,6 +2084,253 @@ fn a_bound_chord_reaches_the_action_that_switches_page(cx: &mut TestAppContext) 
     assert!(
         back.contains("watchlist-pane"),
         "ctrl-1 must reach `workspace::watchlist`:\n{back}"
+    );
+
+    context.simulate_keystrokes("home");
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    let next = tree(&mut context);
+    assert!(
+        next.contains("US · MSFT.US · USD"),
+        "Home must select without opening the first Watchlist row:\n{next}"
+    );
+
+    context.simulate_keystrokes("enter");
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    let next_opened = tree(&mut context);
+    assert!(
+        next_opened.contains("US · AAPL.US · USD"),
+        "Enter must open the selected Watchlist row:\n{next_opened}"
+    );
+
+    context.simulate_keystrokes("k");
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    let previous = tree(&mut context);
+    assert!(
+        previous.contains("Apple Inc.") && previous.contains("text \"188.00\""),
+        "k must move to the previous visible Watchlist row:\n{previous}"
+    );
+
+    context.simulate_keystrokes("end home");
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    let first = tree(&mut context);
+    assert!(
+        first.contains("Apple Inc.") && first.contains("text \"188.00\""),
+        "home must move to the first visible row:\n{first}"
+    );
+}
+
+#[gpui::test]
+fn modifier_hold_reveals_workspace_tab_shortcuts_until_release(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    grant_app_capabilities();
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("keymap_ui.test.js");
+    let fixture_root = fixture.root.clone();
+    let runtime_for_view = runtime.clone();
+    let window = cx.add_window(move |window, cx| {
+        WorkspaceRoot(
+            runtime_for_view
+                .try_load(&fixture_root, window, cx)
+                .expect("load keymap probe"),
+        )
+    });
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+
+    let view = window
+        .root(&mut context)
+        .expect("workspace root")
+        .read_with(&context, |root, cx| {
+            root.0
+                .read(cx)
+                .content()
+                .clone()
+                .downcast::<gpui_shell::ScriptView>()
+                .expect("workspace content is a script view")
+        });
+    let tree = |context: &mut VisualTestContext| {
+        context.update(|_, cx| {
+            view.read(cx)
+                .snapshot()
+                .map(gpui_shell::RenderSnapshot::debug_tree)
+                .unwrap_or_default()
+        })
+    };
+
+    let before = tree(&mut context);
+    assert!(!before.contains("page-watchlist-shortcut"), "{before}");
+
+    context.simulate_modifiers_change(gpui::Modifiers {
+        control: true,
+        ..Default::default()
+    });
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    let held = tree(&mut context);
+    for (page, number) in [("watchlist", "1"), ("portfolio", "2"), ("orders", "3")] {
+        assert!(
+            held.contains(&format!("page-{page}-shortcut"))
+                && held.contains(&format!("text \"{number}\"")),
+            "holding Ctrl must reveal {number} on {page}:\n{held}"
+        );
+    }
+
+    context.simulate_modifiers_change(gpui::Modifiers::default());
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    let released = tree(&mut context);
+    assert!(!released.contains("page-watchlist-shortcut"), "{released}");
+    assert!(!released.contains("page-portfolio-shortcut"), "{released}");
+    assert!(!released.contains("page-orders-shortcut"), "{released}");
+}
+
+#[gpui::test]
+fn tab_reaches_the_watchlist_filter_and_text_editing_stays_in_the_input(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    grant_app_capabilities();
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("keyboard_navigation_ui.test.js");
+    let fixture_root = fixture.root.clone();
+    let runtime_for_view = runtime.clone();
+    let window = cx.add_window(move |window, cx| {
+        WorkspaceRoot(
+            runtime_for_view
+                .try_load(&fixture_root, window, cx)
+                .expect("load keyboard navigation probe"),
+        )
+    });
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+
+    let view = window
+        .root(&mut context)
+        .expect("workspace root")
+        .read_with(&context, |root, cx| {
+            root.0
+                .read(cx)
+                .content()
+                .clone()
+                .downcast::<gpui_shell::ScriptView>()
+                .expect("workspace content is a script view")
+        });
+
+    // Walk one complete focus cycle until real text insertion identifies the
+    // Watchlist filter without relying on a private focus-handle ID.
+    let mut reached_filter = false;
+    for _ in 0..24 {
+        context.simulate_keystrokes("tab");
+        context.simulate_input("z");
+        context.run_until_parked();
+        context.update(|window, cx| window.draw(cx).clear(cx));
+        let rendered = context.update(|_, cx| {
+            view.read(cx)
+                .snapshot()
+                .map(gpui_shell::RenderSnapshot::debug_tree)
+                .unwrap_or_default()
+        });
+        if rendered.contains("No matches") {
+            reached_filter = true;
+            break;
+        }
+    }
+    assert!(reached_filter, "Tab must reach the Watchlist filter");
+
+    // Clear the filter while keeping its editor focused. K would then select
+    // Apple if the workspace binding leaked through the focused Input.
+    context.simulate_keystrokes("ctrl-a backspace");
+    context.simulate_keystrokes("k");
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    let rendered = context.update(|_, cx| {
+        view.read(cx)
+            .snapshot()
+            .map(gpui_shell::RenderSnapshot::debug_tree)
+            .unwrap_or_default()
+    });
+    assert!(
+        rendered.contains("Microsoft Corp.") && rendered.contains("text \"420.00\""),
+        "K in the focused Watchlist filter must not move the selected row:\n{rendered}"
+    );
+}
+
+#[gpui::test]
+fn keyboard_selection_scrolls_a_virtualized_row_into_view(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    grant_app_capabilities();
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("keyboard_scroll_ui.test.js");
+    let fixture_root = fixture.root.clone();
+    let runtime_for_view = runtime.clone();
+    let window = cx.add_window(move |window, cx| {
+        WorkspaceRoot(
+            runtime_for_view
+                .try_load(&fixture_root, window, cx)
+                .expect("load keyboard scroll probe"),
+        )
+    });
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+
+    let view = window
+        .root(&mut context)
+        .expect("workspace root")
+        .read_with(&context, |root, cx| {
+            root.0
+                .read(cx)
+                .content()
+                .clone()
+                .downcast::<gpui_shell::ScriptView>()
+                .expect("workspace content is a script view")
+        });
+
+    context.simulate_keystrokes("end");
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    context.simulate_click(
+        gpui::point(gpui::px(200.), gpui::px(130.)),
+        gpui::Modifiers::default(),
+    );
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    let rendered = context.update(|_, cx| {
+        view.read(cx)
+            .snapshot()
+            .map(gpui_shell::RenderSnapshot::debug_tree)
+            .unwrap_or_default()
+    });
+    assert!(
+        rendered.contains("US · KEY18.US · USD"),
+        "End must scroll to the bottom before the next visible-row hit test:\n{rendered}"
+    );
+
+    context.simulate_keystrokes("home");
+    for _ in 0..25 {
+        context.simulate_keystrokes("down");
+    }
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    context.simulate_click(
+        gpui::point(gpui::px(200.), gpui::px(130.)),
+        gpui::Modifiers::default(),
+    );
+    context.run_until_parked();
+    context.update(|window, cx| window.draw(cx).clear(cx));
+    let rendered = context.update(|_, cx| {
+        view.read(cx)
+            .snapshot()
+            .map(gpui_shell::RenderSnapshot::debug_tree)
+            .unwrap_or_default()
+    });
+    assert!(
+        rendered.contains("US · KEY04.US · USD"),
+        "repeated Down must minimally scroll the target into view rather than centering it:\n{rendered}"
     );
 }
 
