@@ -589,10 +589,14 @@ fn authenticated_workspace_materializes_a_scrollable_watchlist(cx: &mut TestAppC
     });
 
     assert!(
-        rendered.contains("dock_area")
-            && rendered.contains(r#":id[Str("workspace-panel-count")]"#)
-            && rendered.contains(r#"text "4""#),
-        "Dock must contain Watchlist plus three independently movable detail panels: {rendered}"
+        rendered.contains(r#":id[Str("watchlist-panels")]"#)
+            && rendered.contains(r#":id[Str("watchlist-pane")]"#)
+            && rendered.contains(r#":id[Str("quote-details-panel")]"#)
+            && rendered.contains(r#":id[Str("chart-panel")]"#)
+            && rendered.contains(r#":id[Str("market-detail-panel")]"#)
+            && rendered.contains("Tabs \"chart-mode-tabs\"")
+            && !rendered.contains("dock_area"),
+        "the responsive page must materialize four plain Panels in priority order: {rendered}"
     );
 }
 
@@ -676,7 +680,7 @@ fn retained_price_chart_owns_its_indicator_and_dated_tooltip(cx: &mut TestAppCon
         })
     };
     let initial = tree(&mut context);
-    assert!(initial.contains("5D intraday"), "{initial}");
+    assert!(!initial.contains("5D intraday"), "{initial}");
     assert!(
         initial.contains("Button \"probe-chart-mode-5D\" .flex_1 :selected[Bool(true)]"),
         "the retained chart starts in its default 5D mode:\n{initial}"
@@ -739,7 +743,7 @@ fn retained_price_chart_owns_its_indicator_and_dated_tooltip(cx: &mut TestAppCon
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));
     let candles = tree(&mut context);
-    assert!(candles.contains("1m candles"), "{candles}");
+    assert!(!candles.contains("1m candles"), "{candles}");
     assert!(
         candles.contains("O 100  H 104") && candles.contains("Volume 42"),
         "{candles}"
@@ -1188,7 +1192,7 @@ impl gpui::Render for WorkspaceRoot {
 }
 
 #[gpui::test]
-fn stock_details_keep_the_chart_visible_beside_collapsible_metadata(cx: &mut TestAppContext) {
+fn stock_details_keep_the_chart_visible_without_collapsible_metadata(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     grant_app_capabilities();
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -1210,8 +1214,8 @@ fn stock_details_keep_the_chart_visible_beside_collapsible_metadata(cx: &mut Tes
             .unwrap_or_default()
     });
 
-    // Each reading is its own dock-ready panel. Quote is always expanded; its
-    // tile replaces the old disclosure and the redundant subtitle is gone.
+    // Each reading is its own responsive panel. Quote is always expanded and
+    // the redundant subtitle is gone.
     assert!(
         rendered.contains("quote-details-panel")
             && rendered.contains("chart-panel")
@@ -1222,57 +1226,24 @@ fn stock_details_keep_the_chart_visible_beside_collapsible_metadata(cx: &mut Tes
         !rendered.contains("detail-quote-trigger") && !rendered.contains("Real-time quote"),
         "Quote Details must be permanently expanded without duplicated copy:\n{rendered}"
     );
-    assert!(
-        rendered.contains("AccordionTrigger \"detail-about-trigger\" :on_change(fn)"),
-        "{rendered}"
-    );
+    assert!(!rendered.contains("Accordion"), "{rendered}");
 
     // The chart is permanent content, not a disclosure with a title row.
     assert!(!rendered.contains("detail-chart-trigger"), "{rendered}");
     assert!(!rendered.contains("text \"Price chart\""), "{rendered}");
     assert!(rendered.contains("price-chart-wheel"), "{rendered}");
     assert!(
-        rendered.contains("chart-mode-selector")
-            && rendered.contains("Button \"chart-mode-intraday\"")
-            && rendered.contains("Button \"chart-mode-5D\""),
-        "the chart selector stays present above every chart state:\n{rendered}"
+        !rendered.contains("chart-mode-selector"),
+        "the selector belongs to the Chart Panel TitleBar, not its content:\n{rendered}"
     );
-    assert!(
-        rendered.contains("chart-mode-selector") && rendered.contains(":overflow_x_scroll"),
-        "a narrow detail pane scrolls the one-row selector instead of wrapping it:\n{rendered}"
-    );
-    assert!(
-        rendered.contains("AccordionPanel :keep_mounted[Bool(false)]"),
-        "{rendered}"
-    );
+    assert!(!rendered.contains("About this instrument"), "{rendered}");
 
-    // About remains optional inside Quote Details.
+    // Date picking chrome is intentionally absent; the bottom axis and hover
+    // tooltip carry the chart's time references instead.
+    assert!(!rendered.contains("chart-calendar-surface"), "{rendered}");
     assert!(
-        rendered.contains("text \"About this instrument\""),
-        "{rendered}"
-    );
-    assert!(
-        rendered.contains("AccordionItem :open[Bool(false)]"),
-        "the shut section must carry its state on the item:\n{rendered}"
-    );
-
-    // The month grid, read off the retained CalendarState. August 2026 opens
-    // on a Saturday, so its first week is six days of July and the 1st.
-    assert!(
-        rendered.contains("Button \"calendar-day-2026-07-26\"")
-            && rendered.contains("Button \"calendar-day-2026-08-01\""),
-        "the grid must carry the neighbouring month's days:\n{rendered}"
-    );
-    assert!(
-        rendered.contains("Button \"calendar-day-2026-08-14\" :selected[Bool(true)]"),
-        "the chosen day must be the selected cell:\n{rendered}"
-    );
-
-    // The surface is the script's own, so it closes on a press outside; and
-    // the wheel over the chart drives a value rather than a scroll container.
-    assert!(rendered.contains(":on_mouse_down_out(fn)"), "{rendered}");
-    assert!(
-        rendered.contains("div :id[Str(\"price-chart-wheel\")] :on_scroll_wheel(fn)"),
+        rendered.contains("div :id[Str(\"price-chart-wheel\")]")
+            && rendered.contains(":on_scroll_wheel(fn)"),
         "{rendered}"
     );
 
@@ -1699,7 +1670,7 @@ fn escape_puts_away_what_the_workspace_opened_and_then_carries_on(cx: &mut TestA
     };
 
     let opened = tree(&mut context);
-    assert!(opened.contains("chart-calendar-surface"), "{opened}");
+    assert!(!opened.contains("chart-calendar-surface"), "{opened}");
     // Every avatar in the application is a fallback: it knows no faces, and
     // the product mark is already in the header rather than in a circle.
     // `avatar_slots.test.js` is where the image slot is checked.

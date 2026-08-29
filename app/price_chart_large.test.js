@@ -40,7 +40,7 @@ export default class LargePriceChartProbe extends LongbridgeApp {
   render() {
     return v_flex()
       .w(520)
-      .h(240)
+      .h(300)
       .child(
         Button.new("publish-large-chart")
           .h(40)

@@ -5,7 +5,7 @@ import { View, div, svg } from "gpui";
 import { holdContext } from "./context.js";
 import {
   CalendarState,
-  DockArea,
+  Button,
   InputState,
   Popover,
   Scrollbar,
@@ -13,8 +13,6 @@ import {
   TableBody,
   Tab,
   Tabs,
-  dock_area,
-  dock_content,
   h_flex,
   set_theme,
   v_flex,
@@ -60,19 +58,9 @@ import { loadFpsVisible, saveFpsVisible } from "./fps_preference.js";
 import { omarchyBaseColors, omarchyMarketColors, omarchyTheme } from "./system_theme.js";
 import { setOmarchyAvatarColors, setOmarchyMarketColors, statusColors } from "./palette.js";
 import {
-  ChartPanel,
-  MarketDetailPanel,
-  QuoteDetailsPanel,
-  WatchlistPanel,
-  holdWorkspaceApp,
-} from "./workspace.js";
-import {
-  accordionGroup,
-  accordionSection,
   action,
   allocationChart,
   connectionPill,
-  detailToggle,
   detailGrid,
   emptyPanel,
   kbd,
@@ -81,9 +69,6 @@ import {
   HOLDING_ROW_HEIGHT,
   PANE_INSET,
   WATCHLIST_MIN_WIDTH,
-  dockDropHint,
-  dockFrame,
-  dockTabBar,
   TABLE_HEADER_HEIGHT,
   holdingRow,
   holdingsHeader,
@@ -107,6 +92,7 @@ import {
   themeButton,
   timeSalesPanel,
   watchlistHeader,
+  workspacePanel,
 } from "./ui.js";
 
 let themes = null;
@@ -125,78 +111,20 @@ async function currentOmarchyColors() {
 // the panel growing. Any ceiling would do; this one keeps the summary and the
 // allocation chart reachable above it without a scroll.
 const HOLDINGS_VIEWPORT_ROWS = 10;
-const WORKSPACE_LAYOUT_KEY = "workspace.layout.dock-panels-v1";
-const WORKSPACE_LAYOUT_VERSION = 7;
-const DETAIL_DOCK_WIDTH = 660;
-const DEFAULT_DETAIL_DOCK_RATIO = 0.4;
-const panelState = (name) => ({
-  panel_name: `shell:com.longbridge.gpui-shell-example/${name}`,
-  children: [],
-  info: { panel: {} },
-});
-const tabState = (name) => ({
-  panel_name: "TabPanel",
-  children: [panelState(name)],
-  info: { tabs: { active_index: 0 } },
-});
-const detailStackState = () => ({
-  panel_name: "StackPanel",
-  children: [tabState("quote-details"), tabState("chart"), tabState("market-detail")],
-  info: { stack: { sizes: [220, 300, 0], axis: 1 } },
-});
-const DEFAULT_WORKSPACE_LAYOUT = Object.freeze({
-  version: WORKSPACE_LAYOUT_VERSION,
-  center: {
-    panel_name: "StackPanel",
-    children: [tabState("watchlist")],
-    info: { stack: { sizes: [0], axis: 0 } },
-  },
-  right_dock: {
-    panel: detailStackState(),
-    placement: "right",
-    size: DETAIL_DOCK_WIDTH,
-    open: true,
-  },
-});
+const RESPONSIVE_DETAIL_MIN_WIDTH = 320;
+const WORKSPACE_PANEL_GAP = 8;
 
-function defaultWorkspaceLayout() {
-  const layout = JSON.parse(JSON.stringify(DEFAULT_WORKSPACE_LAYOUT));
-  const viewportWidth = Number(window.viewport_size().width);
-  if (viewportWidth > 0) {
-    layout.right_dock.size =
-      Math.max(0, viewportWidth - PANE_INSET * 2) * DEFAULT_DETAIL_DOCK_RATIO;
-  }
-  return clampWorkspaceLayout(layout);
-}
-
-function clampWorkspaceLayout(layout) {
-  const viewportWidth = Number(window.viewport_size().width);
-  if (viewportWidth > 0 && layout.right_dock) {
-    layout.right_dock.size = Math.min(
-      Number(layout.right_dock.size) || DETAIL_DOCK_WIDTH,
-      Math.max(0, viewportWidth - PANE_INSET * 2 - WATCHLIST_MIN_WIDTH),
-    );
-  }
-  return layout;
-}
-
-function panelWidthInTree(node, panelName, inheritedWidth) {
-  if (!node || typeof node !== "object") return null;
-  const bare = String(node.panel_name ?? "")
-    .split("/")
-    .at(-1);
-  if (bare === panelName) return inheritedWidth;
-  const children = Array.isArray(node.children) ? node.children : [];
-  const stack = node.info?.stack;
-  for (let index = 0; index < children.length; index += 1) {
-    const width =
-      stack?.axis === 0 && Number(stack.sizes?.[index]) > 0
-        ? Number(stack.sizes[index])
-        : inheritedWidth;
-    const found = panelWidthInTree(children[index], panelName, width);
-    if (found !== null) return found;
-  }
-  return null;
+function responsivePanelWidths(viewportWidth) {
+  const available = Math.max(0, Number(viewportWidth) - PANE_INSET * 2);
+  const sideBySide =
+    available >= WATCHLIST_MIN_WIDTH + RESPONSIVE_DETAIL_MIN_WIDTH + WORKSPACE_PANEL_GAP;
+  if (!sideBySide) return { available, sideBySide, watchlist: available, detail: available };
+  const content = available - WORKSPACE_PANEL_GAP;
+  const detail = Math.max(
+    RESPONSIVE_DETAIL_MIN_WIDTH,
+    Math.min(content - WATCHLIST_MIN_WIDTH, content * 0.4),
+  );
+  return { available, sideBySide, watchlist: content - detail, detail };
 }
 /**
  * How long the steps before the stream exists may take before the window says
@@ -307,7 +235,7 @@ function motion(element, property) {
  * which is where the question is asked.
  */
 const NARROW_VIEWPORT = 960;
-const COMPACT_WATCHLIST_WIDTH = 620;
+const COMPACT_WATCHLIST_WIDTH = 440;
 
 /** How many holdings one page of the Holdings panel shows. */
 
@@ -542,7 +470,6 @@ export default class LongbridgeApp extends View {
     this.initKeyboard(cx);
     this.initChartCalendar(cx);
     this.initPriceChartView(cx);
-    this.initWorkspaceDock(cx);
     this.clock = cx.timer.every(1_000, (cx) => {
       this.syncSystemTheme(cx);
       this.lastTick = Date.now();
@@ -631,6 +558,7 @@ export default class LongbridgeApp extends View {
     // This deliberately never reads or writes localStorage: a chosen chart
     // mode belongs to this running application session, not the login session.
     this.chartMode = "5D";
+    this.chartModeMenuOpen = false;
     this.chartCache = new Map();
   }
 
@@ -751,9 +679,17 @@ export default class LongbridgeApp extends View {
         : mode === "5D"
           ? compactFiveDaySeries(prepareFiveDaySeries(symbol, candles), PRICE_CHART_LAYOUT)
           : prepareCandleSeries(windowCandles(candles));
+    const end = this.chartEndDate ?? calendarDay(new Date());
+    const description =
+      mode === "intraday"
+        ? `Trading day ${end}`
+        : mode === "5D"
+          ? `Five sessions to ${end}`
+          : `${mode} bars ending ${end}`;
     return {
       symbol,
       mode,
+      description,
       chartSeries,
       state,
       layout: PRICE_CHART_LAYOUT,
@@ -773,6 +709,7 @@ export default class LongbridgeApp extends View {
     if (
       previous?.symbol === next.symbol &&
       previous?.mode === next.mode &&
+      previous?.description === next.description &&
       previous?.chartSeries === next.chartSeries &&
       previous?.state === next.state &&
       previous?.layout === next.layout &&
@@ -782,45 +719,6 @@ export default class LongbridgeApp extends View {
     }
     this.publishedPriceChartProps = next;
     this.priceChart.set_props(next);
-  }
-
-  /**
-   * Creates the workspace dock and its Watchlist plus three detail panels.
-   *
-   * The layout is the user's, not the application's: which pane is where, how
-   * wide the watchlist is, whether it is collapsed. So it lives in a retained
-   * `DockArea` and is written back to storage whenever it changes, rather than
-   * being described afresh on every render — a dock rebuilt from a description
-   * would undo every drag the moment anything else redrew.
-   *
-   * @param {import("gpui").Context} cx
-   */
-  /**
-   * Repaints the two panes.
-   *
-   * A dock panel is not a child of this view's description — the dock area
-   * holds it — so `cx.notify()` here repaints the header, the footer and the
-   * chrome, and reaches neither pane. This is the other half of that: it hands
-   * each panel a targeted notification, because what the call is for is a
-   * repaint of shared state rather than a new value.
-   *
-   * @param {import("gpui").Context | import("gpui").AsyncContext} cx
-   */
-  syncWorkspacePanels(cx) {
-    // Each `set_props` crosses the nested-view bridge and rebuilds that pane's
-    // whole description, so publishing to both on every repaint costs twice
-    // what the change was worth -- a quote for an instrument nobody selected
-    // moves a row in the watchlist and nothing at all in the details. On the
-    // resizable workspace this view drew both panes itself and one `notify`
-    // covered them; the bridge is what makes the difference worth tracking.
-    const panes = this.dirtyPanes;
-    this.dirtyPanes = 0;
-    // These panes read the shared application they retained during `init`.
-    // `cx.notify(entity)` is GPUI's targeted invalidation: unlike `set_props`,
-    // it does not run a child update transaction or checkpoint every object
-    // reachable through that application reference.
-    void panes;
-    void cx;
   }
 
   /**
@@ -881,22 +779,9 @@ export default class LongbridgeApp extends View {
     });
   }
 
-  /**
-   * What every mutation site calls: repaint this view, and repaint the panes.
-   *
-   * One funnel rather than a `cx.notify()` at each site, because after the
-   * workspace became a dock those are two different requests and forgetting the
-   * second one is invisible — the header updates and the table does not.
-   *
-   * @param {import("gpui").Context} cx
-   */
-  redraw(cx, panes = PANE_BOTH) {
-    this.paneRevisions ??= { watchlist: 0, quote: 0, chart: 0, market: 0 };
-    if (panes & PANE_WATCHLIST) this.paneRevisions.watchlist += 1;
-    if (panes & PANE_QUOTE) this.paneRevisions.quote += 1;
-    if (panes & PANE_CHART) this.paneRevisions.chart += 1;
-    if (panes & PANE_MARKET) this.paneRevisions.market += 1;
-    if (panes !== PANE_MARKET) cx.notify();
+  /** One repaint funnel for the plain Panel workspace. */
+  redraw(cx, _panes = PANE_BOTH) {
+    cx.notify();
   }
 
   releasePriceChartView() {
@@ -1051,8 +936,6 @@ export default class LongbridgeApp extends View {
     this.userMenuOpen = false;
     this.allocationHelpOpen = false;
     /** Which stock-detail sections are expanded. */
-    this.detailSections = { about: false };
-    this.paneRevisions = { watchlist: 0, quote: 0, chart: 0, market: 0 };
     this.watchlistQuery = "";
     this.holdingsQuery = "";
     this.watchlistFilter = InputState.new({ placeholder: "Filter watchlist" });
@@ -1065,70 +948,6 @@ export default class LongbridgeApp extends View {
       this.holdingsQuery = this.holdingsFilter.value();
       this.redraw(cx);
     });
-  }
-
-  initWorkspaceDock(_cx) {
-    holdWorkspaceApp(this);
-    DockArea.register_panel("watchlist", WatchlistPanel);
-    DockArea.register_panel("quote-details", QuoteDetailsPanel);
-    DockArea.register_panel("chart", ChartPanel);
-    DockArea.register_panel("market-detail", MarketDetailPanel);
-    this.workspaceDock = DockArea.new("longbridge-workspace", {
-      version: WORKSPACE_LAYOUT_VERSION,
-    });
-    let layout = defaultWorkspaceLayout();
-    try {
-      const saved = localStorage.getItem(WORKSPACE_LAYOUT_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed?.version === WORKSPACE_LAYOUT_VERSION) layout = parsed;
-      }
-    } catch {}
-    layout = clampWorkspaceLayout(layout);
-    this.workspaceLayout = layout;
-    this.workspaceDock.load(layout);
-    this.workspaceDock.on("layout_changed", () => {
-      try {
-        this.workspaceLayout = this.workspaceDock.dump();
-        const persisted = JSON.parse(JSON.stringify(this.workspaceLayout));
-        if (persisted.right_dock) persisted.right_dock.open = true;
-        localStorage.setItem(WORKSPACE_LAYOUT_KEY, JSON.stringify(persisted));
-      } catch {}
-    });
-  }
-
-  /** Reconciles a native Dock drag with the Watchlist's application-level minimum. */
-  queueWorkspaceDockReconcile(cx) {
-    if (!this.workspaceDock || this.workspaceDockReconcileQueued) return;
-    this.workspaceDockReconcileQueued = true;
-    cx.timer.after(0, (cx) => {
-      this.workspaceDockReconcileQueued = false;
-      const viewportWidth = Number(window.viewport_size().width);
-      const maximum = Math.max(0, viewportWidth - PANE_INSET * 2 - WATCHLIST_MIN_WIDTH);
-      const current = Number(this.workspaceDock.dock_size("right")) || 0;
-      if (this.workspaceDock.is_dock_open("right") && current > maximum) {
-        this.workspaceDock.set_dock_size("right", maximum);
-      } else {
-        this.workspaceLayout = this.workspaceDock.dump();
-        try {
-          const persisted = JSON.parse(JSON.stringify(this.workspaceLayout));
-          if (persisted.right_dock) persisted.right_dock.open = true;
-          localStorage.setItem(WORKSPACE_LAYOUT_KEY, JSON.stringify(persisted));
-        } catch {}
-      }
-      this.redraw(cx, 0);
-    });
-  }
-
-  /** Restores the four independent panels to their documented default Dock layout. */
-  resetWorkspace(cx) {
-    const layout = defaultWorkspaceLayout();
-    try {
-      localStorage.removeItem(WORKSPACE_LAYOUT_KEY);
-    } catch {}
-    this.workspaceLayout = layout;
-    this.workspaceDock.load(layout);
-    this.redraw(cx);
   }
 
   /**
@@ -1705,15 +1524,6 @@ export default class LongbridgeApp extends View {
   /** @param {import("gpui").Context} cx */
   render(cx) {
     const tokens = cx.theme();
-    const viewportWidth = Number(window.viewport_size().width);
-    if (
-      this.workspaceDock &&
-      this.page === "watchlist" &&
-      viewportWidth !== this.lastWorkspaceViewportWidth
-    ) {
-      this.lastWorkspaceViewportWidth = viewportWidth;
-      this.queueWorkspaceDockReconcile(cx);
-    }
     return this.workspaceActions(
       div()
         .id("workspace-root")
@@ -1847,21 +1657,6 @@ export default class LongbridgeApp extends View {
             .justify_end()
             .gap(tokens.spacing.sm)
             .child(connectionPill(tokens, this.status.state))
-            .when(
-              this.hasStoredTokens && this.page === "watchlist" && Boolean(this.workspaceDock),
-              (element) => {
-                const open = this.workspaceDock.is_dock_open("right");
-                return element.child(
-                  detailToggle(tokens, open, (_event, cx) => {
-                    this.workspaceDock.toggle_dock("right");
-                    this.redraw(cx, 0);
-                  }),
-                );
-              },
-            )
-            // Only on the page that has the pane it folds. Portfolio is one
-            // column with no details beside it, so the control there would be a
-            // switch for something that is not on screen.
             .when(!this.followsSystemTheme, (element) =>
               element.child(
                 themeButton(tokens, (_event, cx) =>
@@ -1966,27 +1761,7 @@ export default class LongbridgeApp extends View {
    * Release throughput while still letting a wide Watchlist show its columns.
    */
   isWatchlistCompact() {
-    const viewportWidth = window.viewport_size().width;
-    if (!this.workspaceLayout) return viewportWidth < NARROW_VIEWPORT;
-    try {
-      const layout = this.workspaceLayout;
-      const regions = [
-        [layout.left_dock, layout.left_dock?.size ?? viewportWidth],
-        [layout.right_dock, layout.right_dock?.size ?? viewportWidth],
-        [layout.bottom_dock, viewportWidth],
-        [
-          { panel: layout.center },
-          viewportWidth -
-            (layout.left_dock?.open ? Number(layout.left_dock.size) || 0 : 0) -
-            (layout.right_dock?.open ? Number(layout.right_dock.size) || 0 : 0),
-        ],
-      ];
-      for (const [region, width] of regions) {
-        const measured = panelWidthInTree(region?.panel, "watchlist", width);
-        if (measured !== null) return measured < COMPACT_WATCHLIST_WIDTH;
-      }
-    } catch {}
-    return viewportWidth < NARROW_VIEWPORT;
+    return responsivePanelWidths(window.viewport_size().width).watchlist < COMPACT_WATCHLIST_WIDTH;
   }
 
   /** @param {import("gpui-base").Theme} tokens */
@@ -2050,30 +1825,52 @@ export default class LongbridgeApp extends View {
       .child(v_flex().w(400).child(this.authPanel(tokens)));
   }
 
-  /**
-   * The workspace, as a dock the user rearranges and keeps.
-   *
-   * The two panes used to be halves of a resizable group, which meant the
-   * layout was a property of the description: the split had to be re-decided
-   * every render, the narrow case needed a second group with its own id, and
-   * nothing could be moved, collapsed or reordered. A dock area answers all
-   * three — the layout is a value the user edits and this view only draws it.
-   *
-   * Base draws no chrome, so everything visible here is `ui.js`.
-   *
-   * @param {import("gpui-base").Theme} tokens
-   */
+  /** Four plain Panels, ordered by information priority and responsive by width. */
   watchlistPage(tokens) {
-    return dock_area(this.workspaceDock)
+    const { sideBySide } = responsivePanelWidths(window.viewport_size().width);
+    const watchlist = workspacePanel(tokens, "Watchlist", this.watchlist(tokens));
+    const quote = workspacePanel(tokens, "Quote Details", this.quoteDetailsPanel(tokens));
+    const chart = workspacePanel(
+      tokens,
+      "Chart",
+      this.chartDetailsPanel(tokens),
+      this.chartModeTabs(tokens),
+    );
+    const market = workspacePanel(tokens, "Market Detail", this.marketDetailPanel(tokens));
+
+    if (!sideBySide) {
+      return v_flex()
+        .id("watchlist-panels-stacked")
+        .flex_1()
+        .min_h(0)
+        .gap(WORKSPACE_PANEL_GAP)
+        .overflow_y_scrollbar()
+        .child(watchlist.h(440).flex_none())
+        .child(quote.h(250).flex_none())
+        .child(chart.h(290).flex_none())
+        .child(market.h(360).flex_none());
+    }
+
+    return h_flex()
+      .id("watchlist-panels")
       .flex_1()
       .min_h(0)
-      .tab_bar((group, cx) => dockTabBar(cx.theme(), group))
-      .empty_group((_group, cx) => emptyPanel(cx.theme(), "Empty panel", "Drop a panel here."))
-      .drop_indicator((drop, cx) => dockDropHint(cx.theme(), drop))
-      .dock((dock, cx) =>
-        dockFrame(cx.theme(), dock, dock_content().flex_1().min_h(0).w_full(), (cx, final) =>
-          final || this.pointerDown ? this.queueWorkspaceDockReconcile(cx) : undefined,
-        ),
+      .min_w(0)
+      .items_stretch()
+      .gap(WORKSPACE_PANEL_GAP)
+      .child(watchlist.flex_basis(0).flex_grow(6).min_w(WATCHLIST_MIN_WIDTH).min_h(0))
+      .child(
+        v_flex()
+          .id("detail-panels")
+          .flex_basis(0)
+          .flex_grow(4)
+          .min_w(RESPONSIVE_DETAIL_MIN_WIDTH)
+          .min_h(0)
+          .gap(WORKSPACE_PANEL_GAP)
+          .overflow_y_scrollbar()
+          .child(quote.flex_basis(180).flex_grow(1).min_h(160))
+          .child(chart.h(290).flex_none())
+          .child(market.flex_basis(220).flex_grow(1).min_h(180)),
       );
   }
 
@@ -2249,12 +2046,6 @@ export default class LongbridgeApp extends View {
             ),
           )
           .child(
-            menuItem(tokens, "user-menu-reset-layout", "Reset layout", (_event, cx) => {
-              close(cx);
-              this.resetWorkspace(cx);
-            }),
-          )
-          .child(
             menuItem(
               tokens,
               "user-menu-status-bar",
@@ -2301,6 +2092,19 @@ export default class LongbridgeApp extends View {
               },
               { disabled: !selected },
             ),
+          )
+          .child(rule(tokens))
+          .child(
+            menuItem(tokens, "user-menu-longbridge", "Longbridge website", (_event, cx) => {
+              close(cx);
+              cx.open_url("https://longbridge.com");
+            }),
+          )
+          .child(
+            menuItem(tokens, "user-menu-github", "GitHub", (_event, cx) => {
+              close(cx);
+              cx.open_url("https://github.com/longbridge/longbridge-lite");
+            }),
           )
           .child(rule(tokens))
           .when(!this.followsSystemTheme, (element) =>
@@ -2353,9 +2157,15 @@ export default class LongbridgeApp extends View {
           )
           .child(rule(tokens))
           .child(
-            // The only way out while signed in: the sign-in card is not on
-            // screen once a session is live, so its "Clear session" cannot be
-            // reached from here.
+            // Account switching starts from a clean authorization session;
+            // otherwise Longbridge would silently reuse the current account.
+            menuItem(tokens, "user-menu-switch-account", "Switch account…", (_event, cx) => {
+              close(cx);
+              this.signOut(cx);
+              this.signIn(cx);
+            }),
+          )
+          .child(
             menuItem(
               tokens,
               "user-menu-sign-out",
@@ -2422,8 +2232,7 @@ export default class LongbridgeApp extends View {
     this.loadSelectedChart(cx);
   }
 
-  // Test probes that draw the old inline shell still call this method. The
-  // application dock never does: production gives each child its own tile.
+  // Test probes can draw the complete detail stack without the Watchlist.
   stockDetail(tokens) {
     return v_flex()
       .size_full()
@@ -2440,13 +2249,9 @@ export default class LongbridgeApp extends View {
     return this.quotes.find((entry) => entry.symbol === this.selectedSymbol) ?? this.quotes[0];
   }
 
-  /** Quote facts are always expanded: this dock tile is the disclosure. */
+  /** Quote facts are always expanded: the Panel itself is the disclosure. */
   quoteDetailsPanel(tokens) {
     const quote = this.selectedQuote();
-    const toggle = (name) => (open, cx) => {
-      this.detailSections = { ...this.detailSections, [name]: open };
-      this.redraw(cx, PANE_QUOTE);
-    };
     return panel(tokens)
       .id("quote-details-panel")
       .border_t(0)
@@ -2461,29 +2266,6 @@ export default class LongbridgeApp extends View {
               .min_h(0)
               .overflow_y_scrollbar()
               .child(quoteDetail(tokens, quote, this.lastTick, this.quotePulse ?? 1))
-              .child(rule(tokens))
-              .child(
-                accordionGroup("quote-details-sections").child(
-                  accordionSection(tokens, {
-                    id: "detail-about",
-                    title: "About this instrument",
-                    detail: quote.market,
-                    level: 3,
-                    open: this.detailSections.about,
-                    onToggle: toggle("about"),
-                    body: v_flex()
-                      .p(tokens.spacing.md)
-                      .child(
-                        detailGrid(tokens, [
-                          { title: "Symbol", value: quote.symbol },
-                          { title: "Market", value: quote.market || "--" },
-                          { title: "Currency", value: quote.currency || "--" },
-                          { title: "Stream sequence", value: String(quote.sequence ?? "--") },
-                        ]),
-                      ),
-                  }),
-                ),
-              )
           : emptyPanel(
               tokens,
               "Watchlist is empty",
@@ -2492,7 +2274,7 @@ export default class LongbridgeApp extends View {
       );
   }
 
-  /** The retained chart has its own tile and is never mounted by market-detail pushes. */
+  /** The retained chart has its own Panel and is never mounted by market-detail pushes. */
   chartDetailsPanel(tokens) {
     return panel(tokens)
       .id("chart-panel")
@@ -2502,6 +2284,87 @@ export default class LongbridgeApp extends View {
       .min_h(0)
       .bg(tokens.background)
       .child(v_flex().flex_1().min_h(0).overflow_y_scrollbar().child(this.chartSection(tokens)));
+  }
+
+  /** Compact underline interval tabs carried by the Chart Panel TitleBar. */
+  chartModeTabs(tokens) {
+    const mode = this.activeChartMode();
+    const chartModes = [
+      ["intraday", "Intraday"],
+      ["5D", "5D"],
+      ["1m", "1m"],
+      ["5m", "5m"],
+      ["15m", "15m"],
+      ["1D", "1D"],
+    ];
+    const chartWidth = responsivePanelWidths(window.viewport_size().width).detail;
+    if (chartWidth < 440) {
+      const caption = chartModes.find(([id]) => id === mode)?.[1] ?? mode;
+      return Popover.new("chart-mode-menu")
+        .open(this.chartModeMenuOpen)
+        .on_open_change((open, cx) => {
+          this.chartModeMenuOpen = open;
+          this.redraw(cx);
+        })
+        .trigger(
+          Button.new("chart-mode-menu-trigger")
+            .accessibility_label("Chart interval")
+            .flex()
+            .items_center()
+            .justify_center()
+            .h(22)
+            .px(tokens.spacing.xs)
+            .border(0)
+            .bg(tokens.background)
+            .text_size(11)
+            .text_color(tokens.foreground)
+            .child(`${caption} ▾`),
+        )
+        .content(
+          popoverSurface(tokens, { width: 112, menu: true }).children(
+            chartModes.map(([id, itemCaption]) =>
+              menuItem(
+                tokens,
+                `chart-mode-menu-${id}`,
+                itemCaption,
+                (_event, cx) => {
+                  this.chartModeMenuOpen = false;
+                  this.setChartMode(id, cx);
+                },
+                { detail: mode === id ? "✓" : "" },
+              ),
+            ),
+          ),
+        );
+    }
+    return Tabs.new("chart-mode-tabs")
+      .id("chart-mode-selector")
+      .axis("horizontal")
+      .accessibility_label("Chart interval")
+      .flex_none()
+      .min_w(0)
+      .overflow_x_scroll()
+      .child(
+        h_flex()
+          .flex_none()
+          .children(
+            chartModes.map(([id, caption]) => {
+              const selected = mode === id;
+              return Tab.new(`chart-mode-${id}`)
+                .selected(selected)
+                .on_click((_event, cx) => this.setChartMode(id, cx))
+                .flex_none()
+                .h(22)
+                .px(tokens.spacing.xs)
+                .text_size(11)
+                .border_b(2)
+                .border_color(selected ? tokens.primary : tokens.background)
+                .bg(tokens.background)
+                .text_color(selected ? tokens.foreground : tokens.muted_foreground)
+                .child(caption);
+            }),
+          ),
+      );
   }
 
   /** One market-reading scroll: Order Book then Time & Sales. */
@@ -2553,98 +2416,22 @@ export default class LongbridgeApp extends View {
     // `today()` is the day the state read when it was created, so a session
     // left open across midnight would still be holding yesterday. The ceiling
     // is the later of that and the clock, which is right either way.
-    const today = [this.chartCalendar.today(), calendarDay(new Date())].sort().at(-1);
+    const today = calendarDay(new Date());
     const end = this.chartEndDate ?? today;
-    const mode = this.activeChartMode();
-    const modeDescription =
-      mode === "intraday"
-        ? `Trading day ${end}`
-        : mode === "5D"
-          ? `Five sessions to ${end}`
-          : `${mode} bars ending ${end}`;
-    const chartModes = [
-      ["intraday", "Intraday"],
-      ["5D", "5D"],
-      ["1m", "1m"],
-      ["5m", "5m"],
-      ["15m", "15m"],
-      ["1D", "1D"],
-    ];
     return (
       v_flex()
         .relative()
-        // Match the Stock Details section inset: the date controls, chart
-        // heading, plot and date axis form one content column with Quote above.
-        .px(tokens.spacing.md)
-        .py(tokens.spacing.md)
+        // The title, interval tabs, supporting copy and plot share the Panel's
+        // `sm` content baseline; a second, larger inset made the chart appear
+        // to drift right under its own title.
+        .px(tokens.spacing.sm)
+        .py(tokens.spacing.sm)
         .gap(tokens.spacing.sm)
-        .child(
-          h_flex()
-            .items_center()
-            .gap(tokens.spacing.sm)
-            .child(
-              h_flex()
-                .id("chart-mode-selector")
-                .flex_1()
-                .min_w(0)
-                // Six compact commands remain one row at every dock width.
-                // This viewport owns only horizontal overflow; vertical wheel
-                // input remains with the Chart panel and cannot become a second
-                // chart-height-consuming row of controls.
-                .overflow_x_scroll()
-                .child(
-                  h_flex()
-                    .flex_none()
-                    .gap(tokens.spacing.xxs)
-                    .children(
-                      chartModes.map(([id, caption]) =>
-                        action(
-                          tokens,
-                          `chart-mode-${id}`,
-                          caption,
-                          (_event, cx) => this.setChartMode(id, cx),
-                          { variant: "ghost", selected: mode === id },
-                        ).flex_none(),
-                      ),
-                    ),
-                ),
-            )
-            .child(
-              h_flex()
-                .flex_none()
-                .items_center()
-                .gap(tokens.spacing.xs)
-                .child(
-                  action(
-                    tokens,
-                    "chart-date-picker",
-                    end,
-                    (_event, cx) => {
-                      this.calendarOpen = !this.calendarOpen;
-                      this.redraw(cx);
-                    },
-                    { variant: "ghost", selected: this.calendarOpen },
-                  ),
-                )
-                .when(Boolean(this.chartEndDate), (element) =>
-                  element.child(
-                    action(
-                      tokens,
-                      "chart-date-today",
-                      "Today",
-                      (_event, cx) => {
-                        this.setChartEnd(null, cx);
-                      },
-                      { variant: "ghost", quiet: true },
-                    ),
-                  ),
-                ),
-            ),
-        )
-        .child(muted(tokens, modeDescription))
         .child(
           div()
             .id("price-chart-wheel")
+            .flex_1()
+            .min_h(244)
             // A wheel over the chart walks the window a day at a time. The
             // handler reads `delta.y` in pixels, which is what every device
             // reports; `delta_lines` is only there when one reported lines.
@@ -2656,7 +2443,6 @@ export default class LongbridgeApp extends View {
             })
             .child(this.priceChart),
         )
-        .when(this.calendarOpen, (element) => element.child(this.calendarSurface(tokens, today)))
     );
   }
 
@@ -2713,10 +2499,6 @@ export default class LongbridgeApp extends View {
   setChartEnd(day, cx) {
     if (day === this.chartEndDate) return;
     this.chartEndDate = day;
-    // The state raises `change` from `set_value`, and the handler `init`
-    // registered is where the reload is written. Setting what it already holds
-    // would be a host call and an event with nothing behind them.
-    if (this.chartCalendar.value() !== day) this.chartCalendar.set_value(day);
     this.loadSelectedChart(cx);
     this.redraw(cx);
   }

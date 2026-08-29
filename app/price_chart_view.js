@@ -12,7 +12,7 @@ import { layoutCandles } from "./candlestick_chart.js";
 import { valueTone } from "./palette.js";
 import { label, muted, numeric } from "./ui.js";
 
-export const PRICE_CHART_LAYOUT = Object.freeze({ width: 480, height: 132, dayGap: 8 });
+export const PRICE_CHART_LAYOUT = Object.freeze({ width: 480, height: 198, dayGap: 8 });
 
 const TYPE = Object.freeze({ bodySmall: 11, body: 12 });
 const MARKER_SIZE = 6;
@@ -274,6 +274,7 @@ export default class PriceChartView extends View {
     const previousTheme = this.themeRevision;
     this.symbol = props.symbol;
     this.mode = props.mode ?? "5D";
+    this.description = props.description ?? "";
     this.chartSeries = props.chartSeries;
     this.state = props.state;
     this.layout = props.layout;
@@ -337,18 +338,14 @@ export default class PriceChartView extends View {
   chartFrame(tokens, geometry) {
     return v_flex()
       .id(`price-chart-${this.mode}`)
-      .h(178)
+      .h(244)
       .gap(tokens.spacing.xs)
       .child(
         h_flex()
           .w_full()
           .items_baseline()
           .justify_between()
-          .child(
-            label(tokens, chartTitle(this.mode), TYPE.body)
-              .font_weight(700)
-              .text_color(tokens.muted_foreground),
-          )
+          .when(this.description, (element) => element.child(muted(tokens, this.description)))
           .when(geometry.min !== null, (element) =>
             element.child(
               numeric(

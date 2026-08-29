@@ -95,7 +95,6 @@ export default class MarketDetailStateProbe extends LongbridgeApp {
       timer: { after: (_delay, callback) => ((scheduled = callback), {}) },
     };
     let retainedChartPublishes = 0;
-    const marketRevision = this.paneRevisions?.market ?? 0;
     this.priceChart = {
       set_props: () => (retainedChartPublishes += 1),
       release: () => {},
@@ -123,8 +122,8 @@ export default class MarketDetailStateProbe extends LongbridgeApp {
       "detail-only updates do not publish new retained-chart props",
     );
     check(
-      notified.length === 0 && this.paneRevisions.market === marketRevision + 1,
-      "depth and trades publish one Market Detail revision without repainting the root",
+      notified.length === 1 && notified[0] === "root",
+      "depth and trades publish one coalesced root repaint for the plain Panel workspace",
     );
     check(
       retainedChartPublishes === 0,

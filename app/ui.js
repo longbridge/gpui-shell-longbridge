@@ -217,22 +217,6 @@ export function themeButton(tokens, onClick) {
  * @param {boolean} open
  * @param {(event: import("gpui").ClickEvent, cx: import("gpui").Context) => void} onClick
  */
-export function detailToggle(tokens, open, onClick) {
-  const hint = open ? "Hide stock details" : "Show stock details";
-  return iconBox(tokens, Button.new("detail-toggle"))
-    .accessibility_label(hint)
-    .tooltip(hint)
-    .selected(open)
-    .on_click(onClick)
-    .border_color(open ? tokens.border : tokens.surface)
-    .bg(open ? tokens.muted : tokens.surface)
-    .text_color(open ? tokens.foreground : tokens.muted_foreground)
-    .transition("opacity", MOTION)
-    .hover((style) => style.bg(tokens.accent).text_color(tokens.accent_foreground))
-    .focus((style) => style.bg(tokens.accent).text_color(tokens.accent_foreground))
-    .child(icon(open ? "assets/panel-right.svg" : "assets/panel-right-collapsed.svg"));
-}
-
 /** @param {import("gpui-base").Theme} tokens @param {string} id @param {string} caption @param {string} url */
 export function externalLink(tokens, id, caption, url) {
   return Link.new(id)
@@ -922,7 +906,7 @@ function metricRows(tokens, entries) {
 export function quoteDetail(tokens, quote, now = Date.now(), pulseOpacity = 1) {
   const tone = changeTone(tokens, quote.change);
   const cell = (content) =>
-    v_flex().min_w(0).flex_basis(220).flex_grow(1).gap(tokens.spacing.sm).child(content);
+    v_flex().min_w(0).flex_basis(130).flex_grow(1).gap(tokens.spacing.sm).child(content);
   return h_flex()
     .id("quote-detail-content")
     .flex_1()
@@ -1708,128 +1692,30 @@ export function kbd(tokens, keystroke, state = {}) {
   );
 }
 
-// The dock's chrome.
-//
-// Base draws none of it — an area with no chrome still docks, drags, resizes
-// and persists, painting only its panels — so a tab bar, a dock frame, a
-// collapse control and a resize handle are ordinary elements written here with
-// the ordinary style surface.
-//
-// None of them registers an event handler, and that is the one rule worth
-// knowing. A chrome callback runs once per container per frame for as long as
-// the dock is on screen, so a handler created inside one would pile up for as
-// long as the window stood. `select_tab`, `close_panel`, `toggle_dock` and
-// `resize_dock` are commands instead: they name a container and what to ask
-// it, carry no script value at all, and base does the work.
-
-/** The height of a dock's title strip, and of the tab bar beside it. */
 /**
- * What a pane holds back on each side, so the canvas shows between two of them.
- *
- * It has to be applied to the tab bar *and* to the pane body, and by the same
- * amount, because they are siblings inside the region base gives a dock: an
- * inset body under a full-width tab bar is a pane narrower than its own tab,
- * which reads as a misalignment rather than as a gap. Neither can be inset per
- * side -- a `DockGroup` does not know which dock it is in -- so both are inset
- * on both sides, and two adjacent regions come to twice this.
+ * The page inset. Combined with the same small gap between Panels, it keeps
+ * the title bar, window edge and all four Panel outlines on one spacing grid.
  */
 export const PANE_INSET = 4;
-export const PANEL_TITLE_TOP_GAP = 2;
 export const WATCHLIST_MIN_WIDTH = 400;
 
-export function panelTitle(name) {
-  const bare = name.slice(name.lastIndexOf("/") + 1);
-  return (
-    {
-      watchlist: "Watchlist",
-      "quote-details": "Quote Details",
-      chart: "Chart",
-      "market-detail": "Market Detail",
-    }[bare] ?? bare
-  );
-}
-
-export function dockTabBar(tokens, group) {
-  const tabs = group.tabs.filter((tab) => tab.visible);
-  if (tabs.length === 0) return div().h(0);
-  if (tabs.length === 1) {
-    return h_flex()
-      .h(30)
-      .mx(PANE_INSET)
-      .mt(PANEL_TITLE_TOP_GAP)
-      .px(tokens.spacing.sm)
-      .items_center()
-      .border_t(1)
-      .border_l(1)
-      .border_r(1)
-      .border_b(1)
-      .border_color(tokens.border)
-      .drag_tab(group, tabs[0].index)
-      .child(label(tokens, panelTitle(tabs[0].name), 13).font_weight(700));
-  }
-  return h_flex()
-    .h(30)
-    .mx(PANE_INSET)
-    .mt(PANEL_TITLE_TOP_GAP)
-    .items_end()
-    .border_t(1)
-    .border_l(1)
-    .border_r(1)
-    .border_b(1)
-    .border_color(tokens.border)
-    .children(
-      tabs.map((tab) =>
-        h_flex()
-          .id(`dock-tab-${tab.id}`)
-          .h(30)
-          .items_center()
-          .px(tokens.spacing.sm)
-          .border(1)
-          .border_color(tokens.border)
-          .text_color(tab.active ? tokens.foreground : tokens.muted_foreground)
-          .select_tab(group, tab.index)
-          .drag_tab(group, tab.index)
-          .child(panelTitle(tab.name)),
-      ),
-    );
-}
-
-export function dockFrame(tokens, dock, content, onResize = null) {
-  const bottom = dock.placement === "bottom";
-  return v_flex()
-    .size_full()
-    .relative()
-    .child(content)
+/** A plain titled Panel with an optional compact TitleBar accessory. */
+export function workspacePanel(tokens, title, content, accessory = null) {
+  return panel(tokens)
+    .min_w(0)
+    .min_h(0)
     .child(
-      div()
-        .absolute()
-        .map((element) =>
-          bottom
-            ? element.top(0).left(0).w_full().h(4).cursor_row_resize()
-            : element.top(0).h_full().w(4).cursor_col_resize(),
-        )
-        .map((element) =>
-          dock.placement === "left"
-            ? element.right(0)
-            : dock.placement === "right"
-              ? element.left(0)
-              : element,
-        )
-        .on_mouse_move((_event, cx) => onResize?.(cx, false))
-        .on_mouse_up("left", (_event, cx) => onResize?.(cx, true))
-        .resize_dock(dock),
-    );
-}
-
-export function dockDropHint(tokens, drop) {
-  return div()
-    .absolute()
-    .left(drop.to.x)
-    .top(drop.to.y)
-    .w(drop.to.width)
-    .h(drop.to.height)
-    .bg(tokens.primary)
-    .opacity(0.15)
-    .border(1)
-    .border_color(tokens.primary);
+      h_flex()
+        .h(30)
+        .flex_none()
+        .items_center()
+        .justify_between()
+        .gap(tokens.spacing.sm)
+        .px(tokens.spacing.sm)
+        .border_b(1)
+        .border_color(tokens.border)
+        .child(label(tokens, title, 13).font_weight(700))
+        .when(accessory, (element) => element.child(accessory)),
+    )
+    .child(content.border(0).flex_1().min_h(0));
 }
