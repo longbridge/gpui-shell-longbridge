@@ -155,13 +155,6 @@ function responsivePanelWidths(viewportWidth) {
  */
 const CONNECT_DEADLINE_MS = 30_000;
 
-/**
- * Every card heading is this tall, so two side by side line up whatever is in
- * them. A 24px control in one and a line of text in the other is otherwise two
- * different heights.
- */
-const CARD_HEADER_HEIGHT = 38;
-
 /** How often the chart's live tail may cross the nested-view bridge. */
 const CHART_PUBLISH_INTERVAL_MS = 500;
 
@@ -986,6 +979,8 @@ export default class LongbridgeApp extends View {
   initInteractionState() {
     this.userMenuOpen = false;
     this.allocationHelpOpen = false;
+    /** Which allocation wedge the pointer is over, by symbol. */
+    this.hoveredAllocation = null;
     this.todayOrdersQuery = "";
     this.historyOrdersQuery = "";
     this.symbolQuery = "";
@@ -1620,12 +1615,10 @@ export default class LongbridgeApp extends View {
           throw new Error(`Longbridge did not add ${symbol}. Check the symbol.`);
         }
         await this.stream?.watchSymbols([symbol]);
-        this.addSymbolPending = false;
-        this.addSymbolOpen = false;
         this.symbolInput.set_value("");
         this.symbolQuery = "";
-        this.symbolPreviewGeneration += 1;
-        this.symbolPreview = { status: "idle", symbol: "", error: "" };
+        this.forgetAddSymbol();
+        window.close_dialog();
         this.selectQuote(symbol, cx);
         this.redraw(cx);
         window.push_toast({
@@ -1848,8 +1841,7 @@ export default class LongbridgeApp extends View {
       return;
     }
     if (this.addSymbolOpen) {
-      this.addSymbolOpen = false;
-      this.redraw(cx);
+      this.closeAddSymbol(cx);
       return;
     }
     if (this.page === "orders" && this.selectedOrderId) {
@@ -1968,6 +1960,12 @@ export default class LongbridgeApp extends View {
   /** @param {import("gpui").Context} cx */
   render(cx) {
     const tokens = cx.theme();
+    // A dialog outlives the render that opened it and is handed no context of
+    // its own, so the palette it draws in is the one this pass resolved.
+    this.tokens = tokens;
+    // The shell owns a dialog once it is up -- Escape and the backdrop close
+    // it without telling anyone -- so the view reconciles rather than assumes.
+    if (this.addSymbolOpen && !window.has_active_dialog()) this.forgetAddSymbol();
     return this.workspaceActions(
       div()
         .id("workspace-root")
@@ -2336,45 +2334,102 @@ export default class LongbridgeApp extends View {
    *
    * @param {import("gpui-base").Theme} tokens
    */
-  addSymbolPopover(tokens) {
+  addSymbolTrigger(tokens) {
+    return iconAction(
+      tokens,
+      "add-symbol-trigger",
+      "Add a security",
+      "assets/plus.svg",
+      (_event, cx) => this.openAddSymbol(cx),
+    );
+  }
+
+  /**
+   * The add-a-security dialog.
+   *
+   * A dialog rather than a popover: this is a short task with a decision at
+   * the end of it -- type, read what it turned out to be, confirm or think
+   * again -- and a surface that closes when the pointer wanders is the wrong
+   * shape for one. It is also the only thing on screen while it is open, which
+   * is what lets the keyboard go straight into the field.
+   *
+   * `open_dialog` takes a function, not an element: the dialog outlives the
+   * pass that opened it and redraws from this on every notify.
+   *
+   * @param {import("gpui").Context} cx
+   */
+  openAddSymbol(cx) {
+    if (this.addSymbolOpen) return;
+    this.addSymbolOpen = true;
+    this.addSymbolError = "";
+    this.addSymbolPending = false;
+    this.symbolQuery = "";
+    this.symbolInput.set_value("");
+    this.symbolPreviewGeneration += 1;
+    this.symbolPreview = { status: "idle", symbol: "", error: "" };
+    window.open_dialog(() => this.addSymbolDialog(this.tokens), {
+      escape_dismissable: true,
+      backdrop_dismissable: true,
+    });
+    this.redraw(cx);
+  }
+
+  /** Drops what the dialog was holding, without touching the shell's stack. */
+  forgetAddSymbol() {
+    this.addSymbolOpen = false;
+    this.addSymbolPending = false;
+    this.addSymbolError = "";
+    this.symbolPreviewGeneration += 1;
+    this.symbolPreview = { status: "idle", symbol: "", error: "" };
+  }
+
+  /** @param {import("gpui").Context} cx */
+  closeAddSymbol(cx) {
+    if (!this.addSymbolOpen) return;
+    this.forgetAddSymbol();
+    window.close_dialog();
+    this.redraw(cx);
+  }
+
+  /** @param {import("gpui-base").Theme} tokens */
+  addSymbolDialog(tokens) {
     const pending = this.addSymbolPending;
-    const preview = this.symbolPreview;
-    const ready = preview.status === "ready";
-    return Popover.new("add-symbol")
-      .open(this.addSymbolOpen)
-      .anchor("top_right")
-      .on_open_change((open, cx) => {
-        this.addSymbolOpen = open;
-        if (!open) {
-          this.addSymbolError = "";
-          this.symbolPreviewGeneration += 1;
-          this.symbolPreview = { status: "idle", symbol: "", error: "" };
-        }
-        this.redraw(cx);
-      })
-      .trigger(
-        iconAction(tokens, "add-symbol-trigger", "Add a security", "assets/plus.svg", () => {}),
+    const ready = this.symbolPreview.status === "ready";
+    return v_flex()
+      .id("add-symbol-dialog")
+      .w(360)
+      .gap(tokens.spacing.md)
+      .p(tokens.spacing.lg)
+      .rounded(tokens.radius.md)
+      .border(1)
+      .border_color(tokens.border)
+      .bg(tokens.surface)
+      .child(
+        v_flex()
+          .gap(tokens.spacing.xxs)
+          .child(label(tokens, "Add to watchlist", 14).font_weight(700))
+          .child(muted(tokens, "A code, a dot and its market: AAPL.US, 700.HK, 000001.SZ.")),
       )
-      .content(
-        popoverSurface(tokens, { width: 268 })
-          .child(label(tokens, "Add to watchlist", 13).font_weight(700))
-          .child(filterInput(tokens, this.symbolInput, 244))
-          .child(this.symbolPreviewCard(tokens))
-          .when(Boolean(this.addSymbolError), (element) =>
-            element.child(errorMessage(tokens, this.addSymbolError)),
+      .child(filterInput(tokens, this.symbolInput, 320))
+      .child(this.symbolPreviewCard(tokens))
+      .when(Boolean(this.addSymbolError), (element) =>
+        element.child(errorMessage(tokens, this.addSymbolError)),
+      )
+      .child(
+        h_flex()
+          .justify_end()
+          .gap(tokens.spacing.sm)
+          .child(
+            action(tokens, "add-symbol-cancel", "Cancel", (_event, cx) => this.closeAddSymbol(cx)),
           )
           .child(
-            h_flex()
-              .justify_end()
-              .child(
-                action(
-                  tokens,
-                  "add-symbol-confirm",
-                  pending ? "Adding…" : "Add",
-                  (_event, cx) => this.addSymbol(cx),
-                  { variant: "ghost", disabled: pending || !ready },
-                ),
-              ),
+            action(
+              tokens,
+              "add-symbol-confirm",
+              pending ? "Adding…" : "Add",
+              (_event, cx) => this.addSymbol(cx),
+              { variant: "primary", disabled: pending || !ready },
+            ),
           ),
       );
   }
@@ -2392,9 +2447,7 @@ export default class LongbridgeApp extends View {
    */
   symbolPreviewCard(tokens) {
     const preview = this.symbolPreview;
-    if (preview.status === "idle") {
-      return muted(tokens, "A code, a dot and its market: AAPL.US, 700.HK, 000001.SZ.");
-    }
+    if (preview.status === "idle") return muted(tokens, "Nothing typed yet.");
     if (preview.status === "loading") return muted(tokens, `Looking up ${preview.symbol}…`);
     if (preview.status === "error") return errorMessage(tokens, preview.error);
     const held = this.quotes.some((quote) => quote.symbol === preview.symbol);
@@ -2523,7 +2576,7 @@ export default class LongbridgeApp extends View {
                 .items_center()
                 .gap(tokens.spacing.sm)
                 .child(muted(tokens, status))
-                .child(this.addSymbolPopover(tokens)),
+                .child(this.addSymbolTrigger(tokens)),
             ),
         )
         .child(rule(tokens))
@@ -3186,132 +3239,97 @@ export default class LongbridgeApp extends View {
             .items_stretch()
             .gap(tokens.spacing.md)
             .child(
-              panel(tokens)
+              workspacePanel(
+                tokens,
+                "Portfolio summary",
+                account
+                  ? portfolioSummary(tokens, account, presentation.summaries)
+                  : emptyPanel(
+                      tokens,
+                      "No account snapshot",
+                      "Waiting for Longbridge account assets.",
+                    ),
+                null,
+                { note: account ? `Risk level ${account.risk}` : "Read only" },
+              )
                 .flex_basis(0)
                 .flex_grow(4)
-                .min_w(320)
-                .child(
-                  h_flex()
-                    .items_center()
-                    .justify_between()
-                    // A stated height, not one that falls out of the contents:
-                    // the card beside this one carries a 24px control in its
-                    // header and this one carries only text, so left to their
-                    // contents the two headings sat at different heights.
-                    .h(CARD_HEADER_HEIGHT)
-                    .px(tokens.spacing.md)
-                    .child(
-                      h_flex()
-                        .items_baseline()
-                        .gap(tokens.spacing.xs)
-                        .child(label(tokens, "Portfolio summary", 14).font_weight(700))
-                        .child(muted(tokens, account ? `Risk level ${account.risk}` : "Read only")),
-                    ),
-                )
-                .child(rule(tokens))
-                .child(
-                  account
-                    ? portfolioSummary(tokens, account, presentation.summaries)
-                    : emptyPanel(
-                        tokens,
-                        "No account snapshot",
-                        "Waiting for Longbridge account assets.",
-                      ),
-                ),
+                .min_w(320),
             )
             .when(allocation.slices.length > 0 || allocation.unpriced.length > 0, (element) =>
               element.child(
-                panel(tokens)
+                workspacePanel(
+                  tokens,
+                  "Asset allocation",
+                  h_flex()
+                    .flex_wrap()
+                    .items_start()
+                    .gap(tokens.spacing.xl)
+                    .p(tokens.spacing.md)
+                    .child(
+                      v_flex()
+                        .flex_basis(360)
+                        .flex_grow(1)
+                        .child(
+                          allocationChart(tokens, allocation, {
+                            hovered: this.hoveredAllocation,
+                            onHover: (symbol, cx) => {
+                              if (this.hoveredAllocation === symbol) return;
+                              this.hoveredAllocation = symbol;
+                              this.redraw(cx);
+                            },
+                          }),
+                        ),
+                    ),
+                  // The control stays opposite the heading; only the words
+                  // that describe the card sit next to its name.
+                  this.allocationHelp(tokens, allocation),
+                  { note: "Market value in USD" },
+                )
                   .flex_basis(0)
                   .flex_grow(6)
-                  .min_w(380)
-                  .child(
-                    h_flex()
-                      .items_center()
-                      .justify_between()
-                      .h(CARD_HEADER_HEIGHT)
-                      .px(tokens.spacing.md)
-                      .child(
-                        h_flex()
-                          .items_baseline()
-                          .gap(tokens.spacing.xs)
-                          .child(label(tokens, "Asset allocation", 14).font_weight(700))
-                          .child(muted(tokens, "Market value in USD")),
-                      )
-                      // The control stays opposite the heading; only the words
-                      // that describe the card moved next to its name.
-                      .child(this.allocationHelp(tokens, allocation)),
-                  )
-                  .child(rule(tokens))
-                  .child(
-                    h_flex()
-                      .flex_wrap()
-                      .items_start()
-                      .gap(tokens.spacing.xl)
-                      .p(tokens.spacing.md)
-                      .child(
-                        v_flex()
-                          .flex_basis(360)
-                          .flex_grow(1)
-                          .child(allocationChart(tokens, allocation)),
-                      ),
-                  ),
+                  .min_w(380),
               ),
             ),
         )
         .child(
-          panel(tokens)
-            .flex_1()
-            .min_h(0)
-            .child(
-              tableToolbar(tokens)
-                .flex_none()
-                // The count sits with the title, not across the row from it. It
-                // says how much of *this* is here, so it reads as part of the
-                // heading; opposite the filter it read as a second control.
-                .child(
-                  h_flex()
-                    .items_baseline()
-                    .gap(tokens.spacing.xs)
-                    .child(label(tokens, "Holdings", 14).font_weight(700))
-                    .child(
-                      muted(
-                        tokens,
-                        holdingRows.length === this.holdings.length
-                          ? `${this.holdings.length} positions`
-                          : `${holdingRows.length} of ${this.holdings.length} positions`,
-                      ),
-                    ),
-                )
-                .child(filterInput(tokens, this.holdingsFilter, 160)),
+          workspacePanel(
+            tokens,
+            "Holdings",
+            this.instrumentTable(
+              tokens,
+              "holdings",
+              "Holdings",
+              holdingRows,
+              HOLDING_ROW_HEIGHT,
+              holdingsHeader(tokens),
+              (holding, index) => holdingRow(tokens, holding, index),
+              null,
+              this.holdingsQuery
+                ? emptyPanel(tokens, "No matches", "No holding matches that filter.")
+                : emptyPanel(
+                    tokens,
+                    "No stock positions",
+                    "This account currently reports no stock holdings.",
+                  ),
             )
-            .child(rule(tokens))
-            .child(
-              this.instrumentTable(
-                tokens,
-                "holdings",
-                "Holdings",
-                holdingRows,
-                HOLDING_ROW_HEIGHT,
-                holdingsHeader(tokens),
-                (holding, index) => holdingRow(tokens, holding, index),
-                null,
-                this.holdingsQuery
-                  ? emptyPanel(tokens, "No matches", "No holding matches that filter.")
-                  : emptyPanel(
-                      tokens,
-                      "No stock positions",
-                      "This account currently reports no stock holdings.",
-                    ),
-              )
-                // A definite height is what makes virtualization possible at all,
-                // and this page is a scrolling column with no leftover height to
-                // claim -- so it takes the leftover height of a page that no
-                // longer scrolls, rather than being sized from a row count and
-                // letting the page scroll past it.
-                .flex_1()
-                .min_h(0),
-            ),
+              // A definite height is what makes virtualization possible at all,
+              // and this page is a scrolling column with no leftover height to
+              // claim -- so it takes the leftover height of a page that no
+              // longer scrolls, rather than being sized from a row count and
+              // letting the page scroll past it.
+              .flex_1()
+              .min_h(0),
+            filterInput(tokens, this.holdingsFilter, 160),
+            {
+              note:
+                holdingRows.length === this.holdings.length
+                  ? `${this.holdings.length} positions`
+                  : `${holdingRows.length} of ${this.holdings.length} positions`,
+            },
+          )
+            .flex_1()
+            .min_h(0),
         )
     );
   }
@@ -3418,49 +3436,39 @@ export default class LongbridgeApp extends View {
    */
   orderDetailPanel(tokens, order) {
     const known = this.quotes.some((quote) => quote.symbol === order.symbol);
-    return panel(tokens)
-      .id("order-detail-panel")
-      .min_h(0)
-      .child(
-        h_flex()
-          .h(CARD_HEADER_HEIGHT)
-          .flex_none()
-          .items_center()
-          .justify_between()
-          .gap(tokens.spacing.sm)
-          .px(tokens.spacing.md)
-          .child(label(tokens, "Order", 14).font_weight(700))
-          .child(
-            h_flex()
-              .items_center()
-              .gap(tokens.spacing.xs)
-              .when(known, (element) =>
-                element.child(
-                  iconAction(
-                    tokens,
-                    "order-detail-quote",
-                    "Open this instrument",
-                    "assets/chart-line.svg",
-                    (_event, cx) => this.showOrderInstrument(order.orderId, cx),
-                  ),
-                ),
-              )
-              .child(
-                iconAction(
-                  tokens,
-                  "order-detail-close",
-                  "Close order detail",
-                  "assets/x.svg",
-                  (_event, cx) => {
-                    this.selectedOrderId = null;
-                    this.redraw(cx);
-                  },
-                ),
-              ),
+    return workspacePanel(
+      tokens,
+      "Order",
+      v_flex().flex_1().min_h(0).overflow_y_scrollbar().child(orderDetail(tokens, order)),
+      h_flex()
+        .items_center()
+        .gap(tokens.spacing.xs)
+        .when(known, (element) =>
+          element.child(
+            iconAction(
+              tokens,
+              "order-detail-quote",
+              "Open this instrument",
+              "assets/chart-line.svg",
+              (_event, cx) => this.showOrderInstrument(order.orderId, cx),
+            ),
           ),
-      )
-      .child(rule(tokens))
-      .child(v_flex().flex_1().min_h(0).overflow_y_scrollbar().child(orderDetail(tokens, order)));
+        )
+        .child(
+          iconAction(
+            tokens,
+            "order-detail-close",
+            "Close order detail",
+            "assets/x.svg",
+            (_e, cx) => {
+              this.selectedOrderId = null;
+              this.redraw(cx);
+            },
+          ),
+        ),
+    )
+      .id("order-detail-panel")
+      .min_h(0);
   }
 
   /**
@@ -3485,53 +3493,43 @@ export default class LongbridgeApp extends View {
     const { id, title, note = "", rows, total, filter, query, empty } = options;
     const counted = total === 1 ? "1 order" : `${total} orders`;
     const summary = query ? `${rows.length} of ${counted}` : counted;
-    return panel(tokens)
+    return workspacePanel(
+      tokens,
+      title,
+      this.ordersCollapsed(rows)
+        ? // No column heads over no rows: what is left to say is one line, and
+          // the heading above it already says whose line it is.
+          h_flex()
+            .id(`${id}-state`)
+            .items_center()
+            .px(tokens.spacing.sm)
+            .py(tokens.spacing.sm)
+            .child(muted(tokens, this.ordersEmptyLine(query, empty)))
+        : this.instrumentTable(
+            tokens,
+            id,
+            title,
+            rows,
+            ORDER_ROW_HEIGHT,
+            ordersHeader(tokens, id),
+            (order, index) =>
+              orderRow(tokens, order, index, order.orderId === this.selectedOrderId),
+            (orderId, cx) => this.selectOrder(orderId, cx),
+            this.ordersEmpty(tokens, empty),
+            6,
+            (order, index) => String(order?.orderId ?? index),
+          )
+            .flex_1()
+            .min_h(0),
+      // Both lists carry a filter, because each narrows itself: they answer
+      // different questions, and one box for the two of them hid the short
+      // list every time the long one was narrowed.
+      filterInput(tokens, filter, 160),
+      { note: note ? `${summary} · ${note}` : summary, grow: !this.ordersCollapsed(rows) },
+    )
       .id(id)
       .flex_1()
-      .min_h(0)
-      .child(
-        tableToolbar(tokens)
-          .flex_none()
-          .child(
-            h_flex()
-              .items_baseline()
-              .gap(tokens.spacing.xs)
-              .child(label(tokens, title, 14).font_weight(700))
-              .child(muted(tokens, note ? `${summary} · ${note}` : summary)),
-          )
-          // Both lists carry one, because each narrows itself: they answer
-          // different questions, and one box for the two of them hid the short
-          // list every time the long one was narrowed.
-          .child(filterInput(tokens, filter, 160)),
-      )
-      .child(rule(tokens))
-      .child(
-        this.ordersCollapsed(rows)
-          ? // No column heads over no rows: what is left to say is one line,
-            // and the heading above it already says whose line it is.
-            h_flex()
-              .id(`${id}-state`)
-              .items_center()
-              .px(tokens.spacing.sm)
-              .py(tokens.spacing.sm)
-              .child(muted(tokens, this.ordersEmptyLine(query, empty)))
-          : this.instrumentTable(
-              tokens,
-              id,
-              title,
-              rows,
-              ORDER_ROW_HEIGHT,
-              ordersHeader(tokens, id),
-              (order, index) =>
-                orderRow(tokens, order, index, order.orderId === this.selectedOrderId),
-              (orderId, cx) => this.selectOrder(orderId, cx),
-              this.ordersEmpty(tokens, empty),
-              6,
-              (order, index) => String(order?.orderId ?? index),
-            )
-              .flex_1()
-              .min_h(0),
-      );
+      .min_h(0);
   }
 
   /**

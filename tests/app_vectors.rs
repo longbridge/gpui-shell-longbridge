@@ -1385,10 +1385,12 @@ fn allocation_donut_folds_past_the_available_theme_palette(cx: &mut TestAppConte
     });
 
     // Seven priced positions, six wedges: the two smallest are one remainder.
+    // Twice over, because the probe draws the ring at rest and again with a
+    // wedge under the pointer.
     assert_eq!(
         rendered.matches("path fill").count(),
-        6,
-        "expected six wedges:\n{rendered}"
+        12,
+        "expected six wedges per ring:\n{rendered}"
     );
     assert!(
         rendered.contains("Other (2 positions)"),
@@ -1398,6 +1400,23 @@ fn allocation_donut_folds_past_the_available_theme_palette(cx: &mut TestAppConte
     assert!(
         !rendered.contains("Zeta") && !rendered.contains("Eta"),
         "folded holdings leave the legend:\n{rendered}"
+    );
+
+    // Pointing at a legend row lights its wedge and fades the others back. A
+    // wedge cannot be pointed at directly -- every one of them is painted into
+    // the same square -- so the row is the handle, and it carries the handler.
+    assert!(
+        rendered.contains(":on_hover(fn)") && rendered.contains("allocation-row-USD-A.US"),
+        "a legend row is the wedge's handle:\n{rendered}"
+    );
+    assert_eq!(
+        rendered.matches(".opacity[Number(0.4)]").count(),
+        5,
+        "one wedge lit leaves the other five faded back:\n{rendered}"
+    );
+    assert!(
+        rendered.contains(":transition(opacity, 150ms, 0ms, ease-out)"),
+        "the fade is animated rather than switched:\n{rendered}"
     );
 
     // Color origin is covered by palette.test.js; this host-level vector owns

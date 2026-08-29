@@ -586,6 +586,7 @@ fn plain_panel_title_has_one_title_and_one_content_region() {
         ui.contains(
             "export function workspacePanel(tokens, title, content, accessory = null, options = {})",
         ) && ui.contains(".child(label(tokens, title, 13).font_weight(700))")
+            && ui.contains(".when(Boolean(note), (element) => element.child(muted(tokens, note).truncate()))")
             && ui.contains(".when(accessory, (element) => element.child(accessory))")
             && ui.contains(
                 ".child(grow ? content.border(0).flex_1().min_h(0) : content.border(0).flex_none())",

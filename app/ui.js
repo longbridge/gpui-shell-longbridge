@@ -1102,16 +1102,31 @@ export function quoteDetail(tokens, quote, now = Date.now(), pulseOpacity = 1, d
 // ring, which would otherwise leave a gap in a solid circle.
 const WEDGE_GAP_RADIANS = 0.02;
 
-function donutSlice(tokens, slice, index, total, count) {
+/**
+ * One wedge.
+ *
+ * `state` is what the pointer is doing to the ring: `"lit"` for the wedge
+ * being pointed at, `"dimmed"` for the others while one is, and `"resting"`
+ * when nothing is. A lit wedge reaches further out than the ring and keeps its
+ * full colour; the rest fade back, which is what makes the one being read
+ * legible without redrawing the legend beside it.
+ *
+ * The reach is a geometry change and lands at once; the fade is an opacity
+ * change and is what actually animates. Interpolating the path itself is not
+ * something this runtime can do, and a wedge that grew over 150ms while its
+ * neighbours faded over the same 150ms would be two animations to watch.
+ */
+function donutSlice(tokens, slice, index, total, count, state = "resting") {
   const span = total > 0 ? (slice.value / total) * Math.PI * 2 : 0;
   const gap = count > 1 ? Math.min(WEDGE_GAP_RADIANS, span / 4) : 0;
   const start = (total > 0 ? (slice.offset / total) * Math.PI * 2 : 0) - Math.PI / 2 + gap;
   const end = start + span - gap * 2;
   const steps = Math.max(4, Math.ceil(((end - start) / (Math.PI * 2)) * 48));
+  const outer = state === "lit" ? 50 : 48;
   const points = [];
   for (let step = 0; step <= steps; step += 1) {
     const angle = start + ((end - start) * step) / steps;
-    points.push([`${50 + Math.cos(angle) * 48}%`, `${50 + Math.sin(angle) * 48}%`]);
+    points.push([`${50 + Math.cos(angle) * outer}%`, `${50 + Math.sin(angle) * outer}%`]);
   }
   for (let step = steps; step >= 0; step -= 1) {
     const angle = start + ((end - start) * step) / steps;
@@ -1123,11 +1138,25 @@ function donutSlice(tokens, slice, index, total, count) {
       Background.solid(allocationColor(tokens, slice, index)),
     )
     .absolute()
-    .inset_0();
+    .inset_0()
+    .opacity(state === "dimmed" ? 0.4 : 1)
+    .transition("opacity", MOTION);
 }
 
-/** @param {import("gpui-base").Theme} tokens @param {ReturnType<import("./portfolio.js").allocationInUsd>} group */
-export function allocationChart(tokens, group) {
+/**
+ * The ring, and the legend that says what its colours mean.
+ *
+ * A wedge cannot be pointed at directly -- every wedge is painted into the
+ * same square, so the box a pointer is over is the whole ring -- so the legend
+ * row is the handle: pointing at a row lights its wedge, and the ring answers
+ * the question the row asks.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {ReturnType<import("./portfolio.js").allocationInUsd>} group
+ * @param {{ hovered?: string | null, onHover?: (symbol: string | null, cx: import("gpui").Context) => void }} [pointer]
+ */
+export function allocationChart(tokens, group, pointer = {}) {
+  const { hovered = null, onHover = null } = pointer;
   const unpriced = group.unpriced.length;
   let offset = 0;
   const slices = foldAllocationSlices(group).map((slice) => {
@@ -1144,11 +1173,19 @@ export function allocationChart(tokens, group) {
       TableBody.new(`allocation-${group.currency}-body`).children(
         slices.map((slice, index) =>
           TableRow.new(`allocation-${group.currency}-${slice.symbol}`, index + 1)
+            .id(`allocation-row-${group.currency}-${slice.symbol}`)
             .flex()
             .items_center()
             .py(tokens.spacing.xs)
+            .px(tokens.spacing.xs)
+            .rounded(tokens.radius.sm)
             .border_b(1)
             .border_color(tokens.border)
+            .bg(hovered === slice.symbol ? tokens.accent : tokens.surface)
+            .transition("opacity", MOTION)
+            .when(Boolean(onHover), (row) =>
+              row.on_hover((over, cx) => onHover(over ? slice.symbol : null, cx)),
+            )
             .child(
               TableCell.new(`allocation-name-${slice.symbol}`, 1)
                 .flex()
@@ -1201,7 +1238,14 @@ export function allocationChart(tokens, group) {
             .flex_none()
             .children(
               slices.map((slice, index) =>
-                donutSlice(tokens, slice, index, group.total, slices.length),
+                donutSlice(
+                  tokens,
+                  slice,
+                  index,
+                  group.total,
+                  slices.length,
+                  hovered === null ? "resting" : hovered === slice.symbol ? "lit" : "dimmed",
+                ),
               ),
             ),
         )
@@ -2127,11 +2171,16 @@ export const WATCHLIST_MIN_WIDTH = 400;
  * @param {import("gpui-base").Theme} tokens
  * @param {string} title
  * @param {import("gpui").Element} content
+ * `note` is what the title alone cannot say: a count, a currency, a window of
+ * days. It sits with the heading rather than across the row from it, because
+ * it says how much of *this* is here; opposite the title it read as a second
+ * control.
+ *
  * @param {import("gpui").Element | null} [accessory]
- * @param {{ grow?: boolean }} [options]
+ * @param {{ grow?: boolean, note?: string }} [options]
  */
 export function workspacePanel(tokens, title, content, accessory = null, options = {}) {
-  const { grow = true } = options;
+  const { grow = true, note = "" } = options;
   return panel(tokens)
     .min_w(0)
     .min_h(0)
@@ -2145,7 +2194,14 @@ export function workspacePanel(tokens, title, content, accessory = null, options
         .px(tokens.spacing.sm)
         .border_b(1)
         .border_color(tokens.border)
-        .child(label(tokens, title, 13).font_weight(700))
+        .child(
+          h_flex()
+            .items_baseline()
+            .min_w(0)
+            .gap(tokens.spacing.xs)
+            .child(label(tokens, title, 13).font_weight(700))
+            .when(Boolean(note), (element) => element.child(muted(tokens, note).truncate())),
+        )
         .when(accessory, (element) => element.child(accessory)),
     )
     .child(grow ? content.border(0).flex_1().min_h(0) : content.border(0).flex_none());
