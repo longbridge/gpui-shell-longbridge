@@ -916,61 +916,68 @@ function metricRows(tokens, entries) {
 /** @param {import("gpui-base").Theme} tokens @param {LongbridgeQuoteRow} quote @param {number} [now] */
 export function quoteDetail(tokens, quote, now = Date.now(), pulseOpacity = 1) {
   const tone = changeTone(tokens, quote.change);
-  return v_flex()
+  const cell = (content) =>
+    v_flex()
+      .min_w(0)
+      .flex_basis(190)
+      .flex_grow(1)
+      .gap(tokens.spacing.xs)
+      .p(tokens.spacing.sm)
+      .child(content);
+  return h_flex()
     .id("quote-detail-content")
     .flex_1()
-    .p(tokens.spacing.lg)
-    .gap(tokens.spacing.lg)
+    .flex_wrap()
+    .items_stretch()
+    .p(tokens.spacing.sm)
     .child(
-      h_flex()
-        .items_center()
-        .justify_between()
-        .gap(tokens.spacing.lg)
-        .child(
-          v_flex()
-            .gap(tokens.spacing.xs)
-            .child(label(tokens, quote.name, 16).font_weight(700))
-            .child(muted(tokens, `${quote.market} · ${quote.symbol} · ${quote.currency}`))
-            .child(muted(tokens, tradeStatusLabel(quote))),
-        )
-        .child(
-          v_flex()
-            .id("quote-detail-price")
-            .items_end()
-            .gap(tokens.spacing.xs)
-            .opacity(quote.receivedAt ? pulseOpacity : 0.72)
-            .transition("opacity", MOTION)
-            .child(numeric(tokens, quote.last, 28))
-            .child(
-              numeric(tokens, `${quote.change} · ${quote.changePercent}`, 13).text_color(tone),
-            ),
-        ),
+      cell(
+        v_flex()
+          .gap(tokens.spacing.xs)
+          .child(label(tokens, quote.name, 16).font_weight(700))
+          .child(muted(tokens, `${quote.market} · ${quote.symbol} · ${quote.currency}`)),
+      ),
     )
-    .child(rule(tokens))
     .child(
-      h_flex()
-        .items_start()
-        .gap(tokens.spacing.xl)
-        .child(
-          metricRows(tokens, [
-            { title: "Previous close", value: quote.prevClose },
-            { title: "Open", value: quote.open },
-            {
-              title: "Day range",
-              value:
-                quote.low === "--" || quote.high === "--" ? "--" : `${quote.low} — ${quote.high}`,
-            },
-            { title: "Session", value: tradeStatusLabel(quote) },
-          ]),
-        )
-        .child(
-          metricRows(tokens, [
-            { title: "Volume", value: formatCompactNumber(quote.volume) },
-            { title: "Turnover", value: formatCompactNumber(quote.turnover) },
-            { title: "Last market update", value: marketTime(quote.updatedAt) },
-            { title: "Data health", value: dataHealth(quote, now) },
-          ]),
-        ),
+      cell(
+        v_flex()
+          .id("quote-detail-price")
+          .gap(tokens.spacing.xs)
+          .opacity(quote.receivedAt ? pulseOpacity : 0.72)
+          .transition("opacity", MOTION)
+          .child(numeric(tokens, quote.last, 24))
+          .child(numeric(tokens, `${quote.change} · ${quote.changePercent}`, 13).text_color(tone)),
+      ),
+    )
+    .child(
+      cell(
+        metricRows(tokens, [
+          { title: "Previous close", value: quote.prevClose },
+          { title: "Open", value: quote.open },
+        ]),
+      ),
+    )
+    .child(
+      cell(
+        metricRows(tokens, [
+          {
+            title: "Day range",
+            value:
+              quote.low === "--" || quote.high === "--" ? "--" : `${quote.low} — ${quote.high}`,
+          },
+          { title: "Session", value: tradeStatusLabel(quote) },
+        ]),
+      ),
+    )
+    .child(
+      cell(
+        metricRows(tokens, [
+          { title: "Volume", value: formatCompactNumber(quote.volume) },
+          { title: "Turnover", value: formatCompactNumber(quote.turnover) },
+          { title: "Last market update", value: marketTime(quote.updatedAt) },
+          { title: "Data health", value: dataHealth(quote, now) },
+        ]),
+      ),
     );
 }
 
@@ -1734,12 +1741,8 @@ export function kbd(tokens, keystroke, state = {}) {
  */
 export const PANE_INSET = 4;
 
-export const DOCK_BAR_HEIGHT = 30;
-
-/** The readable half of `shell:<application>/<panel>`. */
 export function panelTitle(name) {
-  const slash = name.lastIndexOf("/");
-  const bare = slash === -1 ? name : name.slice(slash + 1);
+  const bare = name.slice(name.lastIndexOf("/") + 1);
   return (
     {
       watchlist: "Watchlist",
@@ -1750,157 +1753,53 @@ export function panelTitle(name) {
   );
 }
 
-/**
- * @param {import("gpui-base").Theme} tokens
- * @param {import("gpui-base").DockGroup} group
- */
 export function dockTabBar(tokens, group) {
-  const visibleTabs = group.tabs.filter((tab) => tab.visible);
-  if (visibleTabs.length <= 1) return div().id(`dock-tabbar-hidden-${group.node}`).h(0);
-  const facesLeft = visibleTabs.some((tab) => panelTitle(tab.name) !== "Watchlist");
-  return (
-    h_flex()
-      .h(DOCK_BAR_HEIGHT)
-      .w_full()
+  const tabs = group.tabs.filter((tab) => tab.visible);
+  if (tabs.length === 0) return div().h(0);
+  if (tabs.length === 1) {
+    return h_flex()
+      .h(30)
+      .px(tokens.spacing.sm)
       .items_center()
-      // The inset is outside the fill, and the fill is on the child. A tab bar
-      // coloured across its own padding would put `surface` where the gap is
-      // meant to be, and the gap would stop being a gap.
-      .when(facesLeft, (element) => element.pl(PANE_INSET))
-      .when(!facesLeft, (element) => element.pr(PANE_INSET))
-      .bg(tokens.background)
-      .child(
-        h_flex()
-          .size_full()
-          .items_center()
-          .bg(tokens.background)
-          .border_b(1)
-          .border_color(tokens.border)
-          .drop_tab(group)
-          .children(
-            visibleTabs.map(
-              (tab) =>
-                h_flex()
-                  .id(`dock-tab-${tab.id}`)
-                  .h(DOCK_BAR_HEIGHT)
-                  .items_center()
-                  .gap(tokens.spacing.xs)
-                  .px(tokens.spacing.md)
-                  // A tab is a shape, not a word with a line after it. The active
-                  // one is drawn on three sides so it joins the pane below rather
-                  // than sitting on top of it -- that open bottom edge is what
-                  // makes a tab read as a tab. There is no per-side border colour
-                  // to paint it out with, so the side is simply not drawn.
-                  .border_t(1)
-                  .border_l(1)
-                  .border_r(1)
-                  .border_b(1)
-                  .border_color(tokens.border)
-                  .bg(tokens.background)
-                  .text_size(11)
-                  .text_color(tab.active ? tokens.foreground : tokens.muted_foreground)
-                  .hover((style) => style.bg(tokens.accent))
-                  .select_tab(group, tab.index)
-                  .drag_tab(group, tab.index)
-                  .child(panelTitle(tab.name)),
-              // No close control, and not conditionally: this application has
-              // two panes and no way to reopen one, so closing a pane is a
-              // one-way door it should never hold open. `tab.closable` cannot
-              // be trusted to say so either -- `add_panel`'s options do not
-              // survive a restart, because `register_panel` has nowhere to
-              // carry them and `PanelScript::closable` is asked again on every
-              // load. So the control is simply not drawn.
-            ),
-          ),
-      )
-  );
-}
-
-// Mirrors gpui-component's private Dock Tiles constants in
-// `src/dock/tiles.rs`: DRAG_BAR_HEIGHT = 30px, HANDLE_SIZE = 5px. They are not
-// exported through the current JavaScript facade, so keeping the values here
-// makes the replacement chrome match base's snap and hit-test geometry.
-const DOCK_TILE_DRAG_BAR_HEIGHT = 30;
-const DOCK_TILE_HANDLE_SIZE = 5;
-
-/** A tile's full-size drag hit band with a compact visible hairline. */
-export function dockTileDragBar(tokens, tile) {
+      .border_b(1)
+      .border_color(tokens.border)
+      .child(label(tokens, panelTitle(tabs[0].name), 13).font_weight(700));
+  }
   return h_flex()
-    .id(`dock-tile-drag-${tile.panel.id}`)
-    .h(DOCK_TILE_DRAG_BAR_HEIGHT)
-    .w_full()
-    .items_center()
-    .cursor_row_resize()
-    .move_tile(tile)
-    .hover((style) => style.bg(tokens.muted))
-    .child(div().h(1).w_full().bg(tokens.border));
-}
-
-/** Visible edge handles for the free-form tile canvas. */
-export function dockTileResizeHandles(tokens, tile) {
-  return div()
-    .id(`dock-tile-resize-${tile.panel.id}`)
-    .absolute()
-    .inset_0()
-    .child(
-      div()
-        .absolute()
-        .right(0)
-        .top(0)
-        .bottom(0)
-        .w(DOCK_TILE_HANDLE_SIZE)
-        .cursor_col_resize()
-        .resize_tile(tile, "right")
-        .hover((style) => style.bg(tokens.primary)),
-    )
-    .child(
-      div()
-        .absolute()
-        .left(0)
-        .right(0)
-        .bottom(0)
-        .h(DOCK_TILE_HANDLE_SIZE)
-        .cursor_row_resize()
-        .resize_tile(tile, "bottom")
-        .hover((style) => style.bg(tokens.primary)),
+    .h(30)
+    .items_end()
+    .border_b(1)
+    .border_color(tokens.border)
+    .children(
+      tabs.map((tab) =>
+        h_flex()
+          .id(`dock-tab-${tab.id}`)
+          .h(30)
+          .items_center()
+          .px(tokens.spacing.sm)
+          .border(1)
+          .border_color(tokens.border)
+          .text_color(tab.active ? tokens.foreground : tokens.muted_foreground)
+          .select_tab(group, tab.index)
+          .drag_tab(group, tab.index)
+          .child(panelTitle(tab.name)),
+      ),
     );
 }
 
-/**
- * A dock's chrome: the edge you drag it by, and nothing else.
- *
- * The box the dock occupies is base's -- `DockArea::render_dock` wraps whatever
- * this returns in the dock's own extent -- so this is free to be chrome, which
- * is what the hook was always named for. It did not used to be: the extent
- * lived in base's `DockSkin`, this hook replaced that method whole, and a
- * script-drawn dock came out with no width at all, taking the row it sat in and
- * leaving every pane inside shrunk to its content.
- *
- * @param {import("gpui-base").Theme} tokens
- * @param {import("gpui-base").DockRegion} dock
- * @param {import("gpui").Element} content
- */
 export function dockFrame(tokens, dock, content) {
-  const vertical = dock.placement === "bottom";
-  // A column, and the content grows down it.
-  //
-  // This was a row, and a dock drew nothing at all: `flex_1` grows the main
-  // axis, so in a row it took the width and left the height to stretch --
-  // which `min_h(0)` then allowed to collapse, because a tab group's panel is
-  // positioned absolutely and contributes no height of its own. The dock had
-  // its full width and nothing in it, not even a tab bar.
+  const bottom = dock.placement === "bottom";
   return v_flex()
     .size_full()
     .relative()
+    .border(1)
+    .border_color(tokens.border)
     .child(content)
     .child(
-      // Base clamps every position this reports against the area and the
-      // opposite dock, so the handle is a hit area and a colour and no more.
       div()
-        .id(`dock-resize-${dock.placement}`)
         .absolute()
         .map((element) =>
-          vertical
+          bottom
             ? element.top(0).left(0).w_full().h(4).cursor_row_resize()
             : element.top(0).h_full().w(4).cursor_col_resize(),
         )
@@ -1911,7 +1810,6 @@ export function dockFrame(tokens, dock, content) {
               ? element.left(0)
               : element,
         )
-        .hover((style) => style.bg(tokens.primary))
         .resize_dock(dock),
     );
 }

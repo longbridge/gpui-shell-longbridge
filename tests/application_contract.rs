@@ -184,12 +184,13 @@ fn application_exposes_api_backed_read_only_views() {
         "both lists must virtualize their rows and pair a scrollbar with them by name"
     );
     assert!(
-        main.contains("h_resizable(\"watchlist-workspace\")")
-            && main.contains("v_resizable(\"watchlist-workspace-stacked\")")
-            && main.contains("v_resizable(\"stock-detail-panels\")")
-            && !main.contains("dock_area(this.workspaceDock)")
+        main.contains("dock_area(this.workspaceDock)")
+            && main.contains("DockArea.register_panel(\"watchlist\", WatchlistPanel)")
+            && main.contains("DockArea.register_panel(\"quote-details\", QuoteDetailsPanel)")
+            && main.contains("DockArea.register_panel(\"chart\", ChartPanel)")
+            && main.contains("DockArea.register_panel(\"market-detail\", MarketDetailPanel)")
             && !main.contains(".tile_drag_bar("),
-        "the responsive workspace must use joined resizable panels and no tile canvas"
+        "Watchlist and three detail readings must be independent Dock panels without Tiles"
     );
 
     // A row inside a virtual list cannot register a handler: it is rebuilt on
@@ -315,8 +316,8 @@ fn depth_and_trade_pushes_invalidate_only_the_market_detail_panel() {
             .and_then(|source| source.split("\n  /**").next())
             .expect("detail market mutation method");
         assert!(
-            body.contains("this.redraw(cx, PANE_MARKET);"),
-            "{method} must repaint only Market Detail"
+            body.contains("this.scheduleRedraw(cx, PANE_MARKET);"),
+            "{method} must coalesce publication to Market Detail"
         );
         assert!(
             !body.contains("PANE_DETAIL"),
@@ -329,11 +330,11 @@ fn depth_and_trade_pushes_invalidate_only_the_market_detail_panel() {
 fn tiled_detail_dock_exposes_drag_and_resize_chrome() {
     let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
     assert!(
-        main.contains("v_resizable(\"stock-detail-panels\")")
-            && main.matches("resizable_panel()").count() >= 5
-            && !main.contains("dockTileDragBar")
-            && !main.contains("dockTileResizeHandles"),
-        "three joined detail panels must resize without tile chrome"
+        main.contains("dockTabBar(cx.theme(), group)")
+            && main.contains("dockDropHint(cx.theme(), drop)")
+            && main.contains("dockFrame(cx.theme(), dock")
+            && !main.contains("dockTileDragBar"),
+        "Dock panels need tab/split chrome but no Tile chrome"
     );
 }
 
@@ -354,27 +355,31 @@ fn v3_detail_tile_layout_round_trips_through_app_owned_storage() {
     let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
 
     assert!(
-        !main.contains("workspaceDock.load(") && !main.contains("workspaceDock.add_panel("),
-        "responsive panel layout must not construct or restore a Dock tile tree"
+        main.contains("workspaceDock.load(layout)")
+            && main.contains("info: { stack: { sizes: [220, 300, 0], axis: 1 } }")
+            && !main.contains("info: { tiles:"),
+        "saved Dock split/tab layouts must restore without a Tile tree"
     );
 }
 
 #[test]
 fn detail_dock_defaults_to_three_rearrangeable_vertical_tiles() {
     let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
+    let workspace = fs::read_to_string(app_dir().join("workspace.js")).expect("workspace.js");
 
     assert!(
-        main.contains("resizable_panel().size(220)")
-            && main.contains("resizable_panel().size(300)")
-            && main.contains("this.quoteDetailsPanel(tokens)")
-            && main.contains("this.chartDetailsPanel(tokens)")
-            && main.contains("this.marketDetailPanel(tokens)"),
-        "Quote, Chart and Market Detail must be three joined vertical resizable panels"
+        main.contains("tabState(\"quote-details\")")
+            && main.contains("tabState(\"chart\")")
+            && main.contains("tabState(\"market-detail\")")
+            && workspace.contains("export class QuoteDetailsPanel")
+            && workspace.contains("export class ChartPanel")
+            && workspace.contains("export class MarketDetailPanel"),
+        "Quote, Chart and Market Detail must default to three vertical independent Dock panels"
     );
     assert!(
         main.contains("marketDetailPanel(tokens)")
             && main.contains("overflow_y_scrollbar()")
-            && main.contains("this.chartDetailsPanel(tokens)"),
+            && workspace.contains("this.app.chartDetailsPanel(cx.theme())"),
         "only Market Detail owns the tape/book scroll and it cannot remount the retained chart"
     );
 }
@@ -384,10 +389,10 @@ fn dock_tab_bar_hides_one_tab_but_keeps_multi_tab_navigation() {
     let ui = fs::read_to_string(app_dir().join("ui.js")).expect("ui.js");
 
     assert!(
-        ui.contains(
-            "if (visibleTabs.length <= 1) return div().id(`dock-tabbar-hidden-${group.node}`).h(0);"
-        ) && ui.contains("visibleTabs.map("),
-        "single-panel dock groups must hide chrome while multi-panel groups keep real tabs"
+        ui.contains("if (tabs.length === 1)")
+            && ui.contains("tabs.map(")
+            && ui.contains(".select_tab(group, tab.index)"),
+        "one panel must show a title region while combined panels show draggable tabs"
     );
 }
 

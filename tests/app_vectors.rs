@@ -589,12 +589,10 @@ fn authenticated_workspace_materializes_a_scrollable_watchlist(cx: &mut TestAppC
     });
 
     assert!(
-        rendered.contains(r#"h_resizable "watchlist-workspace""#)
-            && rendered.contains(r#"v_resizable "stock-detail-panels""#)
-            && rendered.contains("quote-details-panel")
-            && rendered.contains("chart-panel")
-            && rendered.contains("market-detail-panel"),
-        "the wide workspace must join Watchlist to three visible stacked panels: {rendered}"
+        rendered.contains("dock_area")
+            && rendered.contains(r#":id[Str("workspace-panel-count")]"#)
+            && rendered.contains(r#"text "4""#),
+        "Dock must contain Watchlist plus three independently movable detail panels: {rendered}"
     );
 }
 

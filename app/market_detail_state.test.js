@@ -43,6 +43,7 @@ export default class MarketDetailStateProbe extends LongbridgeApp {
     this.publishedPriceChartProps = Object.freeze({ symbol: "CHART.US" });
     this.instruments = [];
     this.quotes = [];
+    this.pendingQuotes = [];
     this.portfolioQuotes = [];
     this.holdings = [];
     this.fxRates = new Map();
@@ -85,13 +86,16 @@ export default class MarketDetailStateProbe extends LongbridgeApp {
       "a stale detail snapshot cannot publish under B",
     );
 
-    // Detail content is inline in the responsive resizable workspace, so each
-    // push repaints the root once. The chart itself remains a retained child
-    // and must not receive new props for book/tape data.
+    // Book/tape pushes coalesce behind the independent Market Detail panel.
     this.dirtyPanes = 0;
     const notified = [];
-    const metricCx = { notify: (target) => notified.push(target ?? "root") };
+    let scheduled = null;
+    const metricCx = {
+      notify: (target) => notified.push(target ?? "root"),
+      timer: { after: (_delay, callback) => ((scheduled = callback), {}) },
+    };
     let retainedChartPublishes = 0;
+    const marketRevision = this.paneRevisions?.market ?? 0;
     this.priceChart = {
       set_props: () => (retainedChartPublishes += 1),
       release: () => {},
@@ -99,6 +103,8 @@ export default class MarketDetailStateProbe extends LongbridgeApp {
 
     this.receiveDepth(depth("B.US", "102.00"), metricCx, bGeneration);
     this.receiveTrades(trades("B.US", "102.25"), metricCx, bGeneration);
+    check(typeof scheduled === "function", "market updates schedule one coalesced publication");
+    scheduled(metricCx);
     check(
       this.depthState.status === "ready" && this.depthState.asks[0].price === "102.00",
       "the selected depth snapshot publishes normally",
@@ -112,8 +118,8 @@ export default class MarketDetailStateProbe extends LongbridgeApp {
       "detail-only updates do not publish new retained-chart props",
     );
     check(
-      notified.filter((target) => target === "root").length === 2,
-      "depth and trades repaint the inline workspace once per accepted snapshot",
+      notified.length === 0 && this.paneRevisions.market === marketRevision + 1,
+      "depth and trades publish one Market Detail revision without repainting the root",
     );
     check(
       retainedChartPublishes === 0,

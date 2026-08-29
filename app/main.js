@@ -5,6 +5,7 @@ import { View, div, svg } from "gpui";
 import { holdContext } from "./context.js";
 import {
   CalendarState,
+  DockArea,
   InputState,
   Popover,
   Scrollbar,
@@ -12,12 +13,11 @@ import {
   TableBody,
   Tab,
   Tabs,
+  dock_area,
+  dock_content,
   h_flex,
-  h_resizable,
-  resizable_panel,
   set_theme,
   v_flex,
-  v_resizable,
   v_virtual_list,
 } from "gpui-base";
 import { fps_monitor } from "gpui-fps";
@@ -57,6 +57,13 @@ import { loadFpsVisible, saveFpsVisible } from "./fps_preference.js";
 import { omarchyBaseColors, omarchyMarketColors, omarchyTheme } from "./system_theme.js";
 import { setOmarchyAvatarColors, setOmarchyMarketColors, statusColors } from "./palette.js";
 import {
+  ChartPanel,
+  MarketDetailPanel,
+  QuoteDetailsPanel,
+  WatchlistPanel,
+  holdWorkspaceApp,
+} from "./workspace.js";
+import {
   accordionGroup,
   accordionSection,
   action,
@@ -69,6 +76,9 @@ import {
   filterInput,
   HOLDING_ROW_HEIGHT,
   PANE_INSET,
+  dockDropHint,
+  dockFrame,
+  dockTabBar,
   TABLE_HEADER_HEIGHT,
   holdingRow,
   holdingsHeader,
@@ -110,6 +120,37 @@ async function currentOmarchyColors() {
 // the panel growing. Any ceiling would do; this one keeps the summary and the
 // allocation chart reachable above it without a scroll.
 const HOLDINGS_VIEWPORT_ROWS = 10;
+const WORKSPACE_LAYOUT_KEY = "workspace.layout.dock-panels-v1";
+const WORKSPACE_LAYOUT_VERSION = 4;
+const DETAIL_DOCK_WIDTH = 660;
+const panelState = (name) => ({
+  panel_name: `shell:com.longbridge.gpui-shell-example/${name}`,
+  children: [],
+  info: { panel: {} },
+});
+const tabState = (name) => ({
+  panel_name: "TabPanel",
+  children: [panelState(name)],
+  info: { tabs: { active_index: 0 } },
+});
+const DEFAULT_WORKSPACE_LAYOUT = Object.freeze({
+  version: WORKSPACE_LAYOUT_VERSION,
+  center: {
+    panel_name: "StackPanel",
+    children: [tabState("watchlist")],
+    info: { stack: { sizes: [0], axis: 0 } },
+  },
+  right_dock: {
+    panel: {
+      panel_name: "StackPanel",
+      children: [tabState("quote-details"), tabState("chart"), tabState("market-detail")],
+      info: { stack: { sizes: [220, 300, 0], axis: 1 } },
+    },
+    placement: "right",
+    size: DETAIL_DOCK_WIDTH,
+    open: true,
+  },
+});
 /**
  * How long the steps before the stream exists may take before the window says
  * so. Generous: it covers a token refresh, the watchlist read and the account
@@ -219,6 +260,7 @@ function motion(element, property) {
  * which is where the question is asked.
  */
 const NARROW_VIEWPORT = 960;
+const COMPACT_WATCHLIST_WIDTH = 620;
 
 /** How many holdings one page of the Holdings panel shows. */
 
@@ -453,6 +495,7 @@ export default class LongbridgeApp extends View {
     this.initKeyboard(cx);
     this.initChartCalendar(cx);
     this.initPriceChartView(cx);
+    this.initWorkspaceDock(cx);
     this.clock = cx.timer.every(1_000, (cx) => {
       this.syncSystemTheme(cx);
       this.lastTick = Date.now();
@@ -505,9 +548,6 @@ export default class LongbridgeApp extends View {
     this.pointerDown = false;
     this.diagnosticsOpen = false;
     this.boundKeys = cx.bind_keys([...KEY_BINDINGS]);
-    // Focus is a fact about the window, and the window exists by the time a
-    // task runs. Requesting it inside `init` itself would come before the
-    // element tracking the handle has ever been drawn.
     cx.spawn(async (cx) => {
       await cx.sleep(0);
       this.workspaceFocus.focus();
@@ -778,6 +818,8 @@ export default class LongbridgeApp extends View {
     if (this.repaint) return;
     this.repaint = cx.timer.after(100, (cx) => {
       this.repaint = null;
+      const pendingPanes = this.dirtyPanes || PANE_BOTH;
+      this.dirtyPanes = 0;
       this.drainQuotes();
       // The chart's live tail, at a rate a chart can be read at.
       //
@@ -793,7 +835,7 @@ export default class LongbridgeApp extends View {
         this.chartPublishedAt = Date.now();
         this.syncPriceChartView();
       }
-      this.redraw(cx);
+      this.redraw(cx, pendingPanes);
     });
   }
 
@@ -807,9 +849,12 @@ export default class LongbridgeApp extends View {
    * @param {import("gpui").Context} cx
    */
   redraw(cx, panes = PANE_BOTH) {
-    this.dirtyPanes |= panes;
-    cx.notify();
-    this.syncWorkspacePanels(cx);
+    this.paneRevisions ??= { watchlist: 0, quote: 0, chart: 0, market: 0 };
+    if (panes & PANE_WATCHLIST) this.paneRevisions.watchlist += 1;
+    if (panes & PANE_QUOTE) this.paneRevisions.quote += 1;
+    if (panes & PANE_CHART) this.paneRevisions.chart += 1;
+    if (panes & PANE_MARKET) this.paneRevisions.market += 1;
+    if (panes !== PANE_MARKET) cx.notify();
   }
 
   releasePriceChartView() {
@@ -876,7 +921,7 @@ export default class LongbridgeApp extends View {
       detail.error instanceof Error ? detail.error.message : String(detail.error ?? "");
     this.depthState = { ...this.depthState, status: "error", error: message };
     this.tradesState = { ...this.tradesState, status: "error", error: message };
-    this.redraw(cx, PANE_MARKET);
+    this.scheduleRedraw(cx, PANE_MARKET);
   }
 
   /**
@@ -902,7 +947,7 @@ export default class LongbridgeApp extends View {
       bids: normalized.bids,
       error: "",
     };
-    this.redraw(cx, PANE_MARKET);
+    this.scheduleRedraw(cx, PANE_MARKET);
   }
 
   /**
@@ -927,7 +972,7 @@ export default class LongbridgeApp extends View {
       trades: mergeTrades(this.tradesState.trades, trades),
       error: "",
     };
-    this.redraw(cx, PANE_MARKET);
+    this.scheduleRedraw(cx, PANE_MARKET);
   }
 
   /**
@@ -950,6 +995,7 @@ export default class LongbridgeApp extends View {
     this.allocationHelpOpen = false;
     /** Which stock-detail sections are expanded. */
     this.detailSections = { about: false };
+    this.paneRevisions = { watchlist: 0, quote: 0, chart: 0, market: 0 };
     this.watchlistQuery = "";
     this.holdingsQuery = "";
     this.watchlistFilter = InputState.new({ placeholder: "Filter watchlist" });
@@ -961,6 +1007,31 @@ export default class LongbridgeApp extends View {
     this.holdingsFilter.on("change", (_event, cx) => {
       this.holdingsQuery = this.holdingsFilter.value();
       this.redraw(cx);
+    });
+  }
+
+  initWorkspaceDock(_cx) {
+    holdWorkspaceApp(this);
+    DockArea.register_panel("watchlist", WatchlistPanel);
+    DockArea.register_panel("quote-details", QuoteDetailsPanel);
+    DockArea.register_panel("chart", ChartPanel);
+    DockArea.register_panel("market-detail", MarketDetailPanel);
+    this.workspaceDock = DockArea.new("longbridge-workspace", {
+      version: WORKSPACE_LAYOUT_VERSION,
+    });
+    let layout = DEFAULT_WORKSPACE_LAYOUT;
+    try {
+      const saved = localStorage.getItem(WORKSPACE_LAYOUT_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed?.version === WORKSPACE_LAYOUT_VERSION) layout = parsed;
+      }
+    } catch {}
+    this.workspaceDock.load(layout);
+    this.workspaceDock.on("layout_changed", () => {
+      try {
+        localStorage.setItem(WORKSPACE_LAYOUT_KEY, JSON.stringify(this.workspaceDock.dump()));
+      } catch {}
     });
   }
 
@@ -1777,7 +1848,8 @@ export default class LongbridgeApp extends View {
    * Release throughput while still letting a wide Watchlist show its columns.
    */
   isWatchlistCompact() {
-    return window.viewport_size().width < NARROW_VIEWPORT;
+    const detailWidth = this.workspaceDock?.dock_size("right") ?? DETAIL_DOCK_WIDTH;
+    return window.viewport_size().width - detailWidth < COMPACT_WATCHLIST_WIDTH;
   }
 
   /** @param {import("gpui-base").Theme} tokens */
@@ -1855,20 +1927,13 @@ export default class LongbridgeApp extends View {
    * @param {import("gpui-base").Theme} tokens
    */
   watchlistPage(tokens) {
-    const watchlist = this.watchlist(tokens).size_full();
-    const details = this.stockDetail(tokens).size_full();
-    if (this.isNarrow()) {
-      return v_resizable("watchlist-workspace-stacked")
-        .flex_1()
-        .min_h(0)
-        .child(resizable_panel().size(300).size_range(180).child(watchlist))
-        .child(resizable_panel().size_range(240).child(details));
-    }
-    return h_resizable("watchlist-workspace")
+    return dock_area(this.workspaceDock)
       .flex_1()
       .min_h(0)
-      .child(resizable_panel().size(620).size_range(360).child(watchlist))
-      .child(resizable_panel().size_range(360).child(details));
+      .tab_bar((group, cx) => dockTabBar(cx.theme(), group))
+      .empty_group((_group, cx) => emptyPanel(cx.theme(), "Empty panel", "Drop a panel here."))
+      .drop_indicator((drop, cx) => dockDropHint(cx.theme(), drop))
+      .dock((dock, cx) => dockFrame(cx.theme(), dock, dock_content().flex_1().min_h(0).w_full()));
   }
 
   /** @param {import("gpui-base").Theme} tokens */
@@ -2219,14 +2284,14 @@ export default class LongbridgeApp extends View {
   // Test probes that draw the old inline shell still call this method. The
   // application dock never does: production gives each child its own tile.
   stockDetail(tokens) {
-    return v_resizable("stock-detail-panels")
+    return v_flex()
       .size_full()
       .min_w(0)
       .min_h(0)
       .children([
-        resizable_panel().size(220).size_range(140).child(this.quoteDetailsPanel(tokens)),
-        resizable_panel().size(300).size_range(180).child(this.chartDetailsPanel(tokens)),
-        resizable_panel().size_range(180).child(this.marketDetailPanel(tokens)),
+        this.quoteDetailsPanel(tokens).flex_1().min_h(0),
+        this.chartDetailsPanel(tokens).flex_1().min_h(0),
+        this.marketDetailPanel(tokens).flex_1().min_h(0),
       ]);
   }
 
@@ -2247,13 +2312,6 @@ export default class LongbridgeApp extends View {
       .min_w(0)
       .min_h(0)
       .bg(tokens.background)
-      .child(
-        h_flex()
-          .px(tokens.spacing.sm)
-          .py(tokens.spacing.xs)
-          .child(label(tokens, "Quote Details", 13).font_weight(700)),
-      )
-      .child(rule(tokens))
       .child(
         quote
           ? v_flex()
@@ -2300,13 +2358,6 @@ export default class LongbridgeApp extends View {
       .min_w(0)
       .min_h(0)
       .bg(tokens.background)
-      .child(
-        h_flex()
-          .px(tokens.spacing.sm)
-          .py(tokens.spacing.xs)
-          .child(label(tokens, "Chart", 13).font_weight(700)),
-      )
-      .child(rule(tokens))
       .child(v_flex().flex_1().min_h(0).overflow_y_scrollbar().child(this.chartSection(tokens)));
   }
 
@@ -2319,13 +2370,6 @@ export default class LongbridgeApp extends View {
       .min_w(0)
       .min_h(0)
       .bg(tokens.background)
-      .child(
-        h_flex()
-          .px(tokens.spacing.sm)
-          .py(tokens.spacing.xs)
-          .child(label(tokens, "Market Detail", 13).font_weight(700)),
-      )
-      .child(rule(tokens))
       .child(
         quote
           ? v_flex()
