@@ -20,13 +20,6 @@ Install the latest macOS or Linux release without administrator privileges:
 curl -fsSL https://github.com/longbridge/longbridge-lite/raw/refs/heads/main/install.sh | sh
 ```
 
-Install a specific version, or uninstall while preserving user data:
-
-```sh
-curl -fsSL https://github.com/longbridge/longbridge-lite/raw/refs/heads/main/install.sh | sh -s -- --version 0.2.0
-curl -fsSL https://github.com/longbridge/longbridge-lite/raw/refs/heads/main/install.sh | sh -s -- --uninstall
-```
-
 On Linux the installer adds Longbridge Lite to the desktop application menu
 and links `longbridge-lite` into `~/.local/bin`. It requires x86_64 glibc 2.35
 or newer. On macOS it installs `Longbridge Lite.app` into `~/Applications` and
@@ -206,6 +199,14 @@ manager. Press `ctrl-k` (or `cmd-k`) to open the in-app shortcut reference.
 
 Keyboard row navigation scrolls only as needed to reveal the selected virtualized item;
 Home and End move the list to its corresponding boundary.
+
+## Uninstall
+
+Uninstall while preserving user data:
+
+```sh
+curl -fsSL https://github.com/longbridge/longbridge-lite/raw/refs/heads/main/install.sh | sh -s -- --uninstall
+```
 
 ## Run
 
