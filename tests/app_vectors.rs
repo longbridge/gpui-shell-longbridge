@@ -878,8 +878,11 @@ fn the_order_ticket_states_what_it_will_send(cx: &mut TestAppContext) {
     // Sizing by amount. 1500 USD at 214.07 is 7 shares -- rounded down, since
     // a share is whole -- and the ticket previews that while the amount is
     // still editable rather than only at the confirmation.
+    // One control naming the mode it switches to, beside a field whose label
+    // already says which mode is in force -- not two buttons competing for a
+    // selected state in a caption row.
     assert!(
-        rendered.contains("Shares") && rendered.contains("Amount"),
+        rendered.contains("Use shares") && rendered.contains("Amount"),
         "a purchase must offer to be sized by amount:\n{rendered}"
     );
     assert!(

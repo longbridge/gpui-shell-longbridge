@@ -54,7 +54,6 @@ import { depthRatio, mergeTrades, normalizeDepth, validDepthLevel } from "./mark
 import { HISTORY_WINDOW_DAYS, historyRange, normalizeOrders } from "./orders.js";
 import {
   ORDER_TYPES,
-  SIZING,
   TIME_IN_FORCE,
   canCancel,
   canReplace,
@@ -3528,19 +3527,24 @@ export default class LongbridgeApp extends View {
    */
   sizingSwitch(tokens, enabled) {
     if (!enabled) return null;
-    return h_flex()
-      .gap(tokens.spacing.xxs)
-      .children(
-        SIZING.map((mode) =>
-          action(
-            tokens,
-            `ticket-sizing-${mode.value}`,
-            mode.label,
-            (_event, _cx) => this.updateTicket({ sizing: mode.value }),
-            { selected: this.ticket.sizing === mode.value, quiet: true },
-          ).h(20),
-        ),
-      );
+    // One control naming the other mode, not two competing for a selected
+    // state. Two of them were a segmented control in a caption row, which is
+    // not what a caption row is for -- and the selected one drew no border
+    // while its neighbour and every hover drew one, so the pair changed width
+    // as the pointer crossed it.
+    //
+    // The field's own label already says which mode is in force. What is left
+    // to offer is the way out of it, which is one button and reads as a
+    // sentence: `Amount` above the field, `Use shares` beside it.
+    const other = this.ticket.sizing === "amount" ? "shares" : "amount";
+    const caption = other === "amount" ? "Use amount" : "Use shares";
+    return action(
+      tokens,
+      "ticket-sizing",
+      caption,
+      (_event, _cx) => this.updateTicket({ sizing: other }),
+      { quiet: true },
+    ).h(20);
   }
 
   /** @param {import("gpui-base").Theme} tokens */
@@ -3888,12 +3892,22 @@ export default class LongbridgeApp extends View {
     // bottom of the list rather than to the pointer. Positioned here, against
     // the pane's own `relative()`, the trigger is a point at the pointer and
     // the menu opens from it.
-    return Popup.new("row-menu", div().w(0).h(0))
-      .anchor("bottom_left")
-      .content(surface)
-      .absolute()
-      .left(menu.x)
-      .top(menu.y);
+    return (
+      Popup.new("row-menu", div().w(0).h(0))
+        // `top_left`, not `bottom_left`: the anchor names which corner of the
+        // menu meets the trigger, so `bottom_left` hung the menu upwards from
+        // the pointer and covered the row it was opened on. A context menu
+        // grows down and to the right from where the pointer is.
+        .anchor("top_left")
+        .content(surface)
+        .absolute()
+        // Offset by one step from the pointer rather than opened under it. A
+        // menu whose first row is already beneath the cursor arrives with that
+        // row highlighted, which reads as a choice the reader did not make --
+        // and is one keypress away from being acted on.
+        .left(menu.x + tokens.spacing.xs)
+        .top(menu.y + tokens.spacing.xs)
+    );
   }
 
   /** @param {import("gpui-base").Theme} tokens */
