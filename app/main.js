@@ -2369,8 +2369,10 @@ export default class LongbridgeApp extends View {
         window.close_dialog();
         // The order list is where the result of all three of these is, so the
         // page follows the action rather than leaving the reader to go looking
-        // for what they just did. `showPage` is not used: it would fetch the
-        // orders a second time, and they are being fetched here.
+        // for what they just did. `showPage` is not used because it declines
+        // to do anything when the page is already the one asked for, and the
+        // list has to be re-read either way -- so the page is set here and the
+        // read is asked for once, below.
         this.page = "orders";
         this.redraw(cx);
         window.push_toast({
@@ -2383,20 +2385,16 @@ export default class LongbridgeApp extends View {
           level: "success",
           id: "trade-order",
         });
-        try {
-          const { today, history } = await this.refreshOrders();
-          this.ordersState = { status: "ready", today, history, error: "" };
-        } catch (failure) {
-          // The order stands; only this reading of the list did not. It is
-          // reported where a failed read belongs -- on the page that could not
-          // be read -- rather than on a ticket that succeeded.
-          this.ordersState = {
-            ...this.ordersState,
-            status: "error",
-            error: failure instanceof Error ? failure.message : String(failure),
-          };
-        }
-        this.redraw(cx);
+        // Through `loadOrders` rather than by assigning the state here. That
+        // one carries a generation, and this one did not: a read already in
+        // flight -- the page switch above starts one whenever Orders was not
+        // already showing -- would answer afterwards with a list fetched
+        // before the order existed and put it back, so the new order appeared
+        // and then vanished. It also shows the list as loading while it is,
+        // and reports a failed read on the page that could not be read, which
+        // is where a failed read belongs rather than on a ticket that
+        // succeeded.
+        this.loadOrders(cx);
       } catch (failure) {
         this.ticket = {
           ...this.ticket,
@@ -4798,7 +4796,18 @@ export default class LongbridgeApp extends View {
     return workspacePanel(
       tokens,
       "Order",
-      v_flex().flex_1().min_h(0).overflow_y_scrollbar().child(orderDetail(tokens, order)),
+      v_flex()
+        .flex_1()
+        .min_h(0)
+        .overflow_y_scrollbar()
+        .child(
+          orderDetail(tokens, order, {
+            canReplace: canReplace(order),
+            canCancel: canCancel(order),
+            onReplace: (_event, cx) => this.openReplaceTicket(order, cx),
+            onCancel: (_event, cx) => this.openCancelTicket(order, cx),
+          }),
+        ),
       h_flex()
         .items_center()
         .gap(tokens.spacing.xs)

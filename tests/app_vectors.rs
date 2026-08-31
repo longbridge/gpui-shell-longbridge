@@ -446,6 +446,15 @@ fn orders_page_stacks_today_over_history_as_one_filtered_reading(cx: &mut TestAp
             .unwrap_or_default()
     });
 
+    // The open sheet carries what can still be done to that order, so a reader
+    // who has an order in front of them does not have to go back and
+    // right-click the row to act on it. The sheet's order is filled, so both
+    // are drawn and both are disabled.
+    assert!(
+        rendered.contains("Modify") && rendered.contains("Withdraw"),
+        "the order sheet must offer to change and withdraw:\n{rendered}"
+    );
+
     // Two panels, Today first: what is working now is the shorter list and the
     // one read first, and the record underneath it is the one worth scrolling.
     assert!(

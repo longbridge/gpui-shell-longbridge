@@ -1641,7 +1641,8 @@ export function orderRow(tokens, order, rowIndex = 0, selected = false) {
  * @param {import("gpui-base").Theme} tokens
  * @param {LongbridgeOrderRow} order
  */
-export function orderDetail(tokens, order) {
+export function orderDetail(tokens, order, actions = {}) {
+  const { onReplace = null, onCancel = null, canReplace = false, canCancel = false } = actions;
   const status = statusColors(tokens);
   const sideTone =
     order.sideKind === "buy"
@@ -1666,72 +1667,97 @@ export function orderDetail(tokens, order) {
       );
   const amount = (value) =>
     value === "--" || value === "" ? "" : order.currency ? `${value} ${order.currency}` : value;
-  return v_flex()
-    .id(`order-detail-${order.orderId}`)
-    .w_full()
-    .gap(tokens.spacing.md)
-    .px(tokens.spacing.md)
-    .py(tokens.spacing.md)
-    .child(
-      v_flex()
-        .gap(tokens.spacing.xxs)
-        .child(label(tokens, order.symbol, 14).font_weight(700).truncate())
-        .child(muted(tokens, order.name).truncate())
-        .child(
-          h_flex()
-            .items_center()
-            .gap(tokens.spacing.xs)
-            .child(
-              label(tokens, order.statusLabel).text_color(
-                orderStatusTone(tokens, order.statusKind),
-              ),
-            )
-            .child(muted(tokens, "·"))
-            .child(label(tokens, order.sideLabel).text_color(sideTone))
-            .child(muted(tokens, order.type)),
-        ),
-    )
-    .child(rule(tokens))
-    .child(
-      section("Order", [
-        { title: "Time in force", value: order.timeInForce },
-        { title: "Currency", value: order.currency },
-        { title: "Outside RTH", value: order.outsideRth },
-        { title: "Channel", value: order.tag },
-      ]),
-    )
-    .child(
-      section("Execution", [
-        { title: "Quantity", value: order.quantity },
-        { title: "Filled", value: order.executedQuantity },
-        { title: "Price", value: amount(order.price) },
-        { title: "Filled price", value: amount(order.executedPrice) },
-        { title: "Last done", value: amount(order.lastDone) },
-        { title: "Trigger price", value: amount(order.triggerPrice) },
-      ]),
-    )
-    .child(
-      section("Timing", [
-        { title: "Submitted", value: stamp(order.submittedAt) },
-        { title: "Updated", value: stamp(order.updatedAt) },
-      ]),
-    )
-    .child(rule(tokens))
-    .child(
-      v_flex()
-        .gap(tokens.spacing.xxs)
-        .child(muted(tokens, "Order ID"))
-        .child(numeric(tokens, order.orderId).truncate()),
-    )
-    .when(Boolean(order.remark), (element) =>
-      element.child(
+  return (
+    v_flex()
+      .id(`order-detail-${order.orderId}`)
+      .w_full()
+      .gap(tokens.spacing.md)
+      .px(tokens.spacing.md)
+      .py(tokens.spacing.md)
+      .child(
         v_flex()
           .gap(tokens.spacing.xxs)
-          .child(muted(tokens, "Remark"))
-          .child(label(tokens, order.remark)),
-      ),
-    )
-    .when(Boolean(order.message), (element) => element.child(muted(tokens, order.message)));
+          .child(label(tokens, order.symbol, 14).font_weight(700).truncate())
+          .child(muted(tokens, order.name).truncate())
+          .child(
+            h_flex()
+              .items_center()
+              .gap(tokens.spacing.xs)
+              .child(
+                label(tokens, order.statusLabel).text_color(
+                  orderStatusTone(tokens, order.statusKind),
+                ),
+              )
+              .child(muted(tokens, "·"))
+              .child(label(tokens, order.sideLabel).text_color(sideTone))
+              .child(muted(tokens, order.type)),
+          ),
+      )
+      // What can still be done to this order, next to what it is, rather than
+      // only behind a right-click on the row that opened this. Both are drawn
+      // whatever the status and disabled where the status says they would only
+      // be refused -- the same choice the row menu makes, and for the same
+      // reason: controls that come and go have to be re-read every time.
+      .when(Boolean(onReplace || onCancel), (element) =>
+        element.child(
+          h_flex()
+            .gap(tokens.spacing.sm)
+            .child(
+              action(tokens, `order-detail-replace-${order.orderId}`, "Modify", onReplace, {
+                disabled: !canReplace,
+              }).flex_1(),
+            )
+            .child(
+              action(tokens, `order-detail-cancel-${order.orderId}`, "Withdraw", onCancel, {
+                variant: "destructive",
+                quiet: true,
+                disabled: !canCancel,
+              }).flex_1(),
+            ),
+        ),
+      )
+      .child(rule(tokens))
+      .child(
+        section("Order", [
+          { title: "Time in force", value: order.timeInForce },
+          { title: "Currency", value: order.currency },
+          { title: "Outside RTH", value: order.outsideRth },
+          { title: "Channel", value: order.tag },
+        ]),
+      )
+      .child(
+        section("Execution", [
+          { title: "Quantity", value: order.quantity },
+          { title: "Filled", value: order.executedQuantity },
+          { title: "Price", value: amount(order.price) },
+          { title: "Filled price", value: amount(order.executedPrice) },
+          { title: "Last done", value: amount(order.lastDone) },
+          { title: "Trigger price", value: amount(order.triggerPrice) },
+        ]),
+      )
+      .child(
+        section("Timing", [
+          { title: "Submitted", value: stamp(order.submittedAt) },
+          { title: "Updated", value: stamp(order.updatedAt) },
+        ]),
+      )
+      .child(rule(tokens))
+      .child(
+        v_flex()
+          .gap(tokens.spacing.xxs)
+          .child(muted(tokens, "Order ID"))
+          .child(numeric(tokens, order.orderId).truncate()),
+      )
+      .when(Boolean(order.remark), (element) =>
+        element.child(
+          v_flex()
+            .gap(tokens.spacing.xxs)
+            .child(muted(tokens, "Remark"))
+            .child(label(tokens, order.remark)),
+        ),
+      )
+      .when(Boolean(order.message), (element) => element.child(muted(tokens, order.message)))
+  );
 }
 
 /**
