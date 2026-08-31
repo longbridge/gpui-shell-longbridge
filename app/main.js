@@ -3882,9 +3882,18 @@ export default class LongbridgeApp extends View {
     // a context menu belongs and `Popup` anchors to its trigger's bounds. The
     // anchor carries the coordinates now; the surface only says what a menu
     // looks like.
-    return Popup.new("row-menu", div().absolute().left(menu.x).top(menu.y).w(0).h(0))
+    // The `Popup` itself is what carries the coordinates, not its trigger.
+    // Given to the pane as a child it takes a place in the pane's flow -- after
+    // every row -- and a trigger positioned inside it anchors the menu to the
+    // bottom of the list rather than to the pointer. Positioned here, against
+    // the pane's own `relative()`, the trigger is a point at the pointer and
+    // the menu opens from it.
+    return Popup.new("row-menu", div().w(0).h(0))
       .anchor("bottom_left")
-      .content(surface);
+      .content(surface)
+      .absolute()
+      .left(menu.x)
+      .top(menu.y);
   }
 
   /** @param {import("gpui-base").Theme} tokens */

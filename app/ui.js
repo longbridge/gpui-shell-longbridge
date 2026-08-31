@@ -333,6 +333,19 @@ export function menuItem(tokens, id, caption, onClick, options = {}) {
     .disabled(disabled)
     .onClick(onClick);
   if (detail) item.detail(detail);
+  // `tone` belongs on the component: `MenuItem` resolves one foreground and
+  // hands it to the label, the icon and the detail, so a colour applied to the
+  // built element reaches the row and not its text -- which is why Buy and
+  // Sell were drawing black.
+  //
+  // The published dependency does not carry `tone()` yet. Colouring the built
+  // element is what this can do until it does: wrong, but visibly wrong in one
+  // place rather than throwing, and the branch stops being taken the moment
+  // the dependency catches up.
+  if (tone && typeof item.tone === "function") {
+    item.tone(tone);
+    return item.build(context(tokens));
+  }
   const built = item.build(context(tokens));
   return tone ? built.text_color(tone) : built;
 }
