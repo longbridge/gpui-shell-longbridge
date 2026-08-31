@@ -567,6 +567,7 @@ export default class LongbridgeApp extends View {
   /** @param {import("gpui-shell").Props | undefined} _props @param {import("gpui").AsyncContext} cx */
   init(_props, cx) {
     holdContext(cx);
+    this.dismissStaleDialogs();
     this.followsSystemTheme = false;
     this.omarchyThemeSource = "";
     this.themeSyncPending = false;
@@ -2196,6 +2197,31 @@ export default class LongbridgeApp extends View {
     };
     this.presentTicket();
     this.redraw(cx);
+  }
+
+  /**
+   * Closes a dialog left over from a previous view.
+   *
+   * The shell's dialog stack outlives a view. A reload builds a new one, and
+   * the surface still standing draws from a closure over the old instance --
+   * whose `InputState`s went with it, so the fields come back as "this input
+   * state has been released" and the ticket loses the boxes it is made of.
+   *
+   * The mirror is the other half of the same seam: `syncDialogFlags` handles a
+   * surface the shell dropped without telling this side, and this handles this
+   * side going away without telling the shell. Neither direction is reported,
+   * so both are asked about at the points where it matters.
+   */
+  dismissStaleDialogs() {
+    // The dialog calls are illegal in a window whose first view is not a
+    // `ShellRoot` -- a test probe, which has no dialog stack and therefore
+    // nothing left in it. "No dialog" is the right answer there, so the
+    // refusal is the answer rather than a failure.
+    try {
+      if (this.shellHasDialog()) window.close_all_dialogs();
+    } catch (_) {
+      // Nothing to close, and nowhere to have closed it.
+    }
   }
 
   /**
@@ -3856,14 +3882,13 @@ export default class LongbridgeApp extends View {
           this.copySymbol(menu.symbol, cx);
         }),
       )
+      // Not destructive: taking a security off a watchlist deletes nothing and
+      // is undone by adding it back. The role belongs to the things that
+      // cannot be, and spending it here leaves nothing louder for them.
       .when(menu.source === "watchlist", (element) =>
         element.child(
-          menuItem(
-            tokens,
-            "row-menu-drop",
-            "Remove",
-            (_event, cx) => this.dropSymbol(menu.symbol, cx),
-            { destructive: true },
+          menuItem(tokens, "row-menu-drop", "Remove", (_event, cx) =>
+            this.dropSymbol(menu.symbol, cx),
           ),
         ),
       );
