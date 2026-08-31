@@ -475,10 +475,27 @@ fn retained_chart_props_do_not_duplicate_the_large_series() {
         .expect("chartProps method");
 
     assert!(
-        !chart_props.contains("series:")
-            && !main.contains("previous?.series === next.series")
-            && chart_props.contains("compactIntradaySeriesForView"),
+        !chart_props.contains("series:") && !main.contains("previous?.series === next.series"),
         "the retained chart must receive one mode-specific series, not a duplicate five-day graph"
+    );
+
+    // Deriving it is the expensive thing this view does, so it happens once
+    // per set of candles rather than on every publish check. The candles are
+    // the key *and* the answer is cached: recomputing produced a new array
+    // every time, so the identity check below could never be true and every
+    // check published.
+    let derive = main
+        .split("  chartSeriesFor(symbol, mode, candles) {")
+        .nth(1)
+        .and_then(|source| source.split("\n  /**").next())
+        .expect("chartSeriesFor method");
+    assert!(
+        derive.contains("compactIntradaySeriesForView")
+            && derive.contains("cached.candles === candles")
+            && derive.contains("return cached.series")
+            && chart_props.contains("this.chartSeriesFor(symbol, mode, candles)")
+            && main.contains("previous?.chartSeries === next.chartSeries"),
+        "the plotted series must be derived once per set of candles and answered by identity"
     );
 }
 

@@ -897,18 +897,49 @@ export default class LongbridgeApp extends View {
     return symbol ? "loading" : "idle";
   }
 
+  /**
+   * The plotted series for a symbol's candles, computed once per set of them.
+   *
+   * Deriving a series is the expensive thing this view does -- a day of
+   * intraday candles, normalized, sorted and compacted -- and it was being
+   * done on every publish check, twice a second, whether or not anything had
+   * changed. QuickJS cuts a job off past its interrupt budget, and this is the
+   * job that reached it.
+   *
+   * The candles are a stable reference: `cachedChartSeries` answers the same
+   * array for the same request until a new response replaces it. So they are
+   * the cache key, and the answer is the same array too -- which is what makes
+   * `syncPriceChartView`'s identity check work at all. Recomputing produced a
+   * new array every time, so `previous.chartSeries === next.chartSeries` was
+   * never true and every check published.
+   *
+   * One entry, because one chart is on screen. Coming back to a symbol derives
+   * its series again, which is one pass over candles that are already in hand.
+   *
+   * @param {string} symbol @param {string} mode @param {readonly unknown[]} candles
+   */
+  chartSeriesFor(symbol, mode, candles) {
+    const cached = this.chartSeriesCache;
+    if (cached && cached.symbol === symbol && cached.mode === mode && cached.candles === candles) {
+      return cached.series;
+    }
+    const series =
+      mode === "intraday"
+        ? compactIntradaySeriesForView(prepareIntradaySeries(candles), PRICE_CHART_LAYOUT)
+        : mode === "5D"
+          ? compactFiveDaySeries(prepareFiveDaySeries(symbol, candles), PRICE_CHART_LAYOUT)
+          : prepareCandleSeries(windowCandles(candles));
+    this.chartSeriesCache = { symbol, mode, candles, series };
+    return series;
+  }
+
   /** The complete immutable input snapshot the child needs to render the chart. */
   chartProps() {
     const symbol = this.selectedSymbol ?? "";
     const mode = this.activeChartMode();
     const candles = symbol ? this.cachedChartSeries(symbol) : EMPTY_CANDLES;
     const state = this.chartActivity();
-    const chartSeries =
-      mode === "intraday"
-        ? compactIntradaySeriesForView(prepareIntradaySeries(candles), PRICE_CHART_LAYOUT)
-        : mode === "5D"
-          ? compactFiveDaySeries(prepareFiveDaySeries(symbol, candles), PRICE_CHART_LAYOUT)
-          : prepareCandleSeries(windowCandles(candles));
+    const chartSeries = this.chartSeriesFor(symbol, mode, candles);
     const end = this.chartEndDate ?? calendarDay(new Date());
     const description =
       mode === "intraday"
@@ -1019,6 +1050,8 @@ export default class LongbridgeApp extends View {
     this.priceChart.release();
     this.priceChart = null;
     this.publishedPriceChartProps = null;
+    /** @type {{ symbol: string, mode: string, candles: unknown, series: unknown } | null} */
+    this.chartSeriesCache = null;
   }
 
   /** Initializes data which belongs only to the selected instrument's detail panels. */
