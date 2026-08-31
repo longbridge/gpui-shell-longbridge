@@ -37,6 +37,25 @@ export const COMMAND = Object.freeze({
   PUSH_TRADE: 104,
 });
 
+/**
+ * The commands the *trade* gateway speaks.
+ *
+ * A separate table because the two gateways number their commands
+ * independently: 18 is an intraday request to the quote socket and a push
+ * notification on this one. They share the frame, the authentication and the
+ * heartbeat, and nothing else.
+ */
+export const TRADE_COMMAND = Object.freeze({
+  HEARTBEAT: 1,
+  AUTH: 2,
+  SUBSCRIBE: 16,
+  UNSUBSCRIBE: 17,
+  PUSH_NOTIFICATION: 18,
+});
+
+/** The topic carrying this account's own orders and assets. */
+export const TRADE_TOPIC_PRIVATE = "private";
+
 export const SUB_TYPE = Object.freeze({
   QUOTE: 1,
   DEPTH: 2,
@@ -134,7 +153,14 @@ function encodeUtf8(value, name) {
   return Uint8Array.from(result);
 }
 
-function decodeUtf8(bytes, name) {
+/**
+ * UTF-8 bytes to a string.
+ *
+ * Exported because this runtime has no `TextDecoder`, and a caller holding
+ * bytes off a frame -- a JSON notification body, say -- has nowhere else to
+ * turn.
+ */
+export function decodeUtf8(bytes, name) {
   const chars = [];
   for (let offset = 0; offset < bytes.length;) {
     const first = bytes[offset++];
@@ -431,6 +457,50 @@ export function encodeUnsubscribeRequest(options) {
   return encodeSubscribeRequest({ ...options, isFirstPush: false });
 }
 
+/**
+ * Encodes trade.Sub for command 16, and trade.Unsub for 17.
+ *
+ * One repeated string field, which is the whole message. The topic names are
+ * the gateway's -- `private` is this account's own orders and assets.
+ *
+ * @param {readonly string[]} topics
+ */
+export function encodeTradeSubscribeRequest(topics) {
+  if (!Array.isArray(topics) || topics.length === 0) fail("topics must be a non-empty array");
+  return concat(topics.map((topic, index) => stringField(1, topic, `topics[${index}]`)));
+}
+
+/**
+ * Decodes trade.Notification, which arrives as command 18.
+ *
+ * The payload is opaque at this layer: `contentType` says whether `data` is
+ * JSON or protobuf, and what is inside depends on the topic. Reading it is the
+ * caller's, because this module knows frames and the caller knows orders.
+ */
+export function decodeTradeNotification(data) {
+  const notification = { topic: "", contentType: 0, dispatchType: 0, data: new Uint8Array() };
+  decodeMessage(data, (reader, field, wireType) => {
+    if (field === 1) {
+      expectWireType(wireType, 2, field);
+      notification.topic = reader.readString("notification topic");
+    } else if (field === 2) {
+      expectWireType(wireType, 0, field);
+      notification.contentType = Number(reader.readVarint("notification content_type"));
+    } else if (field === 3) {
+      expectWireType(wireType, 0, field);
+      notification.dispatchType = Number(reader.readVarint("notification dispatch_type"));
+    } else if (field === 4) {
+      expectWireType(wireType, 2, field);
+      notification.data = reader.readBytes("notification data");
+    } else return false;
+    return true;
+  });
+  return notification;
+}
+
+/** A notification whose `data` is JSON rather than protobuf. */
+export const TRADE_CONTENT_JSON = 1;
+
 /** Encodes quote.SecurityRequest, used by the depth command. */
 export function encodeSecurityRequest(symbol) {
   return stringField(1, symbol, "symbol");
@@ -696,15 +766,7 @@ function decodeStaticInfo(data) {
   decodeMessage(data, (reader, field, wireType) => {
     if (field >= 1 && field <= 7) {
       expectWireType(wireType, 2, field);
-      const names = [
-        "symbol",
-        "nameCn",
-        "nameEn",
-        "nameHk",
-        "listingDate",
-        "exchange",
-        "currency",
-      ];
+      const names = ["symbol", "nameCn", "nameEn", "nameHk", "listingDate", "exchange", "currency"];
       info[names[field - 1]] = reader.readString(`static ${names[field - 1]}`);
     } else if (field === 8) {
       expectWireType(wireType, 0, field);

@@ -287,6 +287,62 @@ fn quote_stream_vectors_run_against_this_application(cx: &mut TestAppContext) {
     assert!(rendered.contains("text \"ok\""), "{rendered}");
 }
 
+/// An order the gateway pushed must survive the read that has not caught up.
+///
+/// Longbridge accepts an order before this account's list reports one, so the
+/// first read after a write comes back without it. A list rebuilt from that
+/// read alone drops the order that was just placed -- it appears, and then it
+/// vanishes.
+#[gpui::test]
+fn a_pushed_order_outlives_the_read_that_is_behind_it(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("order_push.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let (_root, view) = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+
+    context.run_until_parked();
+    let draw_view = view.clone();
+    context.draw(
+        gpui::Point::default(),
+        gpui::size(gpui::px(600.), gpui::px(400.)),
+        move |_, _| draw_view.into_any_element(),
+    );
+    let rendered = context.update(|_, cx| {
+        view.read(cx)
+            .snapshot()
+            .map(gpui_shell::RenderSnapshot::debug_tree)
+            .unwrap_or_default()
+    });
+    assert!(rendered.contains("text \"ok\""), "{rendered}");
+}
+
+#[gpui::test]
+fn trade_stream_vectors_run_against_this_application(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("trade_stream.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let (_root, view) = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+
+    context.run_until_parked();
+    let draw_view = view.clone();
+    context.draw(
+        gpui::Point::default(),
+        gpui::size(gpui::px(400.), gpui::px(300.)),
+        move |_, _| draw_view.into_any_element(),
+    );
+    let rendered = context.update(|_, cx| {
+        view.read(cx)
+            .snapshot()
+            .map(gpui_shell::RenderSnapshot::debug_tree)
+            .unwrap_or_default()
+    });
+    assert!(rendered.contains("text \"ok\""), "{rendered}");
+}
+
 #[gpui::test]
 fn auth_and_http_vectors_run_against_this_application(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);

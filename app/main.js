@@ -2,7 +2,7 @@
 // quotes use the documented WebSocket protocol, and no trading API is exposed.
 
 import { View, div, svg } from "gpui";
-import { context, holdContext } from "./context.js";
+import { holdContext } from "./context.js";
 import {
   CalendarState,
   Button,
@@ -40,6 +40,7 @@ import {
   watchlistInstruments,
 } from "./market.js";
 import { createQuoteStream } from "./quote_stream.js";
+import { createTradeStream } from "./trade_stream.js";
 import { compactFiveDaySeries, prepareFiveDaySeries } from "./chart.js";
 import {
   CHART_MODES,
@@ -51,7 +52,13 @@ import {
 } from "./chart_modes.js";
 import { PERIOD, TRADE_SESSION } from "./protocol.js";
 import { depthRatio, mergeTrades, normalizeDepth, validDepthLevel } from "./market_detail.js";
-import { HISTORY_WINDOW_DAYS, historyRange, normalizeOrders } from "./orders.js";
+import {
+  HISTORY_WINDOW_DAYS,
+  historyRange,
+  mergeOrder,
+  normalizeOrders,
+  normalizePushedOrder,
+} from "./orders.js";
 import {
   ORDER_TYPES,
   TIME_IN_FORCE,
@@ -649,6 +656,8 @@ export default class LongbridgeApp extends View {
     this.streamError = "";
     this.stream = null;
     this.streamGeneration = 0;
+    /** The trade gateway's push channel, which reports this account's orders. */
+    this.tradeStream = null;
     this.connectedToken = null;
     this.lastTick = Date.now();
     this.quotePulse = 1;
@@ -1456,6 +1465,7 @@ export default class LongbridgeApp extends View {
     this.clearDetailMarket();
     const previous = this.stream;
     this.stream = null;
+    this.stopTradeStream();
     if (previous) await previous.stop();
     if (generation !== this.streamGeneration) return;
     this.status = { state: "loading_watchlist" };
@@ -1477,6 +1487,10 @@ export default class LongbridgeApp extends View {
     this.status = { state: "connected" };
     this.clearConnectDeadline();
     this.redraw(cx);
+    // Before the portfolio read, and before the quote stream, because it is
+    // not conditional on either: an account with an empty watchlist still has
+    // orders, and the early return below would skip it.
+    this.startTradeStream(token, generation, cx);
     await this.refreshPortfolio();
     if (generation !== this.streamGeneration) return;
     const symbols = [
@@ -1716,6 +1730,19 @@ export default class LongbridgeApp extends View {
     /** The order whose sheet the right-hand panel is showing, if any. */
     this.selectedOrderId = null;
     this.selectedOrderRowId = null;
+    /**
+     * Orders the push channel has reported that a read has not caught up to.
+     *
+     * Longbridge accepts an order before its list reports one: the write and
+     * the read reach different sides of the same system. So a read taken just
+     * after a write comes back without it, and a list rebuilt from that read
+     * alone would drop the order the gateway had already pushed. Held here,
+     * folded back in after each read, and let go of once the read agrees --
+     * or once the grace period says the endpoint is the better authority.
+     *
+     * @type {Map<string, { order: LongbridgeOrderRow, at: number }>}
+     */
+    this.pushedOrders = new Map();
   }
 
   /** The order the detail panel is showing, or null once a reload drops it. */
@@ -1744,11 +1771,90 @@ export default class LongbridgeApp extends View {
   }
 
   /**
+   * Opens the trade gateway's push channel for this session.
+   *
+   * Orders change without this application doing anything -- a resting limit
+   * order fills at three in the afternoon, an exchange rejects one after
+   * accepting it -- and until this existed the only way to learn that was to
+   * ask again. The gateway says so instead.
+   *
+   * It is a second socket to a second host, and deliberately not folded into
+   * `createQuoteStream`: the two gateways number their commands
+   * independently, and one that fails has no business taking the other down.
+   * A trade channel that will not connect leaves prices running.
+   *
+   * @param {string} token @param {number} generation @param {import("gpui").AsyncContext} cx
+   */
+  startTradeStream(token, generation, cx) {
+    this.stopTradeStream();
+    let stream;
+    stream = createTradeStream({
+      accessToken: token,
+      onOrder: (order) => {
+        if (generation === this.streamGeneration && this.tradeStream === stream)
+          this.receiveOrderChange(order, cx);
+      },
+      onStatus: (status, detail) => {
+        // Not shown. `streamError` is the market data connection, which is
+        // what the window's status line is about; an order channel that is
+        // reconnecting says nothing there because prices have not stopped.
+        // It is worth a line in the log, though -- a reader who wonders why a
+        // fill took a while to appear has somewhere to look.
+        if (status === "reconnecting" || status === "callback_error") {
+          console.warn(`trade stream ${status}: ${detail?.error ?? ""}`);
+        }
+      },
+    });
+    this.tradeStream = stream;
+    stream.start();
+  }
+
+  /** Closes the push channel, if one is open. Safe to call when none is. */
+  stopTradeStream() {
+    const stream = this.tradeStream;
+    this.tradeStream = null;
+    stream?.stop();
+  }
+
+  /**
+   * One order's news, from the gateway.
+   *
+   * Applied to today's list only. An order that changes today is today's,
+   * whatever the History window would say about it, and inserting into both
+   * would show it twice.
+   *
+   * A push that changes nothing is dropped before the repaint. The gateway
+   * sends one message per state change and some states repeat, so the
+   * comparison is what keeps a resting order from repainting the window every
+   * time the exchange restates it.
+   *
+   * @param {Record<string, unknown>} pushed @param {import("gpui").Context} cx
+   */
+  receiveOrderChange(pushed, cx) {
+    const order = normalizePushedOrder(pushed);
+    if (!order.orderId) return;
+    // Recorded whether or not there is a list to put it in. A push that
+    // arrives before the page has ever been read is the one that matters
+    // most -- it is the order that was just placed -- and the read that
+    // follows folds it back in rather than losing it.
+    this.pushedOrders.set(order.orderId, { order, at: Date.now() });
+    // Before the list has ever been read there is nothing to merge into: a
+    // first push would otherwise become a one-row list that looks complete
+    // and is not.
+    if (this.ordersState.status !== "ready") return;
+    const today = mergeOrder(this.ordersState.today, order);
+    if (today === this.ordersState.today) return;
+    this.ordersState = { ...this.ordersState, today };
+    this.redraw(cx);
+  }
+
+  /**
    * Reads both order lists, on the page that shows them.
    *
-   * Orders are not streamed -- there is no push channel for them in the quote
-   * protocol -- so this is a read, and the page asks for it when it opens and
-   * when the session reconnects rather than on a timer nobody asked for.
+   * The push channel keeps today's list current once it has been read, but it
+   * only reports changes: it never says what was already there, and it says
+   * nothing at all about History. So the page still asks once, when it opens
+   * and when the session reconnects, rather than on a timer nobody asked for.
    *
    * @param {import("gpui").Context} cx
    */
@@ -1757,60 +1863,41 @@ export default class LongbridgeApp extends View {
   }
 
   /**
-   * How many times a write waits for the list to report it, and how long
-   * between tries.
+   * How long a pushed order outlives a read that disagrees with it.
    *
-   * Longbridge accepts an order before its list reports one: the write and the
-   * read reach different sides of the same system. So the first read after a
-   * submit usually does not contain what was just submitted, and the page a
-   * reader is sent to shows everything except the thing they just did.
+   * The gap it covers is the one between a write being accepted and this
+   * account's list reporting it, which is seconds. Past that the endpoint is
+   * the better authority: an order that fills and moves to History would
+   * otherwise be held in today's list by a push nothing ever supersedes.
    */
-  static get ORDER_SETTLE_ATTEMPTS() {
-    return 4;
-  }
-
-  static get ORDER_SETTLE_INTERVAL_MS() {
-    return 600;
+  static get ORDER_PUSH_GRACE_MS() {
+    return 30_000;
   }
 
   /**
-   * What the order list currently says, as one string.
+   * The read's list, with anything the push channel knows and it does not.
    *
-   * A write changes it in one of three ways -- a row appears, a status
-   * changes, a quantity or price changes -- so comparing this before and after
-   * is one condition covering all three, without the caller having to know
-   * which kind of write it made.
+   * `updatedAt` is what decides. A read that carries the same version of an
+   * order, or a newer one, has caught up, and the pushed copy is let go; a
+   * read that is still behind keeps it. Entries past the grace period are
+   * dropped whatever the read says.
    *
-   * @param {readonly LongbridgeOrderRow[]} orders
+   * @param {readonly LongbridgeOrderRow[]} today @param {number} [now]
    */
-  ordersFingerprint(orders) {
-    return orders
-      .map((order) => `${order.orderId}:${order.status}:${order.quantity}:${order.price}`)
-      .join("|");
-  }
-
-  /**
-   * Reads the list back until it reports the write that was just made.
-   *
-   * Waiting a fixed delay would be guessing at how long the other side takes.
-   * Waiting for the list to change is the actual condition, and it stops the
-   * moment it is met -- usually on the second read.
-   *
-   * It gives up after a few tries and leaves the list as it last read it. The
-   * order exists either way; what is uncertain is only when this account's
-   * list will say so, and a page that retried forever would be worse than one
-   * that is briefly a few seconds behind.
-   *
-   * @param {import("gpui").Context} cx @param {string} before the fingerprint before the write
-   */
-  async settleOrders(cx, before) {
-    for (let attempt = 0; attempt < LongbridgeApp.ORDER_SETTLE_ATTEMPTS; attempt += 1) {
-      await this.reloadOrders(cx, attempt > 0);
-      if (this.ordersFingerprint(this.ordersState.today) !== before) return;
-      if (attempt + 1 < LongbridgeApp.ORDER_SETTLE_ATTEMPTS) {
-        await context().sleep(LongbridgeApp.ORDER_SETTLE_INTERVAL_MS);
+  applyPushedOrders(today, now = Date.now()) {
+    let merged = today;
+    for (const [orderId, entry] of this.pushedOrders) {
+      const read = merged.find((candidate) => candidate.orderId === orderId);
+      if (
+        (read && read.updatedAt >= entry.order.updatedAt) ||
+        now - entry.at > LongbridgeApp.ORDER_PUSH_GRACE_MS
+      ) {
+        this.pushedOrders.delete(orderId);
+        continue;
       }
+      merged = mergeOrder(merged, entry.order);
     }
+    return merged;
   }
 
   /**
@@ -1828,23 +1915,27 @@ export default class LongbridgeApp extends View {
    * it: a read that is overtaken by a newer one does not put its older answer
    * back.
    *
+   * What comes back is reconciled with what the push channel has already
+   * reported -- see `applyPushedOrders` -- because the two do not agree
+   * immediately after a write.
+   *
    * @param {import("gpui").Context} cx
    */
-  async reloadOrders(cx, quiet = false) {
+  async reloadOrders(cx) {
     if (!this.hasStoredTokens) return;
     const generation = (this.ordersGeneration ?? 0) + 1;
     this.ordersGeneration = generation;
-    // A re-read while waiting for a write to land keeps the list on screen.
-    // Flashing "Loading orders" three times over two seconds would say the
-    // page was broken rather than that it was waiting.
-    if (!quiet) {
-      this.ordersState = { ...this.ordersState, status: "loading", error: "" };
-      this.redraw(cx);
-    }
+    this.ordersState = { ...this.ordersState, status: "loading", error: "" };
+    this.redraw(cx);
     try {
       const { today, history } = await this.refreshOrders();
       if (generation !== this.ordersGeneration) return;
-      this.ordersState = { status: "ready", today, history, error: "" };
+      this.ordersState = {
+        status: "ready",
+        today: this.applyPushedOrders(today),
+        history,
+        error: "",
+      };
     } catch (error) {
       if (generation !== this.ordersGeneration) return;
       this.ordersState = {
@@ -2595,7 +2686,6 @@ export default class LongbridgeApp extends View {
     if (ticket.mode !== "cancel" && !ticket.review) return;
     this.ticket = { ...this.ticket, pending: true, error: "" };
     this.refreshTicket();
-    const before = this.ordersFingerprint(this.ordersState.today);
     cx.spawn(async (cx) => {
       try {
         if (ticket.mode === "submit") {
@@ -2626,18 +2716,23 @@ export default class LongbridgeApp extends View {
           level: "success",
           id: "trade-order",
         });
-        // Through `loadOrders` rather than by assigning the state here. That
-        // one carries a generation, and this one did not: a read already in
-        // flight -- the page switch above starts one whenever Orders was not
-        // already showing -- would answer afterwards with a list fetched
+        // Through `reloadOrders` rather than by assigning the state here.
+        // That one carries a generation, and this one did not: a read already
+        // in flight -- the page switch above starts one whenever Orders was
+        // not already showing -- would answer afterwards with a list fetched
         // before the order existed and put it back, so the new order appeared
         // and then vanished. It also shows the list as loading while it is,
         // and reports a failed read on the page that could not be read, which
         // is where a failed read belongs rather than on a ticket that
         // succeeded. Awaited in this task rather than started in a new one --
-        // see `reloadOrders` -- and read until the list reports the write,
-        // because it does not on the first try.
-        await this.settleOrders(cx, before);
+        // see `reloadOrders`.
+        //
+        // Once, and not until the list agrees. It usually does not: the read
+        // comes back without the order that was just accepted. What closes
+        // that gap now is the gateway, which pushes the order as soon as it
+        // exists -- see `receiveOrderChange` -- so this read is for the rest
+        // of the page rather than for the order that was just placed.
+        await this.reloadOrders(cx);
       } catch (failure) {
         this.ticket = {
           ...this.ticket,
@@ -2724,6 +2819,7 @@ export default class LongbridgeApp extends View {
     const stream = this.stream;
     if (stream) cx.spawn(() => stream.stop());
     this.stream = null;
+    this.stopTradeStream();
     this.streamGeneration += 1;
     this.connectedToken = null;
     this.authorization = null;

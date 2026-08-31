@@ -12,7 +12,11 @@
       "read": ["${pluginDir}"]
     },
     "network": {
-      "hosts": ["openapi.longbridge.com", "openapi-quote.longbridge.com"]
+      "hosts": [
+        "openapi.longbridge.com",
+        "openapi-quote.longbridge.com",
+        "openapi-trade.longbridge.com"
+      ]
     },
     "storage": true,
     "clipboard": {

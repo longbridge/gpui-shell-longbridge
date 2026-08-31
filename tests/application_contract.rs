@@ -186,20 +186,33 @@ fn the_writable_surface_is_the_watchlist_and_an_account_s_orders() {
         .and_then(|source| source.split("\n  /**").next())
         .expect("confirmTicket method");
     assert!(
-        confirm.contains("await this.settleOrders(cx, before)") && !confirm.contains("this.loadOrders("),
+        confirm.contains("await this.reloadOrders(cx)") && !confirm.contains("this.loadOrders("),
         "the read after a write must be awaited in the task that wrote"
     );
-    // Longbridge accepts an order before its list reports one, so the first
-    // read after a write does not contain it. The condition waited on is the
-    // list changing -- not a fixed delay, which would be a guess at how long
-    // the other side takes -- and the re-reads are quiet, because flashing
-    // "Loading orders" three times says the page is broken rather than
-    // waiting.
+    // Longbridge accepts an order before its list reports one, so the read
+    // after a write does not contain it. What closes that gap is the trade
+    // gateway's push channel rather than reading again and again: the order
+    // arrives because the gateway says it exists. The two are then reconciled,
+    // because the read that is behind must not put the list back as it was.
+    let trade_stream =
+        fs::read_to_string(app_dir().join("trade_stream.js")).expect("trade_stream.js");
     assert!(
-        main.contains("ordersFingerprint(this.ordersState.today) !== before")
-            && main.contains("async reloadOrders(cx, quiet = false)")
-            && main.contains("await this.reloadOrders(cx, attempt > 0)"),
-        "a write must wait for the list to report it, quietly"
+        trade_stream.contains("encodeTradeSubscribeRequest([TRADE_TOPIC_PRIVATE])")
+            && trade_stream.contains("TRADE_COMMAND.PUSH_NOTIFICATION"),
+        "orders must be learned from the gateway's own topic"
+    );
+    assert!(
+        main.contains("this.startTradeStream(token, generation, cx)")
+            && main.contains("receiveOrderChange(pushed, cx)")
+            && main.contains("applyPushedOrders(today)"),
+        "a pushed order must reach the list, and survive a read that is behind it"
+    );
+    // The channel is a second socket to a second host, and the manifest has to
+    // say so or it cannot open at all.
+    let manifest = fs::read_to_string(app_dir().join("gpui-shell.json")).expect("manifest");
+    assert!(
+        manifest.contains("openapi-trade.longbridge.com"),
+        "the trade gateway is its own host and must be declared"
     );
     // Retained text state is the four list filters, the field that names a
     // security to add, and the three an order is composed in.
