@@ -48,7 +48,17 @@ fi
 [ -x "$binary" ] || { printf 'release binary is missing: %s\n' "$binary" >&2; exit 1; }
 
 if [ "${target#macos-}" != "$target" ]; then
-  command -v magick >/dev/null 2>&1 || { printf 'ImageMagick (magick) is required\n' >&2; exit 1; }
+  # The macOS icon carries its own squircle mask and padding, so it must be
+  # rendered from the 1024pt bundle artwork rather than the square base icon.
+  icon_svg="$repo_root/assets/app-icon-macos.svg"
+  if command -v rsvg-convert >/dev/null 2>&1; then
+    render_icon() { rsvg-convert -w "$1" -h "$1" "$icon_svg" -o "$2"; }
+  elif command -v magick >/dev/null 2>&1; then
+    render_icon() { magick -background none -density 512 "$icon_svg" -resize "$1x$1" "$2"; }
+  else
+    printf 'rsvg-convert or ImageMagick is required\n' >&2
+    exit 1
+  fi
   app="$stage/Longbridge Lite.app"
   mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources/app"
   cp "$binary" "$app/Contents/MacOS/longbridge-lite"
@@ -59,9 +69,13 @@ if [ "${target#macos-}" != "$target" ]; then
   iconset="$stage/longbridge-lite.iconset"
   mkdir -p "$iconset"
   for size in 16 32 128 256 512; do
-    magick -background none "$repo_root/assets/app-icon.svg" -resize "${size}x${size}" "$iconset/icon_${size}x${size}.png"
-    double=$((size * 2))
-    magick -background none "$repo_root/assets/app-icon.svg" -resize "${double}x${double}" "$iconset/icon_${size}x${size}@2x.png"
+    render_icon "$size" "$iconset/icon_${size}x${size}.png"
+    render_icon "$((size * 2))" "$iconset/icon_${size}x${size}@2x.png"
+  done
+  # A renderer without SVG support writes an empty or mis-sized file instead of
+  # failing, which would ship a broken icon.
+  for png in "$iconset"/*.png; do
+    [ -s "$png" ] || { printf 'failed to render %s\n' "$png" >&2; exit 1; }
   done
   iconutil -c icns "$iconset" -o "$app/Contents/Resources/longbridge-lite.icns"
   chmod 755 "$app/Contents/MacOS/longbridge-lite"
