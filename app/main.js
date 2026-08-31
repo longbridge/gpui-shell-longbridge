@@ -8,6 +8,7 @@ import {
   Button,
   InputState,
   Popover,
+  Popup,
   Scrollbar,
   Table,
   TableBody,
@@ -2810,9 +2811,7 @@ export default class LongbridgeApp extends View {
 
   /** @param {import("gpui").ModifiersChangedEvent} event @param {import("gpui").Context} cx */
   observeModifiers(event, cx) {
-    const down = MACOS
-      ? Boolean(event.modifiers.platform)
-      : Boolean(event.modifiers.control);
+    const down = MACOS ? Boolean(event.modifiers.platform) : Boolean(event.modifiers.control);
     if (down === this.primaryModifierDown) return;
     this.primaryModifierDown = down;
     this.redraw(cx);
@@ -3803,35 +3802,33 @@ export default class LongbridgeApp extends View {
             (entry) => entry.orderId === menu.orderId,
           )
         : null;
-    return popoverSurface(tokens, "row-menu-surface", { width: 200, menu: true })
-      .absolute()
-      .left(menu.x)
-      .top(menu.y)
+    const surface = popoverSurface(tokens, "row-menu-surface", { width: 200, menu: true })
       .on_mouse_down_out((_event, cx) => {
         this.rowMenu = null;
         this.redraw(cx);
       })
       .child(muted(tokens, menu.symbol).px(tokens.spacing.sm).py(tokens.spacing.xxs))
-      .when(menu.source === "orders", (element) =>
-        element
-          .child(
-            menuItem(
-              tokens,
-              "row-menu-replace",
-              "Modify order",
-              (_event, cx) => this.openReplaceTicket(order, cx),
-              { disabled: !order || !canReplace(order) },
-            ),
-          )
-          .child(
-            menuItem(
-              tokens,
-              "row-menu-cancel",
-              "Withdraw order",
-              (_event, cx) => this.openCancelTicket(order, cx),
-              { destructive: true, disabled: !order || !canCancel(order) },
-            ),
+      // An order that has finished is offered neither entry. Drawn and
+      // disabled, they were two rows of grey saying nothing a reader could
+      // act on -- and the status, which is on the row this menu was opened
+      // from, already says why. A menu is a list of what can be done.
+      .when(Boolean(order) && canReplace(order), (element) =>
+        element.child(
+          menuItem(tokens, "row-menu-replace", "Modify order", (_event, cx) =>
+            this.openReplaceTicket(order, cx),
           ),
+        ),
+      )
+      .when(Boolean(order) && canCancel(order), (element) =>
+        element.child(
+          menuItem(
+            tokens,
+            "row-menu-cancel",
+            "Withdraw order",
+            (_event, cx) => this.openCancelTicket(order, cx),
+            { destructive: true },
+          ),
+        ),
       )
       .when(menu.source !== "orders", (element) =>
         element
@@ -3841,9 +3838,7 @@ export default class LongbridgeApp extends View {
               "row-menu-buy",
               "Buy",
               (_event, cx) => this.openTicket(menu.symbol, "Buy", cx),
-              {
-                tone: tradeSideTone(tokens, "Buy"),
-              },
+              { tone: tradeSideTone(tokens, "Buy") },
             ),
           )
           .child(
@@ -3852,9 +3847,7 @@ export default class LongbridgeApp extends View {
               "row-menu-sell",
               "Sell",
               (_event, cx) => this.openTicket(menu.symbol, "Sell", cx),
-              {
-                tone: tradeSideTone(tokens, "Sell"),
-              },
+              { tone: tradeSideTone(tokens, "Sell") },
             ),
           ),
       )
@@ -3871,12 +3864,27 @@ export default class LongbridgeApp extends View {
             "row-menu-drop",
             "Remove",
             (_event, cx) => this.dropSymbol(menu.symbol, cx),
-            {
-              destructive: true,
-            },
+            { destructive: true },
           ),
         ),
       );
+
+    // A real anchored surface rather than an absolutely-placed child.
+    //
+    // Placed as a child the menu was an ordinary element sitting over the
+    // list, so the rows underneath went on receiving the pointer: moving down
+    // the menu lit up whichever row happened to be behind each item. `Popup`
+    // paints its content in a layer above the window and, since
+    // longbridge/gpui-component#2887, blocks the mouse behind that layer --
+    // which is the part a hand-placed element cannot do at all.
+    //
+    // The trigger is a zero-sized anchor at the pointer, because that is where
+    // a context menu belongs and `Popup` anchors to its trigger's bounds. The
+    // anchor carries the coordinates now; the surface only says what a menu
+    // looks like.
+    return Popup.new("row-menu", div().absolute().left(menu.x).top(menu.y).w(0).h(0))
+      .anchor("bottom_left")
+      .content(surface);
   }
 
   /** @param {import("gpui-base").Theme} tokens */
@@ -4442,19 +4450,18 @@ export default class LongbridgeApp extends View {
       .bg(tokens.background)
       .child(
         quote
-          ? v_flex()
-              .child(
-                v_flex()
-                  .gap(tokens.spacing.xs)
-                  .py(tokens.spacing.xs)
-                  .child(orderBookPanel(tokens, this.depthState, depthRatio(this.depthState)))
-                  .child(
-                    timeSalesPanel(tokens, this.tradesState, {
-                      symbol: quote.symbol,
-                      market: quote.market,
-                    }),
-                  ),
-              )
+          ? v_flex().child(
+              v_flex()
+                .gap(tokens.spacing.xs)
+                .py(tokens.spacing.xs)
+                .child(orderBookPanel(tokens, this.depthState, depthRatio(this.depthState)))
+                .child(
+                  timeSalesPanel(tokens, this.tradesState, {
+                    symbol: quote.symbol,
+                    market: quote.market,
+                  }),
+                ),
+            )
           : emptyPanel(
               tokens,
               "Watchlist is empty",
@@ -4869,10 +4876,11 @@ export default class LongbridgeApp extends View {
         .overflow_y_scrollbar()
         .child(
           orderDetail(tokens, order, {
-            canReplace: canReplace(order),
-            canCancel: canCancel(order),
-            onReplace: (_event, cx) => this.openReplaceTicket(order, cx),
-            onCancel: (_event, cx) => this.openCancelTicket(order, cx),
+            // Passing the handler is what offers the action, so an order that
+            // has finished gets a sheet with no controls rather than a sheet
+            // with two dead ones.
+            onReplace: canReplace(order) ? (_event, cx) => this.openReplaceTicket(order, cx) : null,
+            onCancel: canCancel(order) ? (_event, cx) => this.openCancelTicket(order, cx) : null,
           }),
         ),
       h_flex()

@@ -144,18 +144,20 @@ export const panel = (tokens) => new Surface().build(context(tokens));
 export function action(tokens, id, caption, onClick, options = {}) {
   const { variant = "default", disabled = false, selected = false, quiet = false } = options;
   const ghost = variant === "ghost" || quiet;
-  return new Button(id)
-    .label(caption)
-    .accent(variant === "primary")
-    .danger(variant === "destructive")
-    // Every variant draws a border except the quiet one, which is the whole of
-    // what makes it quiet: a control that grows a border on hover is a control
-    // that resizes on hover, and its neighbours move with it.
-    .bordered(!ghost)
-    .selected(selected)
-    .disabled(disabled)
-    .onClick(onClick)
-    .build(context(tokens));
+  return (
+    new Button(id)
+      .label(caption)
+      .accent(variant === "primary")
+      .danger(variant === "destructive")
+      // Every variant draws a border except the quiet one, which is the whole of
+      // what makes it quiet: a control that grows a border on hover is a control
+      // that resizes on hover, and its neighbours move with it.
+      .bordered(!ghost)
+      .selected(selected)
+      .disabled(disabled)
+      .onClick(onClick)
+      .build(context(tokens))
+  );
 }
 
 /**
@@ -217,13 +219,7 @@ export function connectionPill(tokens, value) {
   const status = statusColors(tokens);
   return new Badge("connection-state")
     .label(
-      active
-        ? "Live"
-        : waiting
-          ? "Connecting"
-          : value === "error"
-            ? "Needs attention"
-            : "Offline",
+      active ? "Live" : waiting ? "Connecting" : value === "error" ? "Needs attention" : "Offline",
     )
     .dot()
     .quiet(waiting)
@@ -796,9 +792,7 @@ export function quoteDetail(tokens, quote, now = Date.now(), pulseOpacity = 1, d
             .flex_1()
             .min_w(0)
             .gap(style().spacing.xxs)
-            .child(
-              new Label(String(quote.name)).size("heading").strong().truncate().build(cx),
-            )
+            .child(new Label(String(quote.name)).size("heading").strong().truncate().build(cx))
             .child(
               muted(tokens, `${quote.market} · ${quote.symbol} · ${quote.currency}`).truncate(),
             ),
@@ -812,9 +806,7 @@ export function quoteDetail(tokens, quote, now = Date.now(), pulseOpacity = 1, d
             .opacity(quote.receivedAt ? pulseOpacity : 0.72)
             .transition("opacity", MOTION)
             .child(numeric(tokens, quote.last, "display"))
-            .child(
-              numeric(tokens, `${quote.change} · ${quote.changePercent}`).text_color(tone),
-            ),
+            .child(numeric(tokens, `${quote.change} · ${quote.changePercent}`).text_color(tone)),
         ),
     )
     .child(rule(tokens))
@@ -957,7 +949,10 @@ export function allocationChart(tokens, group, pointer = {}) {
                 .gap(style().spacing.xs)
                 .flex_1()
                 .child(
-                  div().w(7).h(7).bg(allocationColor(tokens, slice, index)),
+                  div()
+                    .w(7)
+                    .h(7)
+                    .bg(allocationColor(tokens, slice, index)),
                 )
                 .child(label(tokens, slice.name)),
             )
@@ -1161,10 +1156,7 @@ export function holdingRow(tokens, holding, selected = false, rowIndex = 0) {
         .child(muted(tokens, holding.costPrice))
         .build(cx),
     )
-    .cell(
-      { width: "20%", align: "end" },
-      numeric(tokens, holding.todayPnl).text_color(todayTone),
-    )
+    .cell({ width: "20%", align: "end" }, numeric(tokens, holding.todayPnl).text_color(todayTone))
     .cell(
       { align: "end" },
       new CellStack()
@@ -1326,7 +1318,10 @@ export function orderRow(tokens, order, rowIndex = 0, selected = false) {
  * @param {{ onReplace?: Function | null, onCancel?: Function | null, canReplace?: boolean, canCancel?: boolean }} [actions]
  */
 export function orderDetail(tokens, order, actions = {}) {
-  const { onReplace = null, onCancel = null, canReplace = false, canCancel = false } = actions;
+  // Each action is offered or it is not; there is no third state. A control
+  // drawn and disabled is a row of grey saying nothing a reader can act on,
+  // and the status above it already says why it cannot.
+  const { onReplace = null, onCancel = null } = actions;
   const cx = context(tokens);
   const sideTone = tradeSideTone(tokens, order.sideKind);
   const stamp = (value) => {
@@ -1383,17 +1378,27 @@ export function orderDetail(tokens, order, actions = {}) {
         element.child(
           h_flex()
             .gap(style().spacing.sm)
-            .child(
-              action(tokens, `order-detail-replace-${order.orderId}`, "Modify", onReplace, {
-                disabled: !canReplace,
-              }).flex_1(),
+            .when(Boolean(onReplace), (row) =>
+              row.child(
+                action(
+                  tokens,
+                  `order-detail-replace-${order.orderId}`,
+                  "Modify",
+                  onReplace,
+                ).flex_1(),
+              ),
             )
-            .child(
-              action(tokens, `order-detail-cancel-${order.orderId}`, "Withdraw", onCancel, {
-                variant: "destructive",
-                quiet: true,
-                disabled: !canCancel,
-              }).flex_1(),
+            .when(Boolean(onCancel), (row) =>
+              row.child(
+                // Outlined rather than filled. Withdrawing is the destructive
+                // one of the two, but it is not the sheet's purpose, and a
+                // solid red block would be the loudest thing on a panel opened
+                // to read an order.
+                action(tokens, `order-detail-cancel-${order.orderId}`, "Withdraw", onCancel, {
+                  variant: "destructive",
+                  quiet: true,
+                }).flex_1(),
+              ),
             ),
         ),
       )

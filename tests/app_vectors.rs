@@ -480,12 +480,13 @@ fn orders_page_stacks_today_over_history_as_one_filtered_reading(cx: &mut TestAp
     });
 
     // The open sheet carries what can still be done to that order, so a reader
-    // who has an order in front of them does not have to go back and
-    // right-click the row to act on it. The sheet's order is filled, so both
-    // are drawn and both are disabled.
+    // with an order in front of them does not have to go back and right-click
+    // its row. This one is filled, so there is nothing left to do to it and
+    // the sheet offers nothing -- a control drawn and disabled would be a row
+    // of grey saying what the status already says.
     assert!(
-        rendered.contains("Modify") && rendered.contains("Withdraw"),
-        "the order sheet must offer to change and withdraw:\n{rendered}"
+        !rendered.contains("Modify") && !rendered.contains("Withdraw"),
+        "a finished order must be offered no actions:\n{rendered}"
     );
 
     // Two panels, Today first: what is working now is the shorter list and the
