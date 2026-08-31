@@ -14,7 +14,9 @@ import { label, muted, numeric } from "./ui.js";
 
 export const PRICE_CHART_LAYOUT = Object.freeze({ width: 480, height: 198, dayGap: 8 });
 
-const TYPE = Object.freeze({ bodySmall: 11, body: 12 });
+// The two steps of the shared type scale this view names. `ui.js` resolves a
+// step to a size; the view only has to say which one it means.
+const TYPE = Object.freeze({ bodySmall: "bodySmall", body: "body" });
 const MARKER_SIZE = 6;
 const INTRADAY_POINT_LIMIT = 240;
 const CANDLE_MODES = new Set(["1m", "5m", "15m", "1D"]);

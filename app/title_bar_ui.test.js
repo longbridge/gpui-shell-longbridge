@@ -35,7 +35,7 @@ export default class TitleBarProbe extends LongbridgeApp {
     setOmarchyMarketColors({
       info: "#20d9ff",
       warning: "#f5c76d",
-      down: "#ff758f",
+      danger: "#ff758f",
     });
     this.hasStoredTokens = false;
     this.followsSystemTheme = true;

@@ -65,7 +65,13 @@ import PriceChartView, {
 } from "./price_chart_view.js";
 import { loadFpsVisible, saveFpsVisible } from "./fps_preference.js";
 import { DEFAULT_CHART_MODE, loadChartMode, saveChartMode } from "./chart_mode_preference.js";
-import { omarchyBaseColors, omarchyMarketColors, omarchyTheme } from "./system_theme.js";
+import {
+  applyOmarchyRoles,
+  omarchyBaseColors,
+  omarchyStatusColors,
+  omarchyTheme,
+} from "omarchy-ui";
+import { applyTerminalStyle } from "./style.js";
 import {
   changeTone,
   setOmarchyAvatarColors,
@@ -123,6 +129,21 @@ async function currentOmarchyColors() {
   try {
     const { current_colors } = await import("omarchy-theme");
     return current_colors();
+  } catch (_) {
+    return "";
+  }
+}
+
+/**
+ * The desktop's structural tokens: its spacing scale, type scale, rounding and
+ * control chrome. Colour is `colors.toml`; this is everything else a theme can
+ * say, and Omarchy UI's components read it.
+ */
+async function currentOmarchyShell() {
+  if (platform !== "linux") return "";
+  try {
+    const { current_shell } = await import("omarchy-theme");
+    return current_shell();
   } catch (_) {
     return "";
   }
@@ -512,10 +533,15 @@ export default class LongbridgeApp extends View {
       const themeSource = await readFile("theme.json", "utf8");
       themes = JSON.parse(themeSource);
       const omarchySource = await currentOmarchyColors();
+      // The scale first: `omarchyTheme` derives the theme's spacing and radius
+      // from it, so a palette applied over the wrong rhythm would have to be
+      // applied twice.
+      applyTerminalStyle(await currentOmarchyShell());
+      applyOmarchyRoles(omarchySource);
       const fallback = themes[window.appearance()];
-      const systemTheme = omarchyTheme(omarchySource, fallback);
+      const systemTheme = omarchyTheme(omarchySource, fallback.tokens);
       setOmarchyAvatarColors(omarchyBaseColors(omarchySource));
-      setOmarchyMarketColors(omarchyMarketColors(omarchySource));
+      setOmarchyMarketColors(omarchyStatusColors(omarchySource));
       this.followsSystemTheme = systemTheme !== null;
       this.omarchyThemeSource = systemTheme ? omarchySource : "";
       set_theme(systemTheme ?? fallback);
@@ -591,10 +617,12 @@ export default class LongbridgeApp extends View {
       try {
         const source = await currentOmarchyColors();
         if (!source || source === this.omarchyThemeSource) return;
-        const theme = omarchyTheme(source, themes[window.appearance()]);
+        applyTerminalStyle(await currentOmarchyShell());
+        applyOmarchyRoles(source);
+        const theme = omarchyTheme(source, themes[window.appearance()].tokens);
         if (!theme) return;
         setOmarchyAvatarColors(omarchyBaseColors(source));
-        setOmarchyMarketColors(omarchyMarketColors(source));
+        setOmarchyMarketColors(omarchyStatusColors(source));
         this.followsSystemTheme = true;
         this.omarchyThemeSource = source;
         set_theme(theme);
@@ -2258,7 +2286,7 @@ export default class LongbridgeApp extends View {
           .border(1)
           .border_color(tokens.border)
           .rounded(tokens.radius.md)
-          .child(label(tokens, "Keyboard shortcuts", 15).font_weight(700))
+          .child(label(tokens, "Keyboard shortcuts", "heading").font_weight(700))
           .children(
             KEY_BINDINGS.filter((binding) => Boolean(binding.caption)).map((binding) =>
               h_flex()
@@ -2343,7 +2371,7 @@ export default class LongbridgeApp extends View {
                 )
                 .child(svg("assets/logo-danger.svg").absolute().inset_0().text_color(status.down)),
             )
-            .child(label(tokens, "Longbridge", 13).font_weight(700)),
+            .child(label(tokens, "Longbridge", "subtitle").font_weight(700)),
         )
         // The switch is only a switch once there is something to switch between,
         // and both pages need a session.
@@ -2702,7 +2730,7 @@ export default class LongbridgeApp extends View {
       .child(
         v_flex()
           .gap(tokens.spacing.xxs)
-          .child(label(tokens, "Add to watchlist", 14).font_weight(700))
+          .child(label(tokens, "Add to watchlist", "title").font_weight(700))
           .child(muted(tokens, "A code, a dot and its market: AAPL.US, 700.HK, 000001.SZ.")),
       )
       .child(filterInput(tokens, this.symbolInput, 320))
@@ -2762,7 +2790,7 @@ export default class LongbridgeApp extends View {
               .flex_1()
               .min_w(0)
               .gap(tokens.spacing.xxs)
-              .child(label(tokens, preview.name, 13).font_weight(700).truncate())
+              .child(label(tokens, preview.name, "subtitle").font_weight(700).truncate())
               .child(
                 muted(
                   tokens,
@@ -2775,9 +2803,9 @@ export default class LongbridgeApp extends View {
               .flex_none()
               .items_end()
               .gap(tokens.spacing.xxs)
-              .child(numeric(tokens, preview.last, 15))
+              .child(numeric(tokens, preview.last, "heading"))
               .child(
-                numeric(tokens, preview.changePercent, 11).text_color(
+                numeric(tokens, preview.changePercent, "bodySmall").text_color(
                   changeTone(tokens, preview.changePercent),
                 ),
               ),
@@ -2811,7 +2839,7 @@ export default class LongbridgeApp extends View {
   /** @param {import("gpui-base").Theme} tokens */
   rowMenuSurface(tokens) {
     const menu = this.rowMenu;
-    return popoverSurface(tokens, { width: 200, menu: true })
+    return popoverSurface(tokens, "row-menu-surface", { width: 200, menu: true })
       .absolute()
       .left(menu.x)
       .top(menu.y)
@@ -2860,7 +2888,7 @@ export default class LongbridgeApp extends View {
         // panel's whole body, and there is no wrapper left to carry this.
         .on_mouse_down("right", (event, cx) => this.openRowMenu(event, cx))
         .child(
-          tableToolbar(tokens)
+          tableToolbar(tokens, "watchlist-toolbar")
             // No title here. The tab above this row already says "Watchlist",
             // and a pane that names itself twice is two headers wearing one
             // pane. What is left is what the tab cannot carry: the filter, the
@@ -3011,7 +3039,7 @@ export default class LongbridgeApp extends View {
       })
       .trigger(sessionAvatar(tokens, "user-menu-trigger", "Session menu", this.userMenuOpen))
       .content(
-        popoverSurface(tokens, { menu: true })
+        popoverSurface(tokens, "session-menu-surface", { menu: true })
           .child(
             // The menu does what the chord does, by name. Neither knows about
             // the other: the reconnect chord is bound to this action in the keymap, the
@@ -3300,7 +3328,7 @@ export default class LongbridgeApp extends View {
             .child(`${caption} ▾`),
         )
         .content(
-          popoverSurface(tokens, { width: 112, menu: true }).children(
+          popoverSurface(tokens, "chart-mode-menu-surface", { width: 112, menu: true }).children(
             chartModes.map(([id, itemCaption]) =>
               menuItem(
                 tokens,
@@ -3919,8 +3947,8 @@ export default class LongbridgeApp extends View {
         ),
       )
       .content(
-        popoverSurface(tokens, { width: 280 })
-          .child(label(tokens, "How this chart is built", 13).font_weight(700))
+        popoverSurface(tokens, "allocation-help-surface", { width: 280 })
+          .child(label(tokens, "How this chart is built", "subtitle").font_weight(700))
           .child(
             muted(
               tokens,
@@ -3992,7 +4020,7 @@ export default class LongbridgeApp extends View {
                     : stored
                       ? "Restoring your session"
                       : "Sign in to continue",
-                  14,
+                  "title",
                 ).font_weight(700),
               )
               .child(
@@ -4286,8 +4314,8 @@ export default class LongbridgeApp extends View {
         ),
       )
       .content(
-        popoverSurface(tokens, { width: 300 })
-          .child(label(tokens, "Window", 13).font_weight(700))
+        popoverSurface(tokens, "diagnostics-surface", { width: 300 })
+          .child(label(tokens, "Window", "subtitle").font_weight(700))
           .child(
             detailGrid(tokens, [
               {

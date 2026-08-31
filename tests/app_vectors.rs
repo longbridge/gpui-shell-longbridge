@@ -572,13 +572,16 @@ fn orders_page_stacks_today_over_history_as_one_filtered_reading(cx: &mut TestAp
         "the selected order opens a sheet on the right:\n{rendered}"
     );
     // Quiet icon controls rather than captioned buttons: a panel title row has
-    // room for the mark and not for the word.
+    // room for the mark and not for the word. Both are the kit's small compact
+    // command -- one square extent, one icon step -- rather than a size this
+    // panel picked for itself.
     assert!(
         rendered.contains(r#"Button "order-detail-close""#)
             && rendered.contains(r#"Button "order-detail-quote""#)
-            && rendered.contains(r#"svg "assets/x.svg" .w[Number(11.0)]"#)
-            && rendered.contains(r#"svg "assets/chart-line.svg" .w[Number(11.0)]"#)
-            && rendered.contains(r#".w[Number(20.0)] .h[Number(20.0)]"#),
+            && rendered.contains(r#"svg "assets/x.svg" .size[Number(11.0)]"#)
+            && rendered
+                .contains(r#"svg "assets/chart-line.svg" .size[Number(11.0)]"#)
+            && rendered.contains(r#".flex_none .size[Number(24.0)]"#),
         "the sheet carries its own way out, and the way through to the quote:\n{rendered}"
     );
     assert!(
@@ -880,16 +883,26 @@ fn watchlist_row_renders_scannable_market_columns(cx: &mut TestAppContext) {
     );
 
     // And focus must not paint like open. A Popover hands the keyboard back to
-    // its trigger when it dismisses, so a focus style that fills the control
-    // the way `open` does leaves a closed menu looking open.
+    // its trigger when it dismisses, so a focused-but-closed trigger that
+    // said the same thing an open one says would leave a closed menu looking
+    // open.
+    //
+    // The two are told apart by which chrome they take: focus draws the ring,
+    // open draws the selection. Asserted as the ring rather than as a colour,
+    // for the reason the selection assertions above give -- a probe has no
+    // palette, so every token here resolves to the same value and comparing
+    // two of them proves nothing.
     let focus = closed
         .split(":focus(")
         .nth(1)
         .expect("closed trigger has a focus style");
-    let focus = &focus[..focus.find(')').expect("focus style ends")];
     assert!(
-        !focus.contains(".bg["),
-        "focus must not change the trigger's fill: {focus}"
+        focus.contains(".border_color["),
+        "focus has to draw the ring: {focus}"
+    );
+    assert!(
+        open.contains(":focus("),
+        "an open trigger keeps a focus style of its own:\n{open}"
     );
 }
 
@@ -1602,7 +1615,9 @@ fn stock_details_lead_with_the_price_and_fold_their_secondary_readings(cx: &mut 
     assert!(
         heading.contains("Apple Inc.")
             && heading.contains("US · AAPL.US · USD")
-            && heading.contains(".text_size[Number(22.0)]")
+            // The display step of the shared type scale: the largest figure
+            // the pane draws, and the only one that leaves body sizes behind.
+            && heading.contains(".text_size[Number(24.0)]")
             && heading.contains("+3.00 · +1.62%"),
         "the quote heading carries the instrument and its price:\n{heading}"
     );
