@@ -1485,19 +1485,24 @@ export function orderDetail(tokens, order, actions = {}) {
  * @param {string} value
  * @param {(next: string, cx: import("gpui").Context) => void} onChange
  */
-export function segmented(tokens, id, options, value, onChange) {
+export function segmented(tokens, id, options, value, onChange, tabIndex = 0) {
   return h_flex()
     .id(id)
     .gap(style().spacing.xxs)
     .children(
-      options.map((option) =>
+      options.map((option, index) =>
         action(
           tokens,
           `${id}-${option.value}`,
           option.label,
           (_event, cx) => onChange(option.value, cx),
           { selected: option.value === value },
-        ).flex_1(),
+        )
+          .flex_1()
+          // Every choice is its own tab stop. A segmented control that took one
+          // stop and then needed arrow keys would need those arrow keys
+          // written, and nothing here writes them.
+          .when(tabIndex > 0, (element) => element.tab_index(tabIndex + index)),
       ),
     );
 }

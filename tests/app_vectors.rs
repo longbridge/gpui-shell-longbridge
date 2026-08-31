@@ -797,6 +797,62 @@ fn a_dialog_dismissed_by_the_shell_can_be_opened_again(cx: &mut TestAppContext) 
     );
 }
 
+/// The ticket can be filled in without a pointer.
+///
+/// This application is driven from the keyboard and the ticket is reached by
+/// one, so a form that can only be completed by clicking is a form half of it
+/// cannot use.
+#[gpui::test]
+fn the_order_ticket_can_be_filled_in_from_the_keyboard(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("ticket_keyboard.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let (_root, view) = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+    context.run_until_parked();
+    let draw_view = view.clone();
+    context.draw(
+        gpui::Point::default(),
+        gpui::size(gpui::px(1000.), gpui::px(760.)),
+        move |_, _| draw_view.into_any_element(),
+    );
+    let rendered = context.update(|_, cx| {
+        view.read(cx)
+            .snapshot()
+            .map(gpui_shell::RenderSnapshot::debug_tree)
+            .unwrap_or_default()
+    });
+    assert!(
+        rendered.contains("the ticket is fillable from the keyboard"),
+        "{rendered}"
+    );
+    // Every control is a tab stop, and the order they are walked in is the
+    // order they are read in. A field built inside a conditional would
+    // otherwise take its place from where it sits in the source.
+    let stops: Vec<usize> = rendered
+        .match_indices(":tab_index[Number(")
+        .map(|(at, _)| {
+            rendered[at..]
+                .split_once('(')
+                .and_then(|(_, rest)| rest.split_once('.'))
+                .and_then(|(digits, _)| digits.parse().ok())
+                .unwrap_or(0)
+        })
+        .filter(|index| *index > 0)
+        .collect();
+    assert!(
+        stops.len() >= 6,
+        "the ticket's controls must be tab stops: {stops:?}\n{rendered}"
+    );
+    let mut sorted = stops.clone();
+    sorted.sort_unstable();
+    assert_eq!(
+        stops, sorted,
+        "tab order must follow reading order: {stops:?}\n{rendered}"
+    );
+}
+
 #[gpui::test]
 fn the_order_ticket_states_what_it_will_send(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);

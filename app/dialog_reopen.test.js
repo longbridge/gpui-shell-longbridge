@@ -14,8 +14,11 @@ import { v_flex } from "gpui-base";
 import LongbridgeApp from "./main.js";
 
 export default class DialogReopenProbe extends LongbridgeApp {
-  init(_props, _cx) {
+  init(_props, cx) {
     this.initInteractionState();
+    // A probe replaces init wholesale, so it owes the view the state a render
+    // reaches for unconditionally -- the ticket surface tracks this handle.
+    this.ticketFocus = cx.focus_handle();
     this.initOrdersState();
     this.quotes = [
       {

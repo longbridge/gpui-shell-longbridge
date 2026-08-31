@@ -313,6 +313,26 @@ const TODAY_ORDERS_VISIBLE_ROWS = 5;
 /** A panel's toolbar, hairline, column heads and its own border. */
 const ORDERS_PANEL_CHROME = 69;
 
+/**
+ * The order a ticket is filled in, as Tab walks it.
+ *
+ * Written down rather than left to source order: the fields are built inside
+ * conditionals -- a market order has no price, a Hong Kong one no sessions --
+ * so the order they appear in the file is not the order they appear on screen.
+ * The gaps leave room for a segmented control's own choices, each of which is
+ * a tab stop of its own.
+ */
+const TICKET_TAB = Object.freeze({
+  type: 1,
+  price: 10,
+  sizing: 20,
+  size: 30,
+  validity: 40,
+  sessions: 50,
+  cancel: 60,
+  confirm: 70,
+});
+
 /** What the Orders filter narrows on: the instrument, and how an order went. */
 const ORDER_FILTER_FIELDS = Object.freeze(["symbol", "name", "statusLabel", "sideLabel"]);
 
@@ -690,6 +710,7 @@ export default class LongbridgeApp extends View {
   initKeyboard(cx) {
     this.workspaceFocus = cx.focus_handle();
     this.shortcutHelpFocus = cx.focus_handle();
+    this.ticketFocus = cx.focus_handle();
     /** The last chord the workspace saw, for the footer's readout. */
     this.lastKeystroke = "";
     this.keyDown = false;
@@ -1234,10 +1255,15 @@ export default class LongbridgeApp extends View {
     this.ticketPrice.set_step(0.01);
     this.ticketPrice.set_min(0);
     this.ticketPrice.on("change", (_event, _cx) => this.clearTicketFieldError("price"));
+    // Enter in any of the ticket's fields advances it. A form whose only way
+    // forward is the pointer is a form that cannot be filled in from the
+    // keyboard, and this one is reached by a keystroke to begin with.
+    this.ticketPrice.on("submit", (_event, cx) => this.advanceTicket(cx));
     this.ticketQuantity = InputState.new({ placeholder: "0" });
     this.ticketQuantity.set_step(1);
     this.ticketQuantity.set_min(0);
     this.ticketQuantity.on("change", (_event, _cx) => this.clearTicketFieldError("quantity"));
+    this.ticketQuantity.on("submit", (_event, cx) => this.advanceTicket(cx));
     // Sizing by amount is a second field rather than a reinterpretation of the
     // first: the two carry different numbers, and switching between them must
     // not silently turn 1500 dollars into 1500 shares.
@@ -1245,6 +1271,7 @@ export default class LongbridgeApp extends View {
     this.ticketAmount.set_step(100);
     this.ticketAmount.set_min(0);
     this.ticketAmount.on("change", (_event, _cx) => this.clearTicketFieldError("amount"));
+    this.ticketAmount.on("submit", (_event, cx) => this.advanceTicket(cx));
     // The one text state that is not a filter: what a filter narrows is
     // already here, and this names something that is not yet.
     this.symbolInput = InputState.new({ placeholder: "AAPL.US" });
@@ -2263,12 +2290,16 @@ export default class LongbridgeApp extends View {
     return window.has_active_dialog();
   }
 
-  /** Puts the ticket on screen. */
+  /** Puts the ticket on screen, and gives it the keyboard. */
   presentTicket() {
     window.open_dialog(() => this.ticketDialog(this.tokens), {
       escape_dismissable: true,
       backdrop_dismissable: true,
     });
+    // Otherwise the ticket opens with the keyboard still on the workspace
+    // behind it: Tab walks the watchlist, and Enter activates a row under a
+    // dialog the reader is looking at.
+    this.ticketFocus?.focus();
   }
 
   /**
@@ -2361,6 +2392,23 @@ export default class LongbridgeApp extends View {
     this.refreshTicket();
   }
 
+  /**
+   * One step forward through the ticket, from the keyboard.
+   *
+   * Enter means "the next thing", and the next thing depends on where the
+   * ticket is: from the fields it is the confirmation, from the confirmation
+   * it is sending. It deliberately does not skip the confirmation -- Enter in
+   * a filled-in form is exactly the keystroke someone presses without looking,
+   * and the screen it lands on is the one that says what is about to happen.
+   *
+   * @param {import("gpui").Context} cx
+   */
+  advanceTicket(cx) {
+    if (!this.ticket.open || this.ticket.pending) return;
+    if (this.ticket.stage === "form") this.reviewTicket(cx);
+    else this.confirmTicket(cx);
+  }
+
   /** Back to the fields, with what was typed still in them. */
   backToTicketForm() {
     if (!this.ticket.open || this.ticket.pending) return;
@@ -2378,6 +2426,9 @@ export default class LongbridgeApp extends View {
     if (!this.ticket.open) return;
     this.forgetTicket();
     window.close_dialog();
+    // Back where it came from. A dialog that takes the keyboard has to give it
+    // back, or the chords the workspace is written around reach nothing.
+    this.workspaceFocus?.focus();
     this.redraw(cx);
   }
 
@@ -2424,6 +2475,7 @@ export default class LongbridgeApp extends View {
         }
         this.forgetTicket();
         window.close_dialog();
+        this.workspaceFocus?.focus();
         // The order list is where the result of all three of these is, so the
         // page follows the action rather than leaving the reader to go looking
         // for what they just did. `showPage` is not used because it declines
@@ -3388,26 +3440,43 @@ export default class LongbridgeApp extends View {
    */
   ticketDialog(tokens) {
     const ticket = this.ticket;
-    return v_flex()
-      .id("order-ticket-dialog")
-      .w(380)
-      .gap(tokens.spacing.md)
-      .p(tokens.spacing.lg)
-      .rounded(tokens.radius.md)
-      .border(1)
-      .border_color(tokens.border)
-      .bg(tokens.surface)
-      .child(
-        ticketHeading(
-          tokens,
-          ticket.mode === "cancel" ? "Withdraw" : ticket.side,
-          ticket.symbol,
-          ticket.name,
-        ),
-      )
-      .child(ticket.stage === "form" ? this.ticketFormBody(tokens) : this.ticketReviewBody(tokens))
-      .when(Boolean(ticket.error), (element) => element.child(errorMessage(tokens, ticket.error)))
-      .child(this.ticketButtons(tokens));
+    return (
+      v_flex()
+        .id("order-ticket-dialog")
+        // The confirmation has no field to press Enter in, so the surface holds
+        // the keyboard itself. `track_focus` is half of `on_key_down`: without
+        // it the handler sits on an element the keyboard never reaches.
+        .track_focus(this.ticketFocus)
+        .tab_index(0)
+        .on_key_down((event, cx) => {
+          if (String(event.keystroke ?? "") !== "enter") return;
+          // A field's own Enter already advanced the ticket -- letting this one
+          // run too would review and then send in a single press.
+          if (this.ticket.stage !== "review") return;
+          cx.stop_propagation();
+          this.advanceTicket(cx);
+        })
+        .w(380)
+        .gap(tokens.spacing.md)
+        .p(tokens.spacing.lg)
+        .rounded(tokens.radius.md)
+        .border(1)
+        .border_color(tokens.border)
+        .bg(tokens.surface)
+        .child(
+          ticketHeading(
+            tokens,
+            ticket.mode === "cancel" ? "Withdraw" : ticket.side,
+            ticket.symbol,
+            ticket.name,
+          ),
+        )
+        .child(
+          ticket.stage === "form" ? this.ticketFormBody(tokens) : this.ticketReviewBody(tokens),
+        )
+        .when(Boolean(ticket.error), (element) => element.child(errorMessage(tokens, ticket.error)))
+        .child(this.ticketButtons(tokens))
+    );
   }
 
   /** @param {import("gpui-base").Theme} tokens */
@@ -3444,8 +3513,13 @@ export default class LongbridgeApp extends View {
               ticketField(
                 tokens,
                 "Type",
-                segmented(tokens, "ticket-type", ORDER_TYPES, ticket.type, (value) =>
-                  this.updateTicket({ type: value }),
+                segmented(
+                  tokens,
+                  "ticket-type",
+                  ORDER_TYPES,
+                  ticket.type,
+                  (value) => this.updateTicket({ type: value }),
+                  TICKET_TAB.type,
                 ),
               ),
             )
@@ -3457,7 +3531,9 @@ export default class LongbridgeApp extends View {
                 // belongs invites someone to fill it in. The field is replaced
                 // by what the order will actually use.
                 limit
-                  ? valueField(tokens, this.ticketPrice, { unit: ticket.currency }).h(28)
+                  ? valueField(tokens, this.ticketPrice, { unit: ticket.currency })
+                      .h(28)
+                      .tab_index(TICKET_TAB.price)
                   : muted(tokens, "At the market price when it fills"),
                 { error: ticket.errors.price },
               ),
@@ -3467,7 +3543,9 @@ export default class LongbridgeApp extends View {
                 ? ticketField(
                     tokens,
                     "Amount",
-                    valueField(tokens, this.ticketAmount, { unit: ticket.currency }).h(28),
+                    valueField(tokens, this.ticketAmount, { unit: ticket.currency })
+                      .h(28)
+                      .tab_index(TICKET_TAB.size),
                     {
                       error: ticket.errors.amount,
                       // The share count the amount works out to, under the field
@@ -3480,7 +3558,9 @@ export default class LongbridgeApp extends View {
                 : ticketField(
                     tokens,
                     "Quantity",
-                    valueField(tokens, this.ticketQuantity, { unit: "shares" }).h(28),
+                    valueField(tokens, this.ticketQuantity, { unit: "shares" })
+                      .h(28)
+                      .tab_index(TICKET_TAB.size),
                     {
                       error: ticket.errors.quantity,
                       // What the field has to respect, said before it is typed
@@ -3506,8 +3586,13 @@ export default class LongbridgeApp extends View {
               ticketField(
                 tokens,
                 "Valid",
-                segmented(tokens, "ticket-tif", TIME_IN_FORCE, ticket.timeInForce, (value) =>
-                  this.updateTicket({ timeInForce: value }),
+                segmented(
+                  tokens,
+                  "ticket-tif",
+                  TIME_IN_FORCE,
+                  ticket.timeInForce,
+                  (value) => this.updateTicket({ timeInForce: value }),
+                  TICKET_TAB.validity,
                 ),
               ),
             )
@@ -3525,6 +3610,7 @@ export default class LongbridgeApp extends View {
                     ],
                     ticket.outsideRth ? "any" : "rth",
                     (value) => this.updateTicket({ outsideRth: value === "any" }),
+                    TICKET_TAB.sessions,
                   ),
                 ),
               ),
@@ -3565,7 +3651,9 @@ export default class LongbridgeApp extends View {
       caption,
       (_event, _cx) => this.updateTicket({ sizing: other }),
       { quiet: true },
-    ).h(20);
+    )
+      .h(20)
+      .tab_index(TICKET_TAB.sizing);
   }
 
   /** @param {import("gpui-base").Theme} tokens */
@@ -3622,7 +3710,7 @@ export default class LongbridgeApp extends View {
           (_event, cx) =>
             confirming && ticket.mode !== "cancel" ? this.backToTicketForm() : this.closeTicket(cx),
           { disabled: pending },
-        ),
+        ).tab_index(TICKET_TAB.cancel),
       )
       .child(
         confirming
@@ -3635,11 +3723,11 @@ export default class LongbridgeApp extends View {
                 variant: ticket.mode === "cancel" ? "destructive" : "primary",
                 disabled: pending,
               },
-            )
+            ).tab_index(TICKET_TAB.confirm)
           : action(tokens, "ticket-review", "Review", (_event, cx) => this.reviewTicket(cx), {
               variant: "primary",
               disabled: pending,
-            }),
+            }).tab_index(TICKET_TAB.confirm),
       );
   }
 
