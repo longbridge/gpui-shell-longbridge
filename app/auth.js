@@ -7,10 +7,17 @@ import { context } from "./context.js";
 /**
  * The one, fixed public-client identifier for this application.
  *
- * Register once through Longbridge's developer flow, then replace this value.
- * Never add dynamic registration or a client secret here.
+ * Registered once as "Longbridge Lite", a public client with no secret,
+ * granting the device-code and refresh-token flows -- the two this file
+ * implements. Replacing it invalidates every stored refresh token, since a
+ * token belongs to the client it was issued to, so the next start asks each
+ * reader to authorize again.
+ *
+ * Never add dynamic registration or a client secret here. Registration is an
+ * out-of-band step whose management credential does not belong in a
+ * distributed application.
  */
-export const CLIENT_ID = "399ab09a-15a5-4321-af83-1400c7c4d817";
+export const CLIENT_ID = "7426157d-3e7b-4c33-9c18-1ecf32d2d114";
 
 export const OPENAPI_BASE_URL = "https://openapi.longbridge.com";
 export const OAUTH_BASE_URL = `${OPENAPI_BASE_URL}/oauth2`;
