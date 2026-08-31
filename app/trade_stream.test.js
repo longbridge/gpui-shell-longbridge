@@ -26,8 +26,14 @@ async function settle() {
   for (let index = 0; index < 8; index += 1) await Promise.resolve();
 }
 
-/** Encodes a trade.Notification the way the gateway does. */
-function notification(topic, json) {
+/**
+ * Encodes a trade.Notification.
+ *
+ * `contentType` defaults to 0 because that is what the gateway sends: the
+ * field is left unset on this topic and the body is JSON anyway. Passing 1 or
+ * 2 builds the other two cases.
+ */
+function notification(topic, json, contentType = 0) {
   const utf8 = (value) => {
     const out = [];
     for (const character of value) {
@@ -44,8 +50,9 @@ function notification(topic, json) {
     0x0a,
     topicBytes.length,
     ...topicBytes,
-    0x10,
-    TRADE_CONTENT_JSON,
+    // Protobuf omits a field at its default, so an unset content_type is not
+    // on the wire at all.
+    ...(contentType === 0 ? [] : [0x10, contentType]),
     0x18,
     1,
     0x22,
@@ -175,7 +182,27 @@ async function runVectors() {
   check(
     orderFromNotification({ topic: "private", contentType: 2, data: Uint8Array.of(1, 2, 3) }) ===
       null,
-    "nor a body this channel cannot read",
+    "nor a body the gateway says is protobuf",
+  );
+  check(
+    orderFromNotification({ topic: "private", contentType: 0, data: Uint8Array.of(1, 2, 3) }) ===
+      null,
+    "nor one that will not parse as anything",
+  );
+  // The gateway leaves content_type unset and sends JSON regardless. Requiring
+  // it to say CONTENT_JSON rejected every real push, silently and in exactly
+  // the way an asset change is rejected -- so the orders simply never arrived.
+  check(
+    orderFromNotification(
+      decodeTradeNotification(
+        notification("private", { event: ORDER_CHANGED_EVENT, data: { order_id: "704" } }, 1),
+      ),
+    )?.order_id === "704",
+    "a notification that says it is JSON is read",
+  );
+  check(
+    orderFromNotification(change({ order_id: "705" }))?.order_id === "705",
+    "and so is the one the gateway actually sends, which says nothing",
   );
 
   const transport = new MockWebSocket();

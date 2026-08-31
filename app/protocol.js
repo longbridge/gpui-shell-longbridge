@@ -498,8 +498,17 @@ export function decodeTradeNotification(data) {
   return notification;
 }
 
-/** A notification whose `data` is JSON rather than protobuf. */
+/**
+ * What a notification says its `data` is: `ContentType` from the push
+ * definition, where 0 is `CONTENT_UNDEFINED`.
+ *
+ * The gateway sends 0 on the `private` topic and JSON in the body regardless,
+ * which is why the SDK reads that body on the strength of the topic alone.
+ * Both values are named here because the useful question is not "is this
+ * JSON?" but "has it said it is *not*?".
+ */
 export const TRADE_CONTENT_JSON = 1;
+export const TRADE_CONTENT_PROTOBUF = 2;
 
 /** Encodes quote.SecurityRequest, used by the depth command. */
 export function encodeSecurityRequest(symbol) {

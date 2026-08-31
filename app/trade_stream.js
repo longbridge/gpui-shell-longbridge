@@ -18,7 +18,7 @@ import { WebSocket } from "websocket";
 import {
   FRAME_TYPE,
   TRADE_COMMAND,
-  TRADE_CONTENT_JSON,
+  TRADE_CONTENT_PROTOBUF,
   TRADE_TOPIC_PRIVATE,
   decodeFrame,
   decodeTradeNotification,
@@ -63,7 +63,14 @@ export const ORDER_CHANGED_EVENT = "order_changed_lb";
  */
 export function orderFromNotification(notification) {
   if (notification.topic !== TRADE_TOPIC_PRIVATE) return null;
-  if (notification.contentType !== TRADE_CONTENT_JSON) return null;
+  // Not "is this JSON?" but "has it said it is not?". The gateway leaves
+  // `content_type` unset on this topic -- it arrives as 0, `CONTENT_UNDEFINED`
+  // -- and sends JSON in the body anyway, which is why the SDK reads that body
+  // on the strength of the topic alone. Requiring it to say `CONTENT_JSON`
+  // rejected every real push, and rejected it the way this channel rejects an
+  // asset change: silently, and looking exactly like an account with nothing
+  // happening in it.
+  if (notification.contentType === TRADE_CONTENT_PROTOBUF) return null;
   let payload;
   try {
     payload = JSON.parse(decodeUtf8(notification.data, "notification data"));
@@ -86,7 +93,7 @@ export function orderFromNotification(notification) {
  * @param {{ contentType: number, data: Uint8Array }} notification
  */
 function eventName(notification) {
-  if (notification.contentType !== TRADE_CONTENT_JSON) return "";
+  if (notification.contentType === TRADE_CONTENT_PROTOBUF) return "";
   try {
     const payload = JSON.parse(decodeUtf8(notification.data, "notification data"));
     return typeof payload?.event === "string" ? payload.event : "";
