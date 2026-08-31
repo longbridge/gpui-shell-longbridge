@@ -63,6 +63,7 @@ import {
   isLimitOrder,
   replaceOrderBody,
   sharesForAmount,
+  supportsAmountSizing,
   submitOrderBody,
   ticketSummary,
   validateTicket,
@@ -117,6 +118,7 @@ import {
   ordersHeader,
   segmented,
   ticketField,
+  ticketGroup,
   ticketHeading,
   tradeSideTone,
   calendarGrid,
@@ -3360,121 +3362,158 @@ export default class LongbridgeApp extends View {
     const ticket = this.ticket;
     const limit = isLimitOrder(ticket.type);
     const byAmount = ticket.sizing === "amount";
+    const canSizeByAmount = supportsAmountSizing(ticket.side);
     const sellable = ticket.side === "Sell" ? this.sellableQuantity(ticket.symbol) : null;
-    // The running conversion, shown while the amount is still being typed. It
+    const lot = ticket.lotSize ?? 1;
+    const reference = limit
+      ? Number(this.ticketPrice.value())
+      : (this.lastTradedPrice(ticket.symbol) ?? 0);
+    // The running conversion, shown while the amount is still editable. It
     // goes through the same function the validation uses, so what is previewed
     // here and what is sent cannot drift apart.
     const shares = byAmount
-      ? sharesForAmount(
-          Number(this.ticketAmount.value()),
-          limit ? Number(this.ticketPrice.value()) : (this.lastTradedPrice(ticket.symbol) ?? 0),
-          ticket.lotSize,
-        )
+      ? sharesForAmount(Number(this.ticketAmount.value()), reference, ticket.lotSize)
       : 0;
     return (
       v_flex()
-        .gap(tokens.spacing.sm)
+        // Three sizes of gap, and the order between them is what carries the
+        // grouping: parts of a field are closest, fields within a group are
+        // next, and the two groups are furthest apart. Equal gaps would say
+        // these are all the same kind of decision.
+        .gap(tokens.spacing.lg)
+        // What is being traded. The two fields a reader actually decides --
+        // the price and the size -- are the widest things on the surface and
+        // sit under their own labels, rather than being pushed to the far edge
+        // of a caption row.
         .child(
-          ticketField(
-            tokens,
-            "Type",
-            segmented(tokens, "ticket-type", ORDER_TYPES, ticket.type, (value) =>
-              this.updateTicket({ type: value }),
-            ).w(180),
-          ),
-        )
-        .child(
-          ticketField(
-            tokens,
-            "Price",
-            // A market order has no price, and an empty box where one belongs
-            // invites someone to fill it in. The field is replaced by what the
-            // order will actually use.
-            limit
-              ? filterInput(tokens, this.ticketPrice, 180).h(26)
-              : muted(tokens, "At market price"),
-            ticket.errors.price,
-          ),
-        )
-        .child(
-          ticketField(
-            tokens,
-            "Size by",
-            segmented(tokens, "ticket-sizing", SIZING, ticket.sizing, (value) =>
-              this.updateTicket({ sizing: value }),
-            ).w(180),
-          ),
-        )
-        .child(
-          byAmount
-            ? ticketField(
+          ticketGroup(tokens, "Order", true)
+            .child(
+              ticketField(
                 tokens,
-                "Amount",
-                filterInput(tokens, this.ticketAmount, 180).h(26),
-                ticket.errors.amount,
-              )
-            : ticketField(
-                tokens,
-                "Quantity",
-                filterInput(tokens, this.ticketQuantity, 180).h(26),
-                ticket.errors.quantity,
+                "Type",
+                segmented(tokens, "ticket-type", ORDER_TYPES, ticket.type, (value) =>
+                  this.updateTicket({ type: value }),
+                ),
               ),
-        )
-        // What the amount works out to, while it is still editable. The order
-        // is placed in shares, so this is the number actually being sent.
-        .when(byAmount && shares > 0, (element) =>
-          element.child(
-            h_flex()
-              .justify_end()
-              .child(muted(tokens, `≈ ${shares} ${shares === 1 ? "share" : "shares"}`)),
-          ),
-        )
-        // What the quantity field has to respect, said before it is typed into
-        // rather than only when it is refused.
-        .when(sellable !== null || (ticket.lotSize ?? 1) > 1, (element) =>
-          element.child(
-            h_flex()
-              .justify_end()
-              .gap(tokens.spacing.sm)
-              .when((ticket.lotSize ?? 1) > 1, (row) =>
-                row.child(muted(tokens, `Lot ${ticket.lotSize}`)),
-              )
-              .when(sellable !== null, (row) =>
-                row.child(muted(tokens, `${sellable} available to sell`)),
-              ),
-          ),
-        )
-        .child(
-          ticketField(
-            tokens,
-            "Valid",
-            segmented(tokens, "ticket-tif", TIME_IN_FORCE, ticket.timeInForce, (value) =>
-              this.updateTicket({ timeInForce: value }),
-            ).w(180),
-          ),
-        )
-        .when(hasExtendedHours(ticket.symbol), (element) =>
-          element.child(
-            ticketField(
-              tokens,
-              "Sessions",
-              segmented(
+            )
+            .child(
+              ticketField(
                 tokens,
-                "ticket-rth",
-                [
-                  { value: "rth", label: "Regular" },
-                  { value: "any", label: "Pre/post" },
-                ],
-                ticket.outsideRth ? "any" : "rth",
-                (value) => this.updateTicket({ outsideRth: value === "any" }),
-              ).w(180),
+                "Price",
+                // A market order has no price, and an empty box where one
+                // belongs invites someone to fill it in. The field is replaced
+                // by what the order will actually use.
+                limit
+                  ? filterInput(tokens, this.ticketPrice).flex_1().h(28)
+                  : muted(tokens, "At the market price when it fills"),
+                { error: ticket.errors.price, unit: limit ? ticket.currency : "" },
+              ),
+            )
+            .child(
+              byAmount
+                ? ticketField(
+                    tokens,
+                    "Amount",
+                    filterInput(tokens, this.ticketAmount).flex_1().h(28),
+                    {
+                      error: ticket.errors.amount,
+                      unit: ticket.currency,
+                      // The share count the amount works out to, under the field
+                      // that decides it -- the order is placed in shares, so this
+                      // is the number actually being sent.
+                      hint: shares > 0 ? `Buys ${shares} ${shares === 1 ? "share" : "shares"}` : "",
+                      accessory: this.sizingSwitch(tokens, canSizeByAmount),
+                    },
+                  )
+                : ticketField(
+                    tokens,
+                    "Quantity",
+                    filterInput(tokens, this.ticketQuantity).flex_1().h(28),
+                    {
+                      error: ticket.errors.quantity,
+                      // Shares, not lots: Hong Kong quantities are still typed
+                      // in shares, they just have to come in whole lots of
+                      // them. Labelling the field in lots would invite someone
+                      // to type 2 and mean 200.
+                      unit: "shares",
+                      // What the field has to respect, said before it is typed
+                      // into rather than only when it is refused.
+                      hint: [
+                        lot > 1 ? `In multiples of ${lot}` : "",
+                        sellable === null ? "" : `${sellable} available to sell`,
+                      ]
+                        .filter(Boolean)
+                        .join(" · "),
+                      accessory: this.sizingSwitch(tokens, canSizeByAmount),
+                    },
+                  ),
             ),
-          ),
+        )
+        // How long the order stands, and where it may fill. Both are choices
+        // about the order's existence rather than its content, and separating
+        // them is what stops six evenly spaced rows reading as six equal
+        // decisions.
+        .child(
+          ticketGroup(tokens, "Duration")
+            .child(
+              ticketField(
+                tokens,
+                "Valid",
+                segmented(tokens, "ticket-tif", TIME_IN_FORCE, ticket.timeInForce, (value) =>
+                  this.updateTicket({ timeInForce: value }),
+                ),
+              ),
+            )
+            .when(hasExtendedHours(ticket.symbol), (element) =>
+              element.child(
+                ticketField(
+                  tokens,
+                  "Sessions",
+                  segmented(
+                    tokens,
+                    "ticket-rth",
+                    [
+                      { value: "rth", label: "Regular" },
+                      { value: "any", label: "Pre/post" },
+                    ],
+                    ticket.outsideRth ? "any" : "rth",
+                    (value) => this.updateTicket({ outsideRth: value === "any" }),
+                  ),
+                ),
+              ),
+            ),
         )
         .when(Boolean(ticket.errors.form), (element) =>
           element.child(errorMessage(tokens, ticket.errors.form)),
         )
     );
+  }
+
+  /**
+   * The switch between typing a share count and typing a sum of money.
+   *
+   * It sits on the field's own caption row rather than taking a row of its
+   * own: it is not a third decision beside price and size, it is how the size
+   * is being said. Selling does not get it -- a sale disposes of shares, and
+   * a proceeds figure is not something an order can be given.
+   *
+   * @param {import("gpui-base").Theme} tokens @param {boolean} enabled
+   */
+  sizingSwitch(tokens, enabled) {
+    if (!enabled) return null;
+    return h_flex()
+      .gap(tokens.spacing.xxs)
+      .children(
+        SIZING.map((mode) =>
+          action(
+            tokens,
+            `ticket-sizing-${mode.value}`,
+            mode.label,
+            (_event, _cx) => this.updateTicket({ sizing: mode.value }),
+            { selected: this.ticket.sizing === mode.value, quiet: true },
+          ).h(20),
+        ),
+      );
   }
 
   /** @param {import("gpui-base").Theme} tokens */

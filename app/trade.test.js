@@ -3,6 +3,7 @@ import {
   ANY_TIME,
   RTH_ONLY,
   sharesForAmount,
+  supportsAmountSizing,
   canCancel,
   canReplace,
   cancelOrderBody,
@@ -153,11 +154,19 @@ function runVectors() {
     "a limit order does not repeat its own price as a basis",
   );
 
-  // Selling by amount is bounded by the position, exactly as selling by count.
-  check(
-    validateTicket(byAmount({ side: "Sell", amount: "1500" }), { available: 3 }).errors.form,
-    "a sale sized by amount still cannot exceed the position",
-  );
+  // Selling is never sized by amount. A sale disposes of shares, and "sell
+  // 1500 dollars" names proceeds no order can guarantee -- the price it fills
+  // at is not known when it is placed. The mode is not offered on that side,
+  // so a form left holding it falls back to the quantity rather than becoming
+  // an order nobody could have meant.
+  check(!supportsAmountSizing("Sell"), "a sale cannot be sized by amount");
+  check(supportsAmountSizing("Buy") && supportsAmountSizing("buy"), "a purchase can");
+  const staleSell = validateTicket(byAmount({ side: "Sell", quantity: "3", amount: "1500" }), {
+    available: 3,
+  });
+  check(staleSell.ok, "a sale reads the quantity when the form still says amount");
+  check(staleSell.normalized.quantity === 3, "and it is the quantity that is sent");
+  check(staleSell.normalized.sizing === "shares", "the order records how it was really sized");
 
   // Selling more than is held.
   check(

@@ -1833,26 +1833,64 @@ export function segmented(tokens, id, options, value, onChange) {
  * @param {import("gpui").Element} control
  * @param {string} [error]
  */
-export function ticketField(tokens, caption, control, error = "") {
-  return v_flex()
-    .gap(tokens.spacing.xxs)
-    .child(
-      h_flex()
-        .items_center()
-        .justify_between()
-        .gap(tokens.spacing.sm)
-        .child(muted(tokens, caption))
-        .child(control),
-    )
-    .when(Boolean(error), (element) =>
-      element.child(
-        // Under the field and aligned with it, which is a row that pushes its
-        // one child to the end -- `text_align` is not a thing an element has.
+export function ticketField(tokens, caption, control, options = {}) {
+  const { error = "", hint = "", unit = "", accessory = null } = options;
+  return (
+    v_flex()
+      // Label, control, then whatever the control needs said about it: one
+      // column, so the eye travels down rather than back and forth between a
+      // caption on one edge and a value on the other. The gap is the one for
+      // parts of a single control, because that is what these are -- it has to
+      // stay smaller than the gap between fields for the grouping to read.
+      .gap(tokens.spacing.xs)
+      .child(
         h_flex()
-          .justify_end()
-          .child(label(tokens, error, 11).text_color(tokens.destructive)),
-      ),
-    );
+          .items_baseline()
+          .justify_between()
+          .gap(tokens.spacing.sm)
+          .child(muted(tokens, caption))
+          // The right of the caption row is where a field's own control goes
+          // -- the sizing switch above the amount, and nothing anywhere else.
+          .when(Boolean(accessory), (element) => element.child(accessory)),
+      )
+      .child(
+        unit
+          ? // The unit belongs to the value, so it sits against the field
+            // rather than floating in the label.
+            h_flex()
+              .items_center()
+              .gap(tokens.spacing.xs)
+              .w_full()
+              .child(control)
+              .child(muted(tokens, unit))
+          : control,
+      )
+      // Errors replace the hint rather than stacking under it: they are about
+      // the same field, and the correction is what matters while it applies.
+      .when(Boolean(error), (element) =>
+        element.child(label(tokens, error, 11).text_color(tokens.destructive)),
+      )
+      .when(Boolean(hint) && !error, (element) => element.child(muted(tokens, hint)))
+  );
+}
+
+/**
+ * A titled group of fields, separated from the one before it by a hairline.
+ *
+ * Grouping by task rather than by nesting a card: an order ticket asks two
+ * different questions -- what is being traded, and how long the order stands
+ * -- and six evenly spaced rows say those are six equal decisions. A heading
+ * and a rule cost less than a container and say more.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {string} title
+ * @param {boolean} first Whether this is the first group, which draws no rule.
+ */
+export function ticketGroup(tokens, title, first = false) {
+  return v_flex()
+    .gap(tokens.spacing.sm)
+    .when(!first, (element) => element.child(rule(tokens).my(tokens.spacing.xxs)))
+    .child(smallCaps(tokens, title));
 }
 
 /**

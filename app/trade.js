@@ -81,6 +81,21 @@ function typedNumber(value) {
 }
 
 /**
+ * Whether an order in this direction can be sized by amount.
+ *
+ * Buying only. A purchase is a decision about how much money to commit, and
+ * the share count follows from it. A sale is a decision about a position:
+ * what is being disposed of is shares, and "sell 1500 dollars" names a
+ * proceeds figure that no order can guarantee -- the price it fills at is not
+ * known when it is placed. The Longbridge desktop client draws the same line.
+ *
+ * @param {unknown} side
+ */
+export function supportsAmountSizing(side) {
+  return String(side ?? "").toLowerCase() === "buy";
+}
+
+/**
  * How the size of an order was said.
  *
  * Longbridge takes a quantity and nothing else, so an amount is not a second
@@ -176,7 +191,11 @@ export function validateTicket(form, context = {}) {
   const side = normalizeSide(form?.side);
   const type = String(form?.type ?? "");
   const limit = isLimitOrder(type);
-  const byAmount = String(form?.sizing ?? "shares") === "amount";
+  // A sale is always sized in shares, whatever the form was left holding: the
+  // mode is not offered on that side, so this is the guard rather than the
+  // rule -- it keeps an unreachable combination from becoming reachable
+  // through a stale field.
+  const byAmount = String(form?.sizing ?? "shares") === "amount" && supportsAmountSizing(side);
 
   const price = typedNumber(form?.price);
   if (limit) {

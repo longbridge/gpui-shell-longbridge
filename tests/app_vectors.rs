@@ -782,7 +782,9 @@ fn the_order_ticket_states_what_it_will_send(cx: &mut TestAppContext) {
             .unwrap_or_default()
     });
 
-    // The form names every field that decides what is sent.
+    // The form names every field that decides what is sent, and groups them by
+    // the question they answer: what is being traded, and how long the order
+    // stands. Six evenly spaced rows would say those are six equal decisions.
     assert!(
         rendered.contains(r#":id[Str("order-ticket-dialog")]"#)
             && rendered.contains("Type")
@@ -790,6 +792,19 @@ fn the_order_ticket_states_what_it_will_send(cx: &mut TestAppContext) {
             && rendered.contains("Quantity")
             && rendered.contains("Valid"),
         "the ticket must state its fields:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("ORDER") && rendered.contains("DURATION"),
+        "the ticket's fields must be grouped by the question they answer:\n{rendered}"
+    );
+    assert!(
+        rendered.find("ORDER") < rendered.find("DURATION"),
+        "what is traded comes before how long it stands:\n{rendered}"
+    );
+    // The unit belongs to the value, not to the label.
+    assert!(
+        rendered.contains("text \"USD\""),
+        "a priced field must carry its currency:\n{rendered}"
     );
     // A US instrument can be traded outside regular hours, so the choice is
     // offered rather than decided silently.
@@ -827,11 +842,11 @@ fn the_order_ticket_states_what_it_will_send(cx: &mut TestAppContext) {
     // a share is whole -- and the ticket previews that while the amount is
     // still editable rather than only at the confirmation.
     assert!(
-        rendered.contains("Size by") && rendered.contains("Amount"),
-        "the ticket must offer to size by amount:\n{rendered}"
+        rendered.contains("Shares") && rendered.contains("Amount"),
+        "a purchase must offer to be sized by amount:\n{rendered}"
     );
     assert!(
-        rendered.contains("\u{2248} 7 shares"),
+        rendered.contains("Buys 7 shares"),
         "the form must preview what the amount buys:\n{rendered}"
     );
     // The confirmation shows the sum asked for beside what it actually buys.
@@ -855,7 +870,7 @@ fn the_order_ticket_states_what_it_will_send(cx: &mut TestAppContext) {
     // A Hong Kong ticket states its board lot up front, and refuses a part lot
     // locally -- the exchange would refuse it anyway, a round trip later.
     assert!(
-        rendered.contains("Lot 100"),
+        rendered.contains("In multiples of 100"),
         "a board lot must be stated before it is typed against:\n{rendered}"
     );
     assert!(
