@@ -277,6 +277,11 @@ const MACOS = platform === "macos";
  * gap on the platforms that have them.
  */
 function titleBarLeading(tokens) {
+  // Whichever is wider. The room the host's own buttons need comes from the
+  // scale, because it is the platform's measurement rather than this
+  // application's; a platform that draws none still wants the ordinary gap,
+  // and a control sitting a few pixels off the last traffic light reads as a
+  // fourth one.
   return Math.max(tokens.spacing.sm, style().spacing.windowControlsInset);
 }
 
