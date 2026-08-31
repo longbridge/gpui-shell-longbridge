@@ -1405,23 +1405,27 @@ export function orderDetail(tokens, order, actions = {}) {
             .gap(style().spacing.sm)
             .when(Boolean(onReplace), (row) =>
               row.child(
+                // The ellipsis is the desktop's promise that a command needs
+                // more from you before it does anything: Modify opens a ticket
+                // to fill in. Withdraw does not have one -- what follows it is
+                // a confirmation, not a form.
                 action(
                   tokens,
                   `order-detail-replace-${order.orderId}`,
-                  "Modify",
+                  "Modify…",
                   onReplace,
                 ).flex_1(),
               ),
             )
             .when(Boolean(onCancel), (row) =>
               row.child(
-                // Outlined rather than filled. Withdrawing is the destructive
-                // one of the two, but it is not the sheet's purpose, and a
-                // solid red block would be the loudest thing on a panel opened
-                // to read an order.
+                // Outlined, like Modify beside it: the two are peers, and a
+                // borderless one reads as the lesser of them. Destructive
+                // carries the colour, and in this kit that is a red label and
+                // a red edge rather than a solid block -- which would be the
+                // loudest thing on a panel opened to read an order.
                 action(tokens, `order-detail-cancel-${order.orderId}`, "Withdraw", onCancel, {
                   variant: "destructive",
-                  quiet: true,
                 }).flex_1(),
               ),
             ),

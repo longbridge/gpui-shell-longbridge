@@ -3940,7 +3940,7 @@ export default class LongbridgeApp extends View {
       // from, already says why. A menu is a list of what can be done.
       .when(Boolean(order) && canReplace(order), (element) =>
         element.child(
-          menuItem(tokens, "row-menu-replace", "Modify order", (_event, cx) =>
+          menuItem(tokens, "row-menu-replace", "Modify order…", (_event, cx) =>
             this.openReplaceTicket(order, cx),
           ),
         ),
@@ -3962,7 +3962,7 @@ export default class LongbridgeApp extends View {
             menuItem(
               tokens,
               "row-menu-buy",
-              "Buy",
+              "Buy…",
               (_event, cx) => this.openTicket(menu.symbol, "Buy", cx),
               { tone: tradeSideTone(tokens, "Buy") },
             ),
@@ -3971,7 +3971,7 @@ export default class LongbridgeApp extends View {
             menuItem(
               tokens,
               "row-menu-sell",
-              "Sell",
+              "Sell…",
               (_event, cx) => this.openTicket(menu.symbol, "Sell", cx),
               { tone: tradeSideTone(tokens, "Sell") },
             ),

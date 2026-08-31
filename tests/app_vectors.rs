@@ -1003,7 +1003,7 @@ fn the_order_ticket_states_what_it_will_send(cx: &mut TestAppContext) {
     );
     // An order's menu acts on the order, not on the instrument.
     assert!(
-        rendered.contains("Modify order") && rendered.contains("Withdraw order"),
+        rendered.contains("Modify order\u{2026}") && rendered.contains("Withdraw order"),
         "an order menu must offer to change and withdraw it:\n{rendered}"
     );
 }
