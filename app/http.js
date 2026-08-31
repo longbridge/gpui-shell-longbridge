@@ -1,11 +1,15 @@
 // The Longbridge REST boundary. OAuth owns the two necessary form POSTs in
-// auth.js; everything else goes through one of two doors here.
+// auth.js; everything else goes through one of the doors here.
 //
-// `get` reads, and refuses any path not on its list. `put` writes, and its
-// list is one path long: the watchlist's own groups, which is what adding and
-// taking away a security is. No order-writing method is available from this
-// module -- the two trade paths read an account's own order history, and
-// nothing here can submit, change or withdraw one.
+// Every door is a list. `get` reads and refuses any path not on its list;
+// `post`, `put` and `del` write, and refuse any path not on theirs. The lists
+// are the point: what this application can change is two things -- the
+// watchlist's own groups, and an order -- and both are written down where
+// they can be read, rather than implied by which call sites happen to exist.
+//
+// The order path is the one that moves money. It is spelled once, here, and
+// the three methods on it are the three things that can be done to an order:
+// place it, change it, take it back.
 
 import { context } from "./context.js";
 import { OPENAPI_BASE_URL, accessToken, refreshAccessToken } from "./auth.js";
@@ -29,14 +33,28 @@ const READ_ONLY_PATHS = new Set([
   "/v1/watchlist/groups",
 ]);
 
-// The watchlist is a list of what to watch, and this is the one thing the
-// application changes. Everything else it touches, it reads.
-const EDITABLE_PATHS = new Set(["/v1/watchlist/groups"]);
+/** An order: placed with `post`, changed with `put`, withdrawn with `del`. */
+export const TRADE_ORDER_PATH = "/v1/trade/order";
 
-/** @param {string} path */
-function assertEditablePath(path) {
-  if (typeof path !== "string" || !EDITABLE_PATHS.has(path)) {
-    throw new Error(`Longbridge HTTP refuses to write to ${String(path)}`);
+/**
+ * The two things this application changes, and what may be done to each.
+ *
+ * The method is part of the grant rather than a separate question, because
+ * the pair is what a reader needs: a watchlist group is edited in place and
+ * never deleted, an order can be placed, changed and withdrawn. A path alone
+ * would leave `DELETE /v1/watchlist/groups` reachable from this module on the
+ * grounds that the path is spelled somewhere in it.
+ */
+const WRITABLE = new Map([
+  ["/v1/watchlist/groups", new Set(["PUT"])],
+  [TRADE_ORDER_PATH, new Set(["POST", "PUT", "DELETE"])],
+]);
+
+/** @param {string} method @param {string} path */
+function assertWritable(method, path) {
+  const allowed = typeof path === "string" ? WRITABLE.get(path) : undefined;
+  if (!allowed || !allowed.has(method)) {
+    throw new Error(`Longbridge HTTP refuses ${method} ${String(path)}`);
   }
 }
 
@@ -112,23 +130,24 @@ export async function get(path, query = {}) {
 }
 
 /**
- * Sends one authenticated `PUT`, to a path that is allowed to be written.
+ * Sends one authenticated write, to a path that is allowed to be written.
  *
  * A Longbridge write answers 200 with a code in the body, so an HTTP status is
  * not the whole answer: a refused change arrives as a successful response
  * carrying the reason, and reporting only the status would leave a rejected
- * addition looking like one that worked.
+ * addition -- or a rejected order -- looking like one that worked.
  *
+ * @param {"POST" | "PUT" | "DELETE"} method
  * @param {string} path
  * @param {Record<string, unknown>} body
  */
-export async function put(path, body) {
-  assertEditablePath(path);
+async function write(method, path, body) {
+  assertWritable(method, path);
   const url = `${OPENAPI_BASE_URL}${path}`;
   const send = async (token) =>
     Promise.race([
       fetch(url, {
-        method: "PUT",
+        method,
         headers: {
           Accept: "application/json",
           "Accept-Language": API_LANGUAGE,
@@ -161,6 +180,31 @@ export async function put(path, body) {
     throw new Error(`Longbridge refused the change (${payload.code}): ${payload.message ?? ""}`);
   }
   return payload;
+}
+
+/**
+ * Places something new. The only path this is allowed on is an order, and the
+ * body carries the `client_request_id` that makes a retry idempotent.
+ *
+ * @param {string} path @param {Record<string, unknown>} body
+ */
+export async function post(path, body) {
+  return write("POST", path, body);
+}
+
+/** @param {string} path @param {Record<string, unknown>} body */
+export async function put(path, body) {
+  return write("PUT", path, body);
+}
+
+/**
+ * Withdraws something. `DELETE` carries a body here -- the order id travels in
+ * it, not in the query string, which is how the endpoint is specified.
+ *
+ * @param {string} path @param {Record<string, unknown>} body
+ */
+export async function del(path, body) {
+  return write("DELETE", path, body);
 }
 
 /** Requests the one-time password required by WebSocket command 2. */

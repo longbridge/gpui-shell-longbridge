@@ -29,7 +29,7 @@ import {
   loadTokens,
   pollDeviceAuthorization,
 } from "./auth.js";
-import { get, put } from "./http.js";
+import { TRADE_ORDER_PATH, del, get, post, put } from "./http.js";
 import {
   applyQuotes,
   filterRows,
@@ -51,6 +51,21 @@ import {
 import { PERIOD, TRADE_SESSION } from "./protocol.js";
 import { depthRatio, mergeTrades, normalizeDepth, validDepthLevel } from "./market_detail.js";
 import { HISTORY_WINDOW_DAYS, historyRange, normalizeOrders } from "./orders.js";
+import {
+  ORDER_TYPES,
+  TIME_IN_FORCE,
+  canCancel,
+  canReplace,
+  cancelOrderBody,
+  emptyTicket,
+  hasExtendedHours,
+  isLimitOrder,
+  replaceOrderBody,
+  submitOrderBody,
+  ticketSummary,
+  validateTicket,
+} from "./trade.js";
+import { randomUUID } from "crypto";
 import {
   addTargetGroup,
   groupRequestId,
@@ -94,9 +109,14 @@ import {
   menuTrigger,
   iconAction,
   ORDER_ROW_HEIGHT,
+  orderConfirmSummary,
   orderDetail,
   orderRow,
   ordersHeader,
+  segmented,
+  ticketField,
+  ticketHeading,
+  tradeSideTone,
   calendarGrid,
   muted,
   numeric,
@@ -368,6 +388,22 @@ export const KEY_BINDINGS = Object.freeze([
     display: "Enter / O",
   },
   { keystroke: "o", action: "collection::activate", context: "Workspace && !Input", caption: "" },
+  // Buying and selling get letters of their own rather than a modifier chord:
+  // this application is driven from the keyboard, `b` and `s` are free, and a
+  // ticket is a dialog with a confirmation in front of it, so a mistyped
+  // letter opens a form rather than placing anything.
+  {
+    keystroke: "b",
+    action: "trade::buy",
+    context: "Workspace && !Input",
+    caption: "Buy selected",
+  },
+  {
+    keystroke: "s",
+    action: "trade::sell",
+    context: "Workspace && !Input",
+    caption: "Sell selected",
+  },
   { keystroke: "escape", action: "workspace::dismiss", context: "Workspace", caption: "Dismiss" },
   { keystroke: "tab", action: "shortcut-help::retain-focus", context: "ShortcutHelp", caption: "" },
   {
@@ -1082,8 +1118,39 @@ export default class LongbridgeApp extends View {
     /** @type {{ status: "idle" | "loading" | "ready" | "error", symbol: string, name: string, exchange: string, currency: string, last: string, change: string, changePercent: string, error: string }} */
     this.symbolPreview = { status: "idle", symbol: "", error: "" };
     this.symbolPreviewGeneration = 0;
-    /** @type {{ symbol: string, x: number, y: number } | null} */
+    // A row menu is opened from three lists now, and what it may offer differs
+    // by list: an order can be modified and withdrawn, a holding can be traded
+    // but not removed from a watchlist it may not even be on.
+    /** @type {{ symbol: string, x: number, y: number, source: "watchlist" | "holdings" | "orders", orderId?: string } | null} */
     this.rowMenu = null;
+    /**
+     * The order ticket.
+     *
+     * `stage` is what makes the confirmation a confirmation: the form's values
+     * are frozen into `review` when Review is pressed, and Confirm sends those
+     * rather than re-reading the fields. Otherwise what is confirmed is
+     * whatever the boxes hold at the moment of the second click, which is not
+     * what the reader read.
+     *
+     * @type {{
+     *   open: boolean,
+     *   stage: "form" | "review",
+     *   mode: "submit" | "replace" | "cancel",
+     *   side: string,
+     *   symbol: string,
+     *   name: string,
+     *   currency: string,
+     *   orderId: string,
+     *   type: string,
+     *   timeInForce: string,
+     *   outsideRth: boolean,
+     *   errors: { price?: string, quantity?: string, form?: string },
+     *   review: ReturnType<typeof validateTicket>["normalized"],
+     *   pending: boolean,
+     *   error: string,
+     * }}
+     */
+    this.ticket = this.blankTicket();
     /** Which stock-detail sections are expanded. */
     this.detailSections = { more: false };
     this.watchlistQuery = "";
@@ -1113,6 +1180,18 @@ export default class LongbridgeApp extends View {
       this.historyOrdersQuery = this.historyOrdersFilter.value();
       this.redraw(cx);
     });
+    // The ticket's two fields. `set_step` and `set_min` are what turn an
+    // ordinary text state into a number state -- there is no numeric state
+    // type -- and the minimum is what stops the steppers walking a quantity
+    // below zero. Neither may be created in `render`.
+    this.ticketPrice = InputState.new({ placeholder: "0.00" });
+    this.ticketPrice.set_step(0.01);
+    this.ticketPrice.set_min(0);
+    this.ticketPrice.on("change", (_event, _cx) => this.clearTicketFieldError("price"));
+    this.ticketQuantity = InputState.new({ placeholder: "0" });
+    this.ticketQuantity.set_step(1);
+    this.ticketQuantity.set_min(0);
+    this.ticketQuantity.on("change", (_event, _cx) => this.clearTicketFieldError("quantity"));
     // The one text state that is not a filter: what a filter narrows is
     // already here, and this names something that is not yet.
     this.symbolInput = InputState.new({ placeholder: "AAPL.US" });
@@ -1781,6 +1860,380 @@ export default class LongbridgeApp extends View {
     });
   }
 
+  /** A ticket that is not open, which is also the shape of one that is. */
+  blankTicket() {
+    return {
+      open: false,
+      stage: /** @type {"form" | "review"} */ ("form"),
+      mode: /** @type {"submit" | "replace" | "cancel"} */ ("submit"),
+      side: "Buy",
+      symbol: "",
+      name: "",
+      currency: "",
+      orderId: "",
+      // Fixed for the life of the ticket, not minted per click. That is what
+      // makes a retry after a lost response idempotent: pressing Confirm again
+      // sends the id Longbridge already answered, and gets that order back
+      // instead of a second one. A fresh id per press would make this field a
+      // decoration.
+      requestId: "",
+      type: "LO",
+      timeInForce: "Day",
+      outsideRth: false,
+      errors: /** @type {{ price?: string, quantity?: string, form?: string }} */ ({}),
+      review: /** @type {ReturnType<typeof validateTicket>["normalized"]} */ (null),
+      pending: false,
+      error: "",
+    };
+  }
+
+  /**
+   * How many shares of an instrument this account could sell.
+   *
+   * `available` rather than `quantity`: a position can be partly committed to
+   * orders that have not filled, and offering the whole holding would put a
+   * rejection behind the Review button. A holding this account does not have
+   * answers `null` -- not zero, because zero is a claim about the position and
+   * `null` is the absence of one, which is the difference `validateTicket`
+   * turns on.
+   *
+   * @param {string} symbol
+   */
+  sellableQuantity(symbol) {
+    const holding = this.holdings.find((entry) => entry.symbol === symbol);
+    if (!holding) return null;
+    for (const candidate of [holding.available, holding.quantity]) {
+      const value = Number(String(candidate ?? "").trim());
+      if (Number.isFinite(value)) return value;
+    }
+    return null;
+  }
+
+  /**
+   * What this application knows about an instrument, for the ticket's heading
+   * and the currency on its estimate. The watchlist is asked first and the
+   * portfolio second: a holding that is not watched still has a name.
+   *
+   * @param {string} symbol
+   */
+  instrumentFacts(symbol) {
+    const quote = this.quotes.find((entry) => entry.symbol === symbol);
+    const holding = this.holdings.find((entry) => entry.symbol === symbol);
+    /** @param {unknown} value */
+    const readable = (value) => {
+      const text = String(value ?? "").trim();
+      return text === "--" ? "" : text;
+    };
+    return {
+      name: readable(quote?.name) || readable(holding?.name),
+      currency: readable(quote?.currency) || readable(holding?.currency),
+    };
+  }
+
+  /**
+   * Opens a ticket to place an order.
+   *
+   * The price starts at the last traded price, which is the number someone
+   * about to trade is already looking at -- and, being a limit order, one that
+   * will not fill at a price they did not choose. The quantity starts empty:
+   * there is no amount that can be guessed, and a pre-filled one is an amount
+   * nobody typed sitting behind a Confirm button.
+   *
+   * @param {string} symbol @param {"Buy" | "Sell"} side @param {import("gpui").Context} cx
+   */
+  openTicket(symbol, side, cx) {
+    // One dialog at a time: the shell keeps a stack, and a ticket opened over
+    // the add-a-security dialog would close that one on its way out.
+    if (!symbol || this.ticket.open || this.addSymbolOpen) return;
+    const facts = this.instrumentFacts(symbol);
+    const quote = this.quotes.find((entry) => entry.symbol === symbol);
+    const last = String(quote?.last ?? "").trim();
+    this.rowMenu = null;
+    this.ticket = {
+      ...this.blankTicket(),
+      open: true,
+      mode: "submit",
+      side,
+      symbol,
+      name: facts.name,
+      currency: facts.currency,
+      requestId: randomUUID(),
+    };
+    this.ticketPrice.set_value(last && last !== "--" ? last : "");
+    this.ticketQuantity.set_value("");
+    this.presentTicket();
+    this.redraw(cx);
+  }
+
+  /**
+   * Opens a ticket on whatever the keyboard is pointing at.
+   *
+   * Which instrument `b` means depends on the page, because the selection
+   * does: the Watchlist has a selected quote, the Portfolio a selected
+   * holding, and the Orders page a selected order, which names one. A page
+   * with nothing selected does nothing rather than guessing at a row.
+   *
+   * @param {"Buy" | "Sell"} side @param {import("gpui").Context} cx
+   */
+  openTicketForSelection(side, cx) {
+    if (this.ticket.open || this.addSymbolOpen) return;
+    const symbol =
+      this.page === "portfolio"
+        ? this.selectedHoldingSymbol
+        : this.page === "orders"
+          ? (this.selectedOrder()?.symbol ?? null)
+          : this.selectedSymbol;
+    if (symbol) this.openTicket(symbol, side, cx);
+  }
+
+  /**
+   * Opens a ticket to change an order that has not finished.
+   *
+   * Both fields start at what the order already says, so leaving one alone
+   * leaves it alone -- the endpoint requires the quantity on every
+   * replacement, so an untouched quantity is still sent, and it must be sent
+   * as what it was.
+   *
+   * @param {LongbridgeOrderRow} order @param {import("gpui").Context} cx
+   */
+  openReplaceTicket(order, cx) {
+    if (!order || this.ticket.open || !canReplace(order)) return;
+    const facts = this.instrumentFacts(order.symbol);
+    this.rowMenu = null;
+    this.ticket = {
+      ...this.blankTicket(),
+      open: true,
+      mode: "replace",
+      side: order.side,
+      symbol: order.symbol,
+      name: order.name || facts.name,
+      currency: order.currency || facts.currency,
+      orderId: order.orderId,
+      type: isLimitOrder(order.type) ? "LO" : "MO",
+      timeInForce: order.timeInForce === "GTC" ? "GTC" : "Day",
+    };
+    this.ticketPrice.set_value(order.price === "--" ? "" : order.price);
+    this.ticketQuantity.set_value(order.quantity === "--" ? "" : order.quantity);
+    this.presentTicket();
+    this.redraw(cx);
+  }
+
+  /**
+   * Opens the confirmation for withdrawing an order.
+   *
+   * It opens straight into `review`: there is nothing to fill in, and the
+   * whole of the interaction is being sure which order is about to be taken
+   * back.
+   *
+   * @param {LongbridgeOrderRow} order @param {import("gpui").Context} cx
+   */
+  openCancelTicket(order, cx) {
+    if (!order || this.ticket.open || !canCancel(order)) return;
+    this.rowMenu = null;
+    this.ticket = {
+      ...this.blankTicket(),
+      open: true,
+      stage: "review",
+      mode: "cancel",
+      side: order.side,
+      symbol: order.symbol,
+      name: order.name,
+      currency: order.currency,
+      orderId: order.orderId,
+      type: order.type,
+    };
+    this.presentTicket();
+    this.redraw(cx);
+  }
+
+  /** Puts the ticket on screen. */
+  presentTicket() {
+    window.open_dialog(() => this.ticketDialog(this.tokens), {
+      escape_dismissable: true,
+      backdrop_dismissable: true,
+    });
+  }
+
+  /**
+   * Redraws the open ticket.
+   *
+   * The same reason `refreshDialog` exists: a dialog is its own view built
+   * from a function the shell calls when it renders, so `cx.notify()` here
+   * reaches the workspace and never the dialog.
+   */
+  refreshTicket() {
+    if (this.ticket.open) window.refresh();
+  }
+
+  /**
+   * Clears one field's error as it is typed into.
+   *
+   * An error that stays under a field being corrected is an error about a
+   * value that no longer exists. It is cleared on change rather than
+   * re-validated: the answer is not finished being typed.
+   *
+   * @param {"price" | "quantity"} field
+   */
+  clearTicketFieldError(field) {
+    if (!this.ticket.open || !this.ticket.errors[field]) return;
+    const errors = { ...this.ticket.errors };
+    delete errors[field];
+    this.ticket = { ...this.ticket, errors };
+    this.refreshTicket();
+  }
+
+  /** The ticket's fields, as `validateTicket` reads them. */
+  ticketForm() {
+    return {
+      symbol: this.ticket.symbol,
+      side: this.ticket.side,
+      type: this.ticket.type,
+      price: this.ticketPrice.value(),
+      quantity: this.ticketQuantity.value(),
+      timeInForce: this.ticket.timeInForce,
+      outsideRth: this.ticket.outsideRth,
+    };
+  }
+
+  /** @param {Partial<{ type: string, timeInForce: string, outsideRth: boolean }>} change */
+  updateTicket(change) {
+    this.ticket = { ...this.ticket, ...change, error: "" };
+    this.refreshTicket();
+  }
+
+  /**
+   * Checks the ticket and, if it holds together, freezes it into the
+   * confirmation.
+   *
+   * Nothing has been sent at this point and nothing will be until Confirm.
+   * What this does is decide there is something worth confirming.
+   *
+   * @param {import("gpui").Context} _cx
+   */
+  reviewTicket(_cx) {
+    if (!this.ticket.open || this.ticket.pending) return;
+    const result = validateTicket(this.ticketForm(), {
+      available: this.ticket.side === "Sell" ? this.sellableQuantity(this.ticket.symbol) : null,
+    });
+    if (!result.ok) {
+      this.ticket = { ...this.ticket, errors: result.errors, error: "" };
+      this.refreshTicket();
+      return;
+    }
+    this.ticket = {
+      ...this.ticket,
+      stage: "review",
+      errors: {},
+      error: "",
+      review: result.normalized,
+    };
+    this.refreshTicket();
+  }
+
+  /** Back to the fields, with what was typed still in them. */
+  backToTicketForm() {
+    if (!this.ticket.open || this.ticket.pending) return;
+    this.ticket = { ...this.ticket, stage: "form", error: "" };
+    this.refreshTicket();
+  }
+
+  /** Drops what the ticket was holding, without touching the shell's stack. */
+  forgetTicket() {
+    this.ticket = this.blankTicket();
+  }
+
+  /** @param {import("gpui").Context} cx */
+  closeTicket(cx) {
+    if (!this.ticket.open) return;
+    this.forgetTicket();
+    window.close_dialog();
+    this.redraw(cx);
+  }
+
+  /**
+   * Sends the confirmed ticket.
+   *
+   * Two things make this safe to press. The request is built from
+   * `ticket.review` -- the values that were confirmed, not the fields, which
+   * may have been stepped since Review. And the submit carries the ticket's
+   * own `client_request_id`, so pressing Confirm again after a lost response
+   * returns the first order rather than placing a second.
+   *
+   * What counts as sent is the request returning. A Longbridge write can
+   * refuse inside a 200, and `http.js` turns that into an error, so a return
+   * here means the order was accepted -- unlike a watchlist change, which
+   * `addSymbol` has to read back because a symbol naming nothing comes back
+   * as a list that simply does not contain it.
+   *
+   * The order list is refreshed afterwards to show the result, and that
+   * refresh is deliberately not allowed to fail the submit: the order exists
+   * either way, and reporting a failed *read* as a failed *order* is how
+   * someone ends up placing it twice.
+   *
+   * A failure to send leaves the dialog open with the reason in it. Closing it
+   * would take the answer away along with the ticket, and the reader would be
+   * left to find out from the order list whether anything happened.
+   *
+   * @param {import("gpui").Context} cx
+   */
+  confirmTicket(cx) {
+    const ticket = this.ticket;
+    if (!ticket.open || ticket.pending || ticket.stage !== "review") return;
+    if (ticket.mode !== "cancel" && !ticket.review) return;
+    this.ticket = { ...this.ticket, pending: true, error: "" };
+    this.refreshTicket();
+    cx.spawn(async (cx) => {
+      try {
+        if (ticket.mode === "submit") {
+          await post(TRADE_ORDER_PATH, submitOrderBody(ticket.review, ticket.requestId));
+        } else if (ticket.mode === "replace") {
+          await put(TRADE_ORDER_PATH, replaceOrderBody(ticket.orderId, ticket.review));
+        } else {
+          await del(TRADE_ORDER_PATH, cancelOrderBody(ticket.orderId));
+        }
+        this.forgetTicket();
+        window.close_dialog();
+        // The order list is where the result of all three of these is, so the
+        // page follows the action rather than leaving the reader to go looking
+        // for what they just did. `showPage` is not used: it would fetch the
+        // orders a second time, and they are being fetched here.
+        this.page = "orders";
+        this.redraw(cx);
+        window.push_toast({
+          title:
+            ticket.mode === "submit"
+              ? `${ticket.side} ${ticket.symbol} submitted`
+              : ticket.mode === "replace"
+                ? `${ticket.symbol} order updated`
+                : `${ticket.symbol} order withdrawn`,
+          level: "success",
+          id: "trade-order",
+        });
+        try {
+          const { today, history } = await this.refreshOrders();
+          this.ordersState = { status: "ready", today, history, error: "" };
+        } catch (failure) {
+          // The order stands; only this reading of the list did not. It is
+          // reported where a failed read belongs -- on the page that could not
+          // be read -- rather than on a ticket that succeeded.
+          this.ordersState = {
+            ...this.ordersState,
+            status: "error",
+            error: failure instanceof Error ? failure.message : String(failure),
+          };
+        }
+        this.redraw(cx);
+      } catch (failure) {
+        this.ticket = {
+          ...this.ticket,
+          pending: false,
+          error: failure instanceof Error ? failure.message : String(failure),
+        };
+        this.refreshTicket();
+      }
+    });
+  }
+
   /** @param {import("gpui").Context} cx */
   loadPortfolio(cx) {
     cx.spawn(async (cx) => {
@@ -1914,6 +2367,8 @@ export default class LongbridgeApp extends View {
       .on_action("collection::first", (_event, cx) => this.selectCollectionBoundary(false, cx))
       .on_action("collection::last", (_event, cx) => this.selectCollectionBoundary(true, cx))
       .on_action("collection::activate", (_event, cx) => this.activateCollection(cx))
+      .on_action("trade::buy", (_event, cx) => this.openTicketForSelection("Buy", cx))
+      .on_action("trade::sell", (_event, cx) => this.openTicketForSelection("Sell", cx))
       .on_action("workspace::dismiss", (_event, cx) => this.dismiss(cx));
   }
 
@@ -1948,6 +2403,10 @@ export default class LongbridgeApp extends View {
     if (this.rowMenu) {
       this.rowMenu = null;
       this.redraw(cx);
+      return;
+    }
+    if (this.ticket.open) {
+      this.closeTicket(cx);
       return;
     }
     if (this.addSymbolOpen) {
@@ -2686,6 +3145,190 @@ export default class LongbridgeApp extends View {
     this.redraw(cx);
   }
 
+  /**
+   * The order ticket, in whichever of its two stages it is in.
+   *
+   * One dialog rather than two, because it is one task: the second stage is
+   * what the first stage said, and a reader who presses Back is still filling
+   * in the same ticket.
+   *
+   * @param {import("gpui-base").Theme} tokens
+   */
+  ticketDialog(tokens) {
+    const ticket = this.ticket;
+    return v_flex()
+      .id("order-ticket-dialog")
+      .w(380)
+      .gap(tokens.spacing.md)
+      .p(tokens.spacing.lg)
+      .rounded(tokens.radius.md)
+      .border(1)
+      .border_color(tokens.border)
+      .bg(tokens.surface)
+      .child(
+        ticketHeading(
+          tokens,
+          ticket.mode === "cancel" ? "Withdraw" : ticket.side,
+          ticket.symbol,
+          ticket.name,
+        ),
+      )
+      .child(ticket.stage === "form" ? this.ticketFormBody(tokens) : this.ticketReviewBody(tokens))
+      .when(Boolean(ticket.error), (element) => element.child(errorMessage(tokens, ticket.error)))
+      .child(this.ticketButtons(tokens));
+  }
+
+  /** @param {import("gpui-base").Theme} tokens */
+  ticketFormBody(tokens) {
+    const ticket = this.ticket;
+    const limit = isLimitOrder(ticket.type);
+    const sellable = ticket.side === "Sell" ? this.sellableQuantity(ticket.symbol) : null;
+    return v_flex()
+      .gap(tokens.spacing.sm)
+      .child(
+        ticketField(
+          tokens,
+          "Type",
+          segmented(tokens, "ticket-type", ORDER_TYPES, ticket.type, (value) =>
+            this.updateTicket({ type: value }),
+          ).w(180),
+        ),
+      )
+      .child(
+        ticketField(
+          tokens,
+          "Price",
+          // A market order has no price, and an empty box where one belongs
+          // invites someone to fill it in. The field is replaced by what the
+          // order will actually use.
+          limit
+            ? filterInput(tokens, this.ticketPrice, 180).h(26)
+            : muted(tokens, "At market price"),
+          ticket.errors.price,
+        ),
+      )
+      .child(
+        ticketField(
+          tokens,
+          "Quantity",
+          filterInput(tokens, this.ticketQuantity, 180).h(26),
+          ticket.errors.quantity,
+        ),
+      )
+      .when(sellable !== null, (element) =>
+        element.child(
+          h_flex()
+            .justify_end()
+            .child(muted(tokens, `${sellable} available to sell`)),
+        ),
+      )
+      .child(
+        ticketField(
+          tokens,
+          "Valid",
+          segmented(tokens, "ticket-tif", TIME_IN_FORCE, ticket.timeInForce, (value) =>
+            this.updateTicket({ timeInForce: value }),
+          ).w(180),
+        ),
+      )
+      .when(hasExtendedHours(ticket.symbol), (element) =>
+        element.child(
+          ticketField(
+            tokens,
+            "Sessions",
+            segmented(
+              tokens,
+              "ticket-rth",
+              [
+                { value: "rth", label: "Regular" },
+                { value: "any", label: "Pre/post" },
+              ],
+              ticket.outsideRth ? "any" : "rth",
+              (value) => this.updateTicket({ outsideRth: value === "any" }),
+            ).w(180),
+          ),
+        ),
+      )
+      .when(Boolean(ticket.errors.form), (element) =>
+        element.child(errorMessage(tokens, ticket.errors.form)),
+      );
+  }
+
+  /** @param {import("gpui-base").Theme} tokens */
+  ticketReviewBody(tokens) {
+    const ticket = this.ticket;
+    if (ticket.mode === "cancel") {
+      return v_flex()
+        .gap(tokens.spacing.sm)
+        .child(muted(tokens, "This order will be withdrawn."))
+        .child(
+          v_flex()
+            .gap(tokens.spacing.xs)
+            .p(tokens.spacing.sm)
+            .rounded(tokens.radius.sm)
+            .bg(tokens.background)
+            .child(
+              h_flex()
+                .items_baseline()
+                .gap(tokens.spacing.xs)
+                .child(
+                  label(tokens, String(ticket.side).toUpperCase(), 13)
+                    .font_weight(700)
+                    .text_color(tradeSideTone(tokens, ticket.side)),
+                )
+                .child(label(tokens, ticket.symbol, 13).font_weight(600)),
+            )
+            .child(muted(tokens, `Order ${ticket.orderId}`)),
+        );
+    }
+    return orderConfirmSummary(
+      tokens,
+      ticketSummary(ticket.review, { currency: ticket.currency, name: ticket.name }),
+    );
+  }
+
+  /** @param {import("gpui-base").Theme} tokens */
+  ticketButtons(tokens) {
+    const ticket = this.ticket;
+    const pending = ticket.pending;
+    const confirming = ticket.stage === "review";
+    const verb =
+      ticket.mode === "cancel" ? "Withdraw" : ticket.mode === "replace" ? "Update" : "Confirm";
+    return h_flex()
+      .justify_end()
+      .gap(tokens.spacing.sm)
+      .child(
+        action(
+          tokens,
+          "ticket-back",
+          // Back on a ticket that had a form to go back to; Cancel on the
+          // withdrawal, which opened straight into its confirmation and has
+          // nothing behind it.
+          confirming && ticket.mode !== "cancel" ? "Back" : "Cancel",
+          (_event, cx) =>
+            confirming && ticket.mode !== "cancel" ? this.backToTicketForm() : this.closeTicket(cx),
+          { disabled: pending },
+        ),
+      )
+      .child(
+        confirming
+          ? action(
+              tokens,
+              "ticket-confirm",
+              pending ? "Sending…" : verb,
+              (_event, cx) => this.confirmTicket(cx),
+              {
+                variant: ticket.mode === "cancel" ? "destructive" : "primary",
+                disabled: pending,
+              },
+            )
+          : action(tokens, "ticket-review", "Review", (_event, cx) => this.reviewTicket(cx), {
+              variant: "primary",
+              disabled: pending,
+            }),
+      );
+  }
+
   /** @param {import("gpui-base").Theme} tokens */
   addSymbolDialog(tokens) {
     const pending = this.addSymbolPending;
@@ -2804,6 +3447,59 @@ export default class LongbridgeApp extends View {
       symbol: this.selectedSymbol,
       x: Math.max(0, local.x),
       y: Math.max(0, local.y),
+      source: "watchlist",
+    };
+    this.redraw(cx);
+  }
+
+  /**
+   * The same menu, opened from a holding.
+   *
+   * A holding is an instrument this account owns, so the two trade entries
+   * belong on it -- but "Remove" does not: it takes a security off a
+   * watchlist, and a holding need not be on one. Offering it here would be a
+   * menu item that either does nothing or removes something the reader was
+   * not looking at.
+   *
+   * @param {import("gpui").MouseButtonEvent} event
+   * @param {import("gpui").Context} cx
+   */
+  openHoldingMenu(event, cx) {
+    const symbol = this.selectedHoldingSymbol;
+    if (!symbol) return;
+    const local = event.local_position ?? { x: 0, y: 0 };
+    this.rowMenu = {
+      symbol,
+      x: Math.max(0, local.x),
+      y: Math.max(0, local.y),
+      source: "holdings",
+    };
+    this.redraw(cx);
+  }
+
+  /**
+   * The same menu, opened from an order.
+   *
+   * What can be done to an order depends on how far along it is, so both
+   * entries are drawn either way and disabled when they do not apply: a menu
+   * whose items come and go is one the reader has to re-read every time.
+   *
+   * @param {import("gpui").MouseButtonEvent} event
+   * @param {import("gpui").Context} cx
+   */
+  openOrderMenu(event, cx) {
+    const orderId = this.selectedOrderRowId;
+    const order = [...this.ordersState.today, ...this.ordersState.history].find(
+      (entry) => entry.orderId === orderId,
+    );
+    if (!order) return;
+    const local = event.local_position ?? { x: 0, y: 0 };
+    this.rowMenu = {
+      symbol: order.symbol,
+      x: Math.max(0, local.x),
+      y: Math.max(0, local.y),
+      source: "orders",
+      orderId: order.orderId,
     };
     this.redraw(cx);
   }
@@ -2811,6 +3507,12 @@ export default class LongbridgeApp extends View {
   /** @param {import("gpui-base").Theme} tokens */
   rowMenuSurface(tokens) {
     const menu = this.rowMenu;
+    const order =
+      menu.source === "orders"
+        ? [...this.ordersState.today, ...this.ordersState.history].find(
+            (entry) => entry.orderId === menu.orderId,
+          )
+        : null;
     return popoverSurface(tokens, { width: 200, menu: true })
       .absolute()
       .left(menu.x)
@@ -2820,21 +3522,69 @@ export default class LongbridgeApp extends View {
         this.redraw(cx);
       })
       .child(muted(tokens, menu.symbol).px(tokens.spacing.sm).py(tokens.spacing.xxs))
+      .when(menu.source === "orders", (element) =>
+        element
+          .child(
+            menuItem(
+              tokens,
+              "row-menu-replace",
+              "Modify order",
+              (_event, cx) => this.openReplaceTicket(order, cx),
+              { disabled: !order || !canReplace(order) },
+            ),
+          )
+          .child(
+            menuItem(
+              tokens,
+              "row-menu-cancel",
+              "Withdraw order",
+              (_event, cx) => this.openCancelTicket(order, cx),
+              { destructive: true, disabled: !order || !canCancel(order) },
+            ),
+          ),
+      )
+      .when(menu.source !== "orders", (element) =>
+        element
+          .child(
+            menuItem(
+              tokens,
+              "row-menu-buy",
+              "Buy",
+              (_event, cx) => this.openTicket(menu.symbol, "Buy", cx),
+              {
+                tone: tradeSideTone(tokens, "Buy"),
+              },
+            ),
+          )
+          .child(
+            menuItem(
+              tokens,
+              "row-menu-sell",
+              "Sell",
+              (_event, cx) => this.openTicket(menu.symbol, "Sell", cx),
+              {
+                tone: tradeSideTone(tokens, "Sell"),
+              },
+            ),
+          ),
+      )
       .child(
         menuItem(tokens, "row-menu-copy", "Copy symbol", (_event, cx) => {
           this.rowMenu = null;
-          this.copySelectedSymbol(cx);
+          this.copySymbol(menu.symbol, cx);
         }),
       )
-      .child(
-        menuItem(
-          tokens,
-          "row-menu-drop",
-          "Remove",
-          (_event, cx) => this.dropSymbol(menu.symbol, cx),
-          {
-            destructive: true,
-          },
+      .when(menu.source === "watchlist", (element) =>
+        element.child(
+          menuItem(
+            tokens,
+            "row-menu-drop",
+            "Remove",
+            (_event, cx) => this.dropSymbol(menu.symbol, cx),
+            {
+              destructive: true,
+            },
+          ),
         ),
       );
   }
@@ -2911,7 +3661,9 @@ export default class LongbridgeApp extends View {
             .flex_1()
             .min_h(0),
         )
-        .when(Boolean(this.rowMenu), (element) => element.child(this.rowMenuSurface(tokens)))
+        .when(this.rowMenu?.source === "watchlist", (element) =>
+          element.child(this.rowMenuSurface(tokens)),
+        )
     );
   }
 
@@ -3194,6 +3946,19 @@ export default class LongbridgeApp extends View {
   }
 
   /**
+   * Copies a named symbol.
+   *
+   * The row menu is opened from three lists now, and only one of them is the
+   * watchlist -- so what it copies is the row it was opened on, which is not
+   * necessarily the selected quote.
+   *
+   * @param {string} symbol @param {import("gpui").Context} cx
+   */
+  copySymbol(symbol, cx) {
+    if (symbol) this.copyAuthorization(symbol, "Symbol", cx);
+  }
+
+  /**
    * @param {string} symbol The virtual list's stable item key.
    * @param {import("gpui").Context} cx
    */
@@ -3223,6 +3988,36 @@ export default class LongbridgeApp extends View {
     return this.quotes.find((entry) => entry.symbol === this.selectedSymbol) ?? this.quotes[0];
   }
 
+  /**
+   * The two ways into a ticket, under the instrument they act on.
+   *
+   * Coloured the way the side column of an order is, and the way a rising and
+   * a falling number are: buying and selling are readings rather than
+   * interface roles, so they do not take the primary and destructive tokens --
+   * selling is not destruction.
+   *
+   * The shortcuts are named on the buttons because that is where someone
+   * looking for them will be looking.
+   *
+   * @param {import("gpui-base").Theme} tokens
+   * @param {string} symbol
+   */
+  tradeActions(tokens, symbol) {
+    /** @param {string} id @param {string} caption @param {"Buy" | "Sell"} side */
+    const button = (id, caption, side) =>
+      action(tokens, id, caption, (_event, cx) => this.openTicket(symbol, side, cx))
+        .flex_1()
+        .text_color(tradeSideTone(tokens, side))
+        .border_color(tradeSideTone(tokens, side));
+    return h_flex()
+      .id("trade-actions")
+      .gap(tokens.spacing.sm)
+      .px(tokens.spacing.sm)
+      .pb(tokens.spacing.sm)
+      .child(button("trade-buy", "Buy", "Buy"))
+      .child(button("trade-sell", "Sell", "Sell"));
+  }
+
   /** Quote facts are always expanded: the Panel itself is the disclosure. */
   quoteDetailsPanel(tokens) {
     const quote = this.selectedQuote();
@@ -3245,6 +4040,7 @@ export default class LongbridgeApp extends View {
                   },
                 }),
               )
+              .child(this.tradeActions(tokens, quote.symbol))
           : emptyPanel(
               tokens,
               "Watchlist is empty",
@@ -3527,6 +4323,10 @@ export default class LongbridgeApp extends View {
         .flex_1()
         .min_h(0)
         .gap(tokens.spacing.md)
+        // The menu is placed against this page, so its coordinates are
+        // measured from it -- the same arrangement the Watchlist pane has.
+        .relative()
+        .on_mouse_down("right", (event, cx) => this.openHoldingMenu(event, cx))
         // The summary and the ring share a row, four parts to six. They answer
         // the same question -- what is in this account -- from two directions,
         // and reading one under the other made the page a column of cards where
@@ -3638,6 +4438,9 @@ export default class LongbridgeApp extends View {
             .flex_1()
             .min_h(0),
         )
+        .when(this.rowMenu?.source === "holdings", (element) =>
+          element.child(this.rowMenuSurface(tokens)),
+        )
     );
   }
 
@@ -3652,6 +4455,26 @@ export default class LongbridgeApp extends View {
    *
    * @param {import("gpui-base").Theme} tokens
    */
+  /**
+   * Puts the row menu on the Orders page, wherever that page's layout put its
+   * panels.
+   *
+   * The page returns one of three arrangements depending on the window, and
+   * the menu belongs to all of them -- so it is attached to whichever was
+   * built rather than written into each.
+   *
+   * @param {import("gpui-base").Theme} tokens
+   * @param {import("gpui").Element} page
+   */
+  withOrderMenu(tokens, page) {
+    return page
+      .relative()
+      .on_mouse_down("right", (event, cx) => this.openOrderMenu(event, cx))
+      .when(this.rowMenu?.source === "orders", (element) =>
+        element.child(this.rowMenuSurface(tokens)),
+      );
+  }
+
   ordersPage(tokens) {
     const state = this.ordersState;
     const today = filterRows(state.today, this.todayOrdersQuery, ORDER_FILTER_FIELDS);
@@ -3694,15 +4517,18 @@ export default class LongbridgeApp extends View {
     // them too short to read, and a sheet opening under them takes the height
     // out of the lists that were being read.
     if (this.isNarrow()) {
-      return v_flex()
-        .id("orders-page-stacked")
-        .flex_1()
-        .min_h(0)
-        .gap(tokens.spacing.md)
-        .overflow_y_scrollbar()
-        .child(todayCollapsed ? todayPanel.flex_none() : todayPanel.h(todayHeight).flex_none())
-        .child(historyCollapsed ? historyPanel.flex_none() : historyPanel.h(400).flex_none())
-        .when(Boolean(sheet), (element) => element.child(sheet.h(460).flex_none()));
+      return this.withOrderMenu(
+        tokens,
+        v_flex()
+          .id("orders-page-stacked")
+          .flex_1()
+          .min_h(0)
+          .gap(tokens.spacing.md)
+          .overflow_y_scrollbar()
+          .child(todayCollapsed ? todayPanel.flex_none() : todayPanel.h(todayHeight).flex_none())
+          .child(historyCollapsed ? historyPanel.flex_none() : historyPanel.h(400).flex_none())
+          .when(Boolean(sheet), (element) => element.child(sheet.h(460).flex_none())),
+      );
     }
 
     const lists = v_flex()
@@ -3713,9 +4539,10 @@ export default class LongbridgeApp extends View {
       .gap(tokens.spacing.md)
       .child(todayCollapsed ? todayPanel.flex_none() : todayPanel.h(todayHeight).flex_none())
       .child(historyCollapsed ? historyPanel.flex_none() : historyPanel.flex_1().min_h(200));
-    if (!sheet) return lists;
+    if (!sheet) return this.withOrderMenu(tokens, lists);
     // Beside the lists, where there is room for a column of its own.
-    return (
+    return this.withOrderMenu(
+      tokens,
       h_flex()
         .id("orders-page-split")
         .flex_1()
@@ -3726,7 +4553,7 @@ export default class LongbridgeApp extends View {
         .items_stretch()
         .gap(tokens.spacing.md)
         .child(lists)
-        .child(sheet.w(320).flex_none())
+        .child(sheet.w(320).flex_none()),
     );
   }
 
@@ -4197,7 +5024,7 @@ export default class LongbridgeApp extends View {
   hasSomethingToDismiss() {
     if (this.calendarOpen || this.userMenuOpen || this.allocationHelpOpen || this.shortcutHelpOpen)
       return true;
-    if (this.rowMenu || this.addSymbolOpen) return true;
+    if (this.rowMenu || this.addSymbolOpen || this.ticket.open) return true;
     if (this.page === "orders" && this.selectedOrderId) return true;
     return Boolean(this.pageFilter().query);
   }

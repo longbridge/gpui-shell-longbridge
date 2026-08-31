@@ -430,11 +430,14 @@ export function watchlistHeader(tokens, compact = false) {
  * @param {string} id
  * @param {string} caption
  * @param {(event: import("gpui").ClickEvent, cx: import("gpui").Context) => void} onClick
- * @param {{ detail?: string, destructive?: boolean, disabled?: boolean }} [options]
+ * @param {{ detail?: string, destructive?: boolean, disabled?: boolean, tone?: import("gpui").Color }} [options]
  */
 export function menuItem(tokens, id, caption, onClick, options = {}) {
-  const { detail = "", destructive = false, disabled = false } = options;
-  const foreground = destructive ? tokens.destructive : tokens.foreground;
+  const { detail = "", destructive = false, disabled = false, tone = null } = options;
+  // `tone` is a colour a caller worked out for itself -- a direction, which is
+  // a reading rather than an interface role and so cannot come from a token.
+  // `destructive` stays the shorthand for the one role that is one.
+  const foreground = tone ?? (destructive ? tokens.destructive : tokens.foreground);
   return Button.new(id)
     .role("menu_item")
     .disabled(disabled)
@@ -1741,6 +1744,171 @@ export function orderDetail(tokens, order) {
  * @param {import("gpui-base").Theme} tokens
  * @param {string} code
  */
+/**
+ * The colour a direction is drawn in.
+ *
+ * Buying and selling are readings, not interface roles, so they take the same
+ * two colours a rising and a falling number take -- which is what `orderRow`
+ * already does for the side column. One function so a menu item, a button and
+ * a ticket heading cannot drift apart on it.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {string} side `Buy` or `Sell`, in any case.
+ * @returns {import("gpui").Color}
+ */
+export function tradeSideTone(tokens, side) {
+  const status = statusColors(tokens);
+  const kind = String(side ?? "").toLowerCase();
+  if (kind === "buy") return status.up;
+  if (kind === "sell") return status.down;
+  return tokens.foreground;
+}
+
+/**
+ * A row of mutually exclusive choices, drawn as one control.
+ *
+ * Two or three options do not need a `Select`: a dropdown hides half the
+ * answer behind a click and, per its own documentation, arrives without
+ * arrow-key navigation until someone writes it. Laid out flat the choices are
+ * readable at rest and each one is already a focusable button.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {string} id
+ * @param {readonly { value: string, label: string }[]} options
+ * @param {string} value
+ * @param {(next: string, cx: import("gpui").Context) => void} onChange
+ */
+export function segmented(tokens, id, options, value, onChange) {
+  return h_flex()
+    .id(id)
+    .gap(tokens.spacing.xxs)
+    .children(
+      options.map((option) =>
+        action(
+          tokens,
+          `${id}-${option.value}`,
+          option.label,
+          (_event, cx) => onChange(option.value, cx),
+          { selected: option.value === value },
+        ).flex_1(),
+      ),
+    );
+}
+
+/**
+ * One labelled row of a ticket, with the field's own error under it.
+ *
+ * The error sits under the field it is about rather than in a summary at the
+ * bottom: a ticket has four fields, and "enter a price" at the foot of it is
+ * a sentence the reader has to match to a box themselves.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {string} caption
+ * @param {import("gpui").Element} control
+ * @param {string} [error]
+ */
+export function ticketField(tokens, caption, control, error = "") {
+  return v_flex()
+    .gap(tokens.spacing.xxs)
+    .child(
+      h_flex()
+        .items_center()
+        .justify_between()
+        .gap(tokens.spacing.sm)
+        .child(muted(tokens, caption))
+        .child(control),
+    )
+    .when(Boolean(error), (element) =>
+      element.child(
+        // Under the field and aligned with it, which is a row that pushes its
+        // one child to the end -- `text_align` is not a thing an element has.
+        h_flex()
+          .justify_end()
+          .child(label(tokens, error, 11).text_color(tokens.destructive)),
+      ),
+    );
+}
+
+/**
+ * A ticket's heading: what is about to be done, to what.
+ *
+ * The direction is the loudest thing on the surface and it is coloured,
+ * because the one mistake this dialog exists to prevent is buying when you
+ * meant to sell.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {string} side
+ * @param {string} symbol
+ * @param {string} name
+ */
+export function ticketHeading(tokens, side, symbol, name) {
+  return h_flex()
+    .items_baseline()
+    .gap(tokens.spacing.sm)
+    .child(
+      label(tokens, String(side).toUpperCase(), 14)
+        .font_weight(700)
+        .text_color(tradeSideTone(tokens, side)),
+    )
+    .child(label(tokens, symbol, 14).font_weight(600))
+    .when(Boolean(name), (element) => element.child(muted(tokens, name)));
+}
+
+/**
+ * The confirmation screen: the order as a sentence, and nothing to type.
+ *
+ * Read-only on purpose. A confirmation with editable fields is a second
+ * ticket, and what it confirms is then whatever was in the boxes at the
+ * moment the button was pressed rather than what was read.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {ReturnType<typeof import("./trade.js").ticketSummary>} summary
+ */
+export function orderConfirmSummary(tokens, summary) {
+  /**
+   * @param {string} caption
+   * @param {string} value
+   * @param {import("gpui").Color | null} [tone]
+   */
+  const line = (caption, value, tone = null) =>
+    h_flex()
+      .items_center()
+      .justify_between()
+      .gap(tokens.spacing.md)
+      .child(muted(tokens, caption))
+      .child(
+        tone
+          ? numeric(tokens, value).text_color(tone).font_weight(600)
+          : numeric(tokens, value).font_weight(600),
+      );
+  return v_flex()
+    .id("order-confirm-summary")
+    .gap(tokens.spacing.xs)
+    .p(tokens.spacing.sm)
+    .rounded(tokens.radius.sm)
+    .bg(tokens.background)
+    .child(
+      h_flex()
+        .items_baseline()
+        .gap(tokens.spacing.xs)
+        .child(
+          label(tokens, summary.side.toUpperCase(), 13)
+            .font_weight(700)
+            .text_color(tradeSideTone(tokens, summary.side)),
+        )
+        .child(label(tokens, summary.quantity, 13).font_weight(700))
+        .child(label(tokens, summary.symbol, 13).font_weight(600))
+        .when(Boolean(summary.name), (element) => element.child(muted(tokens, summary.name))),
+    )
+    .child(rule(tokens))
+    .child(line("Type", summary.type))
+    .child(line("Price", summary.price))
+    .child(line("Valid", summary.timeInForce))
+    .when(Boolean(summary.sessions), (element) => element.child(line("Sessions", summary.sessions)))
+    .child(rule(tokens))
+    .child(line("Estimated", summary.amount));
+}
+
 export function deviceCodeBox(tokens, code) {
   return h_flex()
     .items_center()

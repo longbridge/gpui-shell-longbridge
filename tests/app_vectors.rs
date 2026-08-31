@@ -719,6 +719,108 @@ fn order_vectors_run_against_this_application(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn the_order_ticket_states_what_it_will_send(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("trade_ui.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let (_root, view) = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+    context.run_until_parked();
+    let draw_view = view.clone();
+    context.draw(
+        gpui::Point::default(),
+        gpui::size(gpui::px(1000.), gpui::px(760.)),
+        move |_, _| draw_view.into_any_element(),
+    );
+    let rendered = context.update(|_, cx| {
+        view.read(cx)
+            .snapshot()
+            .map(gpui_shell::RenderSnapshot::debug_tree)
+            .unwrap_or_default()
+    });
+
+    // The form names every field that decides what is sent.
+    assert!(
+        rendered.contains(r#":id[Str("order-ticket-dialog")]"#)
+            && rendered.contains("Type")
+            && rendered.contains("Price")
+            && rendered.contains("Quantity")
+            && rendered.contains("Valid"),
+        "the ticket must state its fields:\n{rendered}"
+    );
+    // A US instrument can be traded outside regular hours, so the choice is
+    // offered rather than decided silently.
+    assert!(
+        rendered.contains("Sessions") && rendered.contains("Pre/post"),
+        "a US ticket must offer its sessions:\n{rendered}"
+    );
+    // Selling states the position it may not exceed.
+    assert!(
+        rendered.contains("25 available to sell"),
+        "a sale must state what is available:\n{rendered}"
+    );
+
+    // The confirmation restates the order, including what it is expected to
+    // cost -- grouped in thousands, which `Intl` does not do in this runtime.
+    assert!(
+        rendered.contains(r#":id[Str("order-confirm-summary")]"#)
+            && rendered.contains("1,885.00 USD"),
+        "the confirmation must state the estimate:\n{rendered}"
+    );
+    // A market order has no price and no estimate, and says so rather than
+    // showing a zero it does not promise.
+    assert!(
+        rendered.contains("Market price") && rendered.contains("text \"--\""),
+        "a market order must not claim an estimate:\n{rendered}"
+    );
+    // Selling more than is held is refused in the form, before anything is
+    // sent -- the ticket stays on its fields rather than reaching a
+    // confirmation.
+    assert!(
+        rendered.contains("This account holds 25."),
+        "an oversized sale must be refused locally:\n{rendered}"
+    );
+    // Withdrawing confirms which order, and offers no fields.
+    assert!(
+        rendered.contains("This order will be withdrawn.")
+            && rendered.contains("Order 884955210001"),
+        "a withdrawal must name its order:\n{rendered}"
+    );
+
+    // Buying and selling are told apart by colour, not only by the word, in
+    // every menu that offers them. The probe's theme draws every colour as
+    // #000000, so what is asserted is that a tone was applied at all -- the
+    // two menu items carry an explicit text colour where a plain item, `Copy
+    // symbol`, does not.
+    for menu in ["Buy", "Sell"] {
+        assert!(rendered.contains(menu), "the menus must offer {menu}:\n{rendered}");
+    }
+    // A holding is not necessarily on a watchlist, so its menu does not offer
+    // to take it off one.
+    assert_eq!(
+        rendered.matches("Remove").count(),
+        1,
+        "only the watchlist menu removes from a watchlist:\n{rendered}"
+    );
+    // An order's menu acts on the order, not on the instrument.
+    assert!(
+        rendered.contains("Modify order") && rendered.contains("Withdraw order"),
+        "an order menu must offer to change and withdraw it:\n{rendered}"
+    );
+}
+
+#[gpui::test]
+fn trade_vectors_run_against_this_application(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("trade.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let _loaded = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+}
+
+#[gpui::test]
 fn portfolio_vectors_run_against_this_application(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
