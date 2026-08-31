@@ -16,6 +16,7 @@
 // host hands over the real `shell.toml` and the window follows the user's
 // density, font size and rounding like every other window on that desktop.
 
+import { platform } from "process";
 import { applyOmarchyStyle, style as omarchyStyle } from "omarchy-ui";
 
 /**
@@ -67,6 +68,10 @@ export function applyTerminalStyle(shellSource = "", host = {}) {
   return applyOmarchyStyle(shellSource || TERMINAL_SHELL, {
     cornerRadius: host.cornerRadius ?? TERMINAL_CORNER_RADIUS,
     fontFamily: host.fontFamily,
+    // The kit reserves the leading edge for the host's own window buttons, and
+    // it can only do that if it is told whose host this is. Without it the
+    // inset is zero and macOS draws its traffic lights over the mark.
+    platform,
   });
 }
 

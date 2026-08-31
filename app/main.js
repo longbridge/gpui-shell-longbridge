@@ -89,7 +89,7 @@ import {
   omarchyStatusColors,
   omarchyTheme,
 } from "omarchy-ui";
-import { applyTerminalStyle } from "./style.js";
+import { applyTerminalStyle, style } from "./style.js";
 import {
   changeTone,
   setOmarchyAvatarColors,
@@ -266,11 +266,19 @@ const TITLE_BAR_HEIGHT = 44;
 // "darwin". Getting that wrong is silent: the inset falls back to the narrow
 // one and the traffic lights are drawn straight over the logo.
 const MACOS = platform === "macos";
-// The lights start at the host's 15px inset and the three of them run about
-// 54px, so they end near 69. This is not that number plus a hair: a control
-// sitting a few pixels off the last light reads as a fourth one. The gap is
-// wide enough to be a gap.
-const TITLE_BAR_LEADING = MACOS ? 96 : 8;
+/**
+ * How far in the title bar's leading content starts.
+ *
+ * The room the host's own window buttons need is the scale's to know -- it is
+ * a property of the platform, not of this application -- so it comes from
+ * there. What is left here is the ordinary gap for a platform that draws no
+ * buttons, and the choice to take whichever is wider: a control sitting a few
+ * pixels off the last light reads as a fourth one, so the gap has to stay a
+ * gap on the platforms that have them.
+ */
+function titleBarLeading(tokens) {
+  return Math.max(tokens.spacing.sm, style().spacing.windowControlsInset);
+}
 
 /** The pages the title bar switches between. */
 const PAGES = Object.freeze([
@@ -3020,7 +3028,7 @@ export default class LongbridgeApp extends View {
    * Three tracks, and the outer two share a width so the middle one is centered
    * on the window rather than on whatever is left over: identity on the left,
    * the page switch in the middle, the session's own controls on the right.
-   * `TITLE_BAR_LEADING` is the room macOS needs for the traffic lights, which
+   * `titleBarLeading` is the room macOS needs for the traffic lights, which
    * are drawn over this corner by the system.
    *
    * @param {import("gpui-base").Theme} tokens
@@ -3049,7 +3057,7 @@ export default class LongbridgeApp extends View {
             // The traffic lights are drawn over this corner by the system, so
             // the mark starts after them. On a platform without them this is the
             // ordinary gap.
-            .pl(TITLE_BAR_LEADING - tokens.spacing.sm)
+            .pl(titleBarLeading(tokens) - tokens.spacing.sm)
             // The mark and the name are one lockup, so they sit on a shared
             // baseline. Not `items_center`, which leaves the name floating above
             // the mark's foot, and not `items_end` either: that aligns the *line
