@@ -1875,7 +1875,16 @@ fn portfolio_renders_pnl_summary_and_position_columns(cx: &mut TestAppContext) {
     });
     for expected in [
         "Portfolio summary",
+        // What the account holds, beside what of it is the holder's. The
+        // endpoint reports only the second -- `net_assets` is net of what was
+        // borrowed -- and on a margin account the two are different questions:
+        // the probe's holding is worth 1,880 against 5,000 of cash, and its
+        // `net_assets` says 25,000. The total is added up here, so it must be
+        // the sum of the positions and the cash and not the endpoint's figure.
+        "Total assets",
+        "6880.00 USD",
         "Net assets",
+        "25000.00 USD",
         "Today's P/L",
         "Total P/L",
         "Asset allocation",

@@ -1083,11 +1083,19 @@ export function detailGrid(tokens, entries, id = "detail-grid") {
 }
 
 /**
+ * An account's readings, the largest first.
+ *
+ * Total assets leads because it is the number a reader looks for, and because
+ * it is the one that is *not* on the account endpoint -- `net_assets` is net
+ * of what was borrowed, and on a margin account the two differ by the debt.
+ * Both are shown: one says what is held, the other what of it is the holder's.
+ *
  * @param {import("gpui-base").Theme} tokens
  * @param {{ netAssets: string, totalCash: string, buyingPower: string, currency: string }} account
  * @param {{ currency: string, todayPnl: string, todayPnlValue: number, totalPnl: string, totalPnlValue: number }[]} summaries
+ * @param {{ total: number, currency: string, partial: boolean } | null} totals
  */
-export function portfolioSummary(tokens, account, summaries) {
+export function portfolioSummary(tokens, account, summaries, totals = null) {
   const cx = context(tokens);
   // Wide tiles: an account's readings are money with a currency after them,
   // which is two or three times the width of a price.
@@ -1106,6 +1114,20 @@ export function portfolioSummary(tokens, account, summaries) {
       ];
 
   return new MetricGrid("portfolio-summary")
+    .children(
+      totals
+        ? [
+            metric(
+              // A total missing a position is an understatement, and an
+              // understatement written as a plain number reads as a fact. The
+              // title is where that is said, because a Metric has nowhere else
+              // to say it; the allocation card below counts what is missing.
+              totals.partial ? "Total assets (partial)" : "Total assets",
+              `${totals.total.toFixed(2)} ${totals.currency}`,
+            ),
+          ]
+        : [],
+    )
     .child(metric("Net assets", `${account.netAssets} ${account.currency}`))
     .children(
       pnl.map((summary) =>

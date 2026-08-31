@@ -86,7 +86,12 @@ import {
   symbolFromInput,
   watchlistGroups,
 } from "./watchlist_edit.js";
-import { allocationInUsd, normalizeUsdRates, portfolioPresentation } from "./portfolio.js";
+import {
+  accountTotals,
+  allocationInUsd,
+  normalizeUsdRates,
+  portfolioPresentation,
+} from "./portfolio.js";
 import PriceChartView, {
   PRICE_CHART_LAYOUT,
   compactIntradaySeriesForView,
@@ -4939,6 +4944,13 @@ export default class LongbridgeApp extends View {
       [...this.quotes, ...this.portfolioQuotes],
       this.fxRates,
     );
+    // What the account holds, which the account endpoint does not report --
+    // see `accountTotals`. Read from the balance's cash rather than from the
+    // formatted card below it, so the sum is of two numbers and not of a
+    // number and a string.
+    const totals = balance
+      ? accountTotals(allocation, balance.total_cash ?? balance.totalCash)
+      : null;
     const account = balance
       ? {
           netAssets: stringValue(balance.net_assets ?? balance.netAssets),
@@ -4987,7 +4999,7 @@ export default class LongbridgeApp extends View {
                 tokens,
                 "Portfolio summary",
                 account
-                  ? portfolioSummary(tokens, account, presentation.summaries)
+                  ? portfolioSummary(tokens, account, presentation.summaries, totals)
                   : emptyPanel(
                       tokens,
                       "No account snapshot",
