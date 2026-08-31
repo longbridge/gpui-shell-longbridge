@@ -337,26 +337,6 @@ const TODAY_ORDERS_VISIBLE_ROWS = 5;
 /** A panel's toolbar, hairline, column heads and its own border. */
 const ORDERS_PANEL_CHROME = 69;
 
-/**
- * The order a ticket is filled in, as Tab walks it.
- *
- * Written down rather than left to source order: the fields are built inside
- * conditionals -- a market order has no price, a Hong Kong one no sessions --
- * so the order they appear in the file is not the order they appear on screen.
- * The gaps leave room for a segmented control's own choices, each of which is
- * a tab stop of its own.
- */
-const TICKET_TAB = Object.freeze({
-  type: 1,
-  price: 10,
-  sizing: 20,
-  size: 30,
-  validity: 40,
-  sessions: 50,
-  cancel: 60,
-  confirm: 70,
-});
-
 /** What the Orders filter narrows on: the instrument, and how an order went. */
 const ORDER_FILTER_FIELDS = Object.freeze(["symbol", "name", "statusLabel", "sideLabel"]);
 
@@ -3772,13 +3752,8 @@ export default class LongbridgeApp extends View {
               ticketField(
                 tokens,
                 "Type",
-                segmented(
-                  tokens,
-                  "ticket-type",
-                  ORDER_TYPES,
-                  ticket.type,
-                  (value) => this.updateTicket({ type: value }),
-                  TICKET_TAB.type,
+                segmented(tokens, "ticket-type", ORDER_TYPES, ticket.type, (value) =>
+                  this.updateTicket({ type: value }),
                 ),
               ),
             )
@@ -3790,9 +3765,7 @@ export default class LongbridgeApp extends View {
                 // belongs invites someone to fill it in. The field is replaced
                 // by what the order will actually use.
                 limit
-                  ? valueField(tokens, this.ticketPrice, { unit: ticket.currency })
-                      .h(28)
-                      .tab_index(TICKET_TAB.price)
+                  ? valueField(tokens, this.ticketPrice, { unit: ticket.currency }).h(28)
                   : muted(tokens, "At the market price when it fills"),
                 { error: ticket.errors.price },
               ),
@@ -3802,9 +3775,7 @@ export default class LongbridgeApp extends View {
                 ? ticketField(
                     tokens,
                     "Amount",
-                    valueField(tokens, this.ticketAmount, { unit: ticket.currency })
-                      .h(28)
-                      .tab_index(TICKET_TAB.size),
+                    valueField(tokens, this.ticketAmount, { unit: ticket.currency }).h(28),
                     {
                       error: ticket.errors.amount,
                       // The share count the amount works out to, under the field
@@ -3817,9 +3788,7 @@ export default class LongbridgeApp extends View {
                 : ticketField(
                     tokens,
                     "Quantity",
-                    valueField(tokens, this.ticketQuantity, { unit: "shares" })
-                      .h(28)
-                      .tab_index(TICKET_TAB.size),
+                    valueField(tokens, this.ticketQuantity, { unit: "shares" }).h(28),
                     {
                       error: ticket.errors.quantity,
                       // What the field has to respect, said before it is typed
@@ -3845,13 +3814,8 @@ export default class LongbridgeApp extends View {
               ticketField(
                 tokens,
                 "Valid",
-                segmented(
-                  tokens,
-                  "ticket-tif",
-                  TIME_IN_FORCE,
-                  ticket.timeInForce,
-                  (value) => this.updateTicket({ timeInForce: value }),
-                  TICKET_TAB.validity,
+                segmented(tokens, "ticket-tif", TIME_IN_FORCE, ticket.timeInForce, (value) =>
+                  this.updateTicket({ timeInForce: value }),
                 ),
               ),
             )
@@ -3869,7 +3833,6 @@ export default class LongbridgeApp extends View {
                     ],
                     ticket.outsideRth ? "any" : "rth",
                     (value) => this.updateTicket({ outsideRth: value === "any" }),
-                    TICKET_TAB.sessions,
                   ),
                 ),
               ),
@@ -3910,9 +3873,7 @@ export default class LongbridgeApp extends View {
       caption,
       (_event, _cx) => this.updateTicket({ sizing: other }),
       { quiet: true },
-    )
-      .h(20)
-      .tab_index(TICKET_TAB.sizing);
+    ).h(20);
   }
 
   /** @param {import("gpui-base").Theme} tokens */
@@ -3969,7 +3930,7 @@ export default class LongbridgeApp extends View {
           (_event, cx) =>
             confirming && ticket.mode !== "cancel" ? this.backToTicketForm() : this.closeTicket(cx),
           { disabled: pending },
-        ).tab_index(TICKET_TAB.cancel),
+        ),
       )
       .child(
         confirming
@@ -3982,11 +3943,11 @@ export default class LongbridgeApp extends View {
                 variant: ticket.mode === "cancel" ? "destructive" : "primary",
                 disabled: pending,
               },
-            ).tab_index(TICKET_TAB.confirm)
+            )
           : action(tokens, "ticket-review", "Review", (_event, cx) => this.reviewTicket(cx), {
               variant: "primary",
               disabled: pending,
-            }).tab_index(TICKET_TAB.confirm),
+            }),
       );
   }
 

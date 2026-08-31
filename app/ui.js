@@ -1484,20 +1484,26 @@ export function orderDetail(tokens, order, actions = {}) {
  * and each one is already a focusable button. Selection is carried by fill and
  * position rather than by text colour alone.
  *
+ * Its place in the tab order is not passed in, because a base `Tab` owns that
+ * part of its own focus and refuses a `tab_index` written onto it. A run of
+ * choices is walked where it was built, which is where it is read -- and that
+ * is why nothing else on the ticket names an index either: an explicit index
+ * is walked after everything that has none, so one control naming its place
+ * would reorder every control that does not.
+ *
  * @param {import("gpui-base").Theme} tokens
  * @param {string} id
  * @param {readonly { value: string, label: string }[]} options
  * @param {string} value
  * @param {(next: string, cx: import("gpui").Context) => void} onChange
  */
-export function segmented(tokens, id, options, value, onChange, tabIndex = 0) {
-  const tabs = new Tabs(id)
+export function segmented(tokens, id, options, value, onChange) {
+  return new Tabs(id)
     .segmented()
     .items(options.map((option) => ({ value: option.value, label: option.label })))
     .value(value)
-    .onChange(onChange);
-  if (tabIndex > 0) tabs.tabIndex(tabIndex);
-  return tabs.build(context(tokens));
+    .onChange(onChange)
+    .build(context(tokens));
 }
 
 /**

@@ -95,19 +95,33 @@ fn load_test_view(
 /// everywhere else. A test that hard-codes one of them passes on the platform
 /// it was written on and, on the other, presses a chord nothing is bound to --
 /// which looks like a broken keymap and is a broken test.
-const PRIMARY_MODIFIER: &str = if cfg!(target_os = "macos") { "cmd" } else { "ctrl" };
+const PRIMARY_MODIFIER: &str = if cfg!(target_os = "macos") {
+    "cmd"
+} else {
+    "ctrl"
+};
 
 /// The same modifier as `chordLabel` writes it for a reader.
-const PRIMARY_MODIFIER_LABEL: &str = if cfg!(target_os = "macos") { "Cmd" } else { "Ctrl" };
+const PRIMARY_MODIFIER_LABEL: &str = if cfg!(target_os = "macos") {
+    "Cmd"
+} else {
+    "Ctrl"
+};
 
 /// The same modifier as a held key rather than as part of a chord. GPUI names
 /// the macOS one `platform`, and the workspace reads whichever its own
 /// platform means.
 fn primary_modifiers() -> gpui::Modifiers {
     if cfg!(target_os = "macos") {
-        gpui::Modifiers { platform: true, ..Default::default() }
+        gpui::Modifiers {
+            platform: true,
+            ..Default::default()
+        }
     } else {
-        gpui::Modifiers { control: true, ..Default::default() }
+        gpui::Modifiers {
+            control: true,
+            ..Default::default()
+        }
     }
 }
 
@@ -678,8 +692,7 @@ fn orders_page_stacks_today_over_history_as_one_filtered_reading(cx: &mut TestAp
         rendered.contains(r#"Button "order-detail-close""#)
             && rendered.contains(r#"Button "order-detail-quote""#)
             && rendered.contains(r#"svg "assets/x.svg" .size[Number(11.0)]"#)
-            && rendered
-                .contains(r#"svg "assets/chart-line.svg" .size[Number(11.0)]"#)
+            && rendered.contains(r#"svg "assets/chart-line.svg" .size[Number(11.0)]"#)
             && rendered.contains(r#".flex_none .size[Number(24.0)]"#),
         "the sheet carries its own way out, and the way through to the quote:\n{rendered}"
     );
@@ -883,9 +896,39 @@ fn the_order_ticket_can_be_filled_in_from_the_keyboard(cx: &mut TestAppContext) 
         rendered.contains("the ticket is fillable from the keyboard"),
         "{rendered}"
     );
-    // Every control is a tab stop, and the order they are walked in is the
-    // order they are read in. A field built inside a conditional would
-    // otherwise take its place from where it sits in the source.
+    // Every control the ticket is filled in with is walked in the order it is
+    // read in, and that order is the order it is built in.
+    //
+    // Nothing here names an index. A base `Tab` owns that part of its own
+    // focus and refuses one written onto it, so the segmented runs could not
+    // be numbered even if the rest were -- and an explicit index is walked
+    // after everything that has none, so numbering the fields around them
+    // would have walked the fields last and the choices first.
+    let mut at = 0usize;
+    // Labels and controls together, so this says what is read as well as what
+    // is focused -- including that the sizing switch sits in the caption row
+    // of the field it changes, and so is reached before that field rather
+    // than after it.
+    for marker in [
+        "Type",
+        "ticket-type-LO",
+        "Price",
+        "USD",
+        "Quantity",
+        "Use amount",
+        "shares",
+        "Valid",
+        "ticket-tif-Day",
+        "Sessions",
+        "ticket-rth-rth",
+        "Cancel",
+        "Review",
+    ] {
+        let found = rendered[at..].find(marker).unwrap_or_else(|| {
+            panic!("the ticket must offer {marker}, after what precedes it:\n{rendered}")
+        });
+        at += found + marker.len();
+    }
     let stops: Vec<usize> = rendered
         .match_indices(":tab_index[Number(")
         .map(|(at, _)| {
@@ -897,15 +940,12 @@ fn the_order_ticket_can_be_filled_in_from_the_keyboard(cx: &mut TestAppContext) 
         })
         .filter(|index| *index > 0)
         .collect();
+    // Whatever the library does inside one run of choices is its own business;
+    // what must not appear is an index this application chose, which is any
+    // number bigger than a run is long.
     assert!(
-        stops.len() >= 6,
-        "the ticket's controls must be tab stops: {stops:?}\n{rendered}"
-    );
-    let mut sorted = stops.clone();
-    sorted.sort_unstable();
-    assert_eq!(
-        stops, sorted,
-        "tab order must follow reading order: {stops:?}\n{rendered}"
+        stops.iter().all(|index| *index <= 2),
+        "the ticket must not name tab indices of its own: {stops:?}\n{rendered}"
     );
 }
 
@@ -1048,7 +1088,10 @@ fn the_order_ticket_states_what_it_will_send(cx: &mut TestAppContext) {
     // two menu items carry an explicit text colour where a plain item, `Copy
     // symbol`, does not.
     for menu in ["Buy", "Sell"] {
-        assert!(rendered.contains(menu), "the menus must offer {menu}:\n{rendered}");
+        assert!(
+            rendered.contains(menu),
+            "the menus must offer {menu}:\n{rendered}"
+        );
     }
     // A holding is not necessarily on a watchlist, so its menu does not offer
     // to take it off one.
@@ -2388,7 +2431,10 @@ fn a_bound_chord_reaches_the_action_that_switches_page(cx: &mut TestAppContext) 
     // a key press, so the footer's readout stays empty for it. An unbound one
     // reaches `on_key_down`, and arrives already unparsed as the whole chord —
     // spelled `cmd` on every platform, this one included.
-    assert!(!after.contains(&format!("text \"{PRIMARY_MODIFIER}-2\"")), "{after}");
+    assert!(
+        !after.contains(&format!("text \"{PRIMARY_MODIFIER}-2\"")),
+        "{after}"
+    );
 
     context.simulate_keystrokes("end enter");
     context.run_until_parked();
