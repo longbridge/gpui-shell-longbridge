@@ -78,6 +78,24 @@ export function orderFromNotification(notification) {
 }
 
 /**
+ * The `event` a notification names, for saying what was ignored and why.
+ *
+ * Best effort: a body that will not parse has no event, and that is itself
+ * the answer.
+ *
+ * @param {{ contentType: number, data: Uint8Array }} notification
+ */
+function eventName(notification) {
+  if (notification.contentType !== TRADE_CONTENT_JSON) return "";
+  try {
+    const payload = JSON.parse(decodeUtf8(notification.data, "notification data"));
+    return typeof payload?.event === "string" ? payload.event : "";
+  } catch (_) {
+    return "";
+  }
+}
+
+/**
  * Opens the trade gateway and reports every order change on this account.
  *
  * @param {{
@@ -227,8 +245,18 @@ export function createTradeStream(options) {
     const notification = decodeTradeNotification(packet.body);
     const order = orderFromNotification(notification);
     // An asset change arrives on the same topic and is not one of these. The
-    // channel reports what it understands and lets the rest past.
-    if (!order) return;
+    // channel reports what it understands and lets the rest past -- but it
+    // says what it let past. Which notifications carry an order is a fact
+    // about the gateway, taken from an SDK rather than from a field table, and
+    // a wrong reading of it looks exactly like no orders being sent at all.
+    if (!order) {
+      onStatus("ignored", {
+        topic: notification.topic,
+        contentType: notification.contentType,
+        event: eventName(notification),
+      });
+      return;
+    }
     try {
       onOrder(order);
     } catch (error) {

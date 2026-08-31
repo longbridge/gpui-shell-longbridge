@@ -1797,14 +1797,21 @@ export default class LongbridgeApp extends View {
           this.receiveOrderChange(order, cx);
       },
       onStatus: (status, detail) => {
-        // Not shown. `streamError` is the market data connection, which is
-        // what the window's status line is about; an order channel that is
-        // reconnecting says nothing there because prices have not stopped.
-        // It is worth a line in the log, though -- a reader who wonders why a
-        // fill took a while to appear has somewhere to look.
-        if (status === "reconnecting" || status === "callback_error") {
-          console.warn(`trade stream ${status}: ${detail?.error ?? ""}`);
-        }
+        // Not shown, and logged in full.
+        //
+        // Not shown because `streamError` is the market data connection, which
+        // is what the window's status line is about; an order channel that is
+        // reconnecting says nothing there, because prices have not stopped.
+        //
+        // In full because this channel has no other way to be observed. It
+        // draws nothing, and its symptom when it is wrong -- orders that do
+        // not appear -- is indistinguishable from a quiet account. Five lines
+        // per connection is a cheap price for being able to say which step it
+        // did not get past.
+        const detailText = Object.entries(detail ?? {})
+          .map(([key, value]) => `${key}=${value}`)
+          .join(" ");
+        console.warn(`trade stream ${status}${detailText ? ` ${detailText}` : ""}`);
       },
     });
     return stream;
