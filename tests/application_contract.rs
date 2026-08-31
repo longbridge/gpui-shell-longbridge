@@ -176,6 +176,19 @@ fn the_writable_surface_is_the_watchlist_and_an_account_s_orders() {
         trade.contains("client_request_id") && main.contains("randomUUID()"),
         "a submitted order must carry an idempotency key"
     );
+    // The read that follows a write is awaited in the task that did the
+    // writing. Starting a second task inside the first is not guaranteed to
+    // outlive it, and one that does not leaves the panel on "Loading orders"
+    // forever and the open sheet showing an order as it was before it changed.
+    let confirm = main
+        .split("  confirmTicket(cx) {")
+        .nth(1)
+        .and_then(|source| source.split("\n  /**").next())
+        .expect("confirmTicket method");
+    assert!(
+        confirm.contains("await this.reloadOrders(cx)") && !confirm.contains("this.loadOrders("),
+        "the read after a write must be awaited in the task that wrote"
+    );
     // Retained text state is the four list filters, the field that names a
     // security to add, and the three an order is composed in.
     assert!(

@@ -1753,26 +1753,45 @@ export default class LongbridgeApp extends View {
    * @param {import("gpui").Context} cx
    */
   loadOrders(cx) {
+    cx.spawn(async (cx) => this.reloadOrders(cx));
+  }
+
+  /**
+   * Reads both order lists, in whatever task is already running.
+   *
+   * Separate from `loadOrders` because a caller that is *already* inside a
+   * `cx.spawn` -- the one that just placed or withdrew an order -- must await
+   * this rather than start a second task inside the first. A nested spawn is
+   * not guaranteed to outlive the task that opened it, and one that does not
+   * leaves the panel saying "Loading orders" forever: the request never
+   * finishes, so the state never leaves `loading` and the open sheet goes on
+   * showing the order as it was before it was withdrawn.
+   *
+   * The generation stays here rather than at the call sites, so both paths get
+   * it: a read that is overtaken by a newer one does not put its older answer
+   * back.
+   *
+   * @param {import("gpui").Context} cx
+   */
+  async reloadOrders(cx) {
     if (!this.hasStoredTokens) return;
     const generation = (this.ordersGeneration ?? 0) + 1;
     this.ordersGeneration = generation;
     this.ordersState = { ...this.ordersState, status: "loading", error: "" };
     this.redraw(cx);
-    cx.spawn(async (cx) => {
-      try {
-        const { today, history } = await this.refreshOrders();
-        if (generation !== this.ordersGeneration) return;
-        this.ordersState = { status: "ready", today, history, error: "" };
-      } catch (error) {
-        if (generation !== this.ordersGeneration) return;
-        this.ordersState = {
-          ...this.ordersState,
-          status: "error",
-          error: error instanceof Error ? error.message : String(error),
-        };
-      }
-      this.redraw(cx);
-    });
+    try {
+      const { today, history } = await this.refreshOrders();
+      if (generation !== this.ordersGeneration) return;
+      this.ordersState = { status: "ready", today, history, error: "" };
+    } catch (error) {
+      if (generation !== this.ordersGeneration) return;
+      this.ordersState = {
+        ...this.ordersState,
+        status: "error",
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+    this.redraw(cx);
   }
 
   async refreshOrders() {
@@ -2552,8 +2571,9 @@ export default class LongbridgeApp extends View {
         // and then vanished. It also shows the list as loading while it is,
         // and reports a failed read on the page that could not be read, which
         // is where a failed read belongs rather than on a ticket that
-        // succeeded.
-        this.loadOrders(cx);
+        // succeeded. Awaited in this task rather than started in a new one --
+        // see `reloadOrders`.
+        await this.reloadOrders(cx);
       } catch (failure) {
         this.ticket = {
           ...this.ticket,
