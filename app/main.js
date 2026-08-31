@@ -1960,13 +1960,21 @@ export default class LongbridgeApp extends View {
    * @param {string} symbol @param {"Buy" | "Sell"} side @param {import("gpui").Context} cx
    */
   openTicket(symbol, side, cx) {
+    this.syncDialogFlags();
+    // The menu closes on the way in, before anything can decline to open a
+    // ticket. A menu item that was pressed has to stop being on screen either
+    // way: leaving it up is how a refusal reads as the application ignoring
+    // the click.
+    this.rowMenu = null;
     // One dialog at a time: the shell keeps a stack, and a ticket opened over
     // the add-a-security dialog would close that one on its way out.
-    if (!symbol || this.ticket.open || this.addSymbolOpen) return;
+    if (!symbol || this.ticket.open || this.addSymbolOpen) {
+      this.redraw(cx);
+      return;
+    }
     const facts = this.instrumentFacts(symbol);
     const quote = this.quotes.find((entry) => entry.symbol === symbol);
     const last = String(quote?.last ?? "").trim();
-    this.rowMenu = null;
     this.ticket = {
       ...this.blankTicket(),
       open: true,
@@ -2070,9 +2078,13 @@ export default class LongbridgeApp extends View {
    * @param {LongbridgeOrderRow} order @param {import("gpui").Context} cx
    */
   openReplaceTicket(order, cx) {
-    if (!order || this.ticket.open || !canReplace(order)) return;
-    const facts = this.instrumentFacts(order.symbol);
+    this.syncDialogFlags();
     this.rowMenu = null;
+    if (!order || this.ticket.open || !canReplace(order)) {
+      this.redraw(cx);
+      return;
+    }
+    const facts = this.instrumentFacts(order.symbol);
     this.ticket = {
       ...this.blankTicket(),
       open: true,
@@ -2103,8 +2115,12 @@ export default class LongbridgeApp extends View {
    * @param {LongbridgeOrderRow} order @param {import("gpui").Context} cx
    */
   openCancelTicket(order, cx) {
-    if (!order || this.ticket.open || !canCancel(order)) return;
+    this.syncDialogFlags();
     this.rowMenu = null;
+    if (!order || this.ticket.open || !canCancel(order)) {
+      this.redraw(cx);
+      return;
+    }
     this.ticket = {
       ...this.blankTicket(),
       open: true,
@@ -2119,6 +2135,45 @@ export default class LongbridgeApp extends View {
     };
     this.presentTicket();
     this.redraw(cx);
+  }
+
+  /**
+   * Brings the dialog flags back in line with the shell's own stack.
+   *
+   * `open_dialog` is given `escape_dismissable` and `backdrop_dismissable`,
+   * which hand those two gestures to the shell -- and `DialogOptions` carries
+   * no close callback, so the shell has no way to say it used one. `open` on
+   * this side is therefore a *mirror*, and it goes stale the moment a reader
+   * presses Escape or clicks the backdrop: the surface is gone from the
+   * window while the flag still says it is up.
+   *
+   * A stale flag is not cosmetic. Every `open...` guard reads it, so the
+   * ticket could be opened exactly once per run -- and because the guard
+   * returns before the row menu is dismissed, a second Buy did nothing at all
+   * and left its menu standing, which is what makes it look like a dropped
+   * `notify` rather than a piece of state that is out of date.
+   *
+   * `has_active_dialog()` is the authority. Asking it before anything reads
+   * the flags is the only place the two can be reconciled without a callback
+   * the runtime does not offer.
+   */
+  syncDialogFlags() {
+    if (!this.ticket.open && !this.addSymbolOpen) return;
+    if (this.shellHasDialog()) return;
+    this.forgetTicket();
+    this.forgetAddSymbol();
+  }
+
+  /**
+   * Whether the shell is showing a dialog.
+   *
+   * A method rather than the call itself so a probe can answer for it:
+   * `open_dialog` requires a `ShellRoot` as the window's first view, which a
+   * test window does not have, and the behaviour worth pinning down is what
+   * this application does with the answer rather than the shell's bookkeeping.
+   */
+  shellHasDialog() {
+    return window.has_active_dialog();
   }
 
   /** Puts the ticket on screen. */
@@ -2459,6 +2514,7 @@ export default class LongbridgeApp extends View {
    * @param {import("gpui").Context} cx
    */
   dismiss(cx) {
+    this.syncDialogFlags();
     if (this.shortcutHelpOpen) {
       this.shortcutHelpOpen = false;
       this.workspaceFocus.focus();
@@ -3168,7 +3224,11 @@ export default class LongbridgeApp extends View {
    * @param {import("gpui").Context} cx
    */
   openAddSymbol(cx) {
-    if (this.addSymbolOpen) return;
+    // The add-a-security dialog is dismissable the same two ways, and its flag
+    // goes stale the same way -- this is the pre-existing case of the same
+    // defect, not a new one.
+    this.syncDialogFlags();
+    if (this.addSymbolOpen || this.ticket.open) return;
     this.addSymbolOpen = true;
     this.addSymbolError = "";
     this.addSymbolPending = false;
@@ -5110,7 +5170,14 @@ export default class LongbridgeApp extends View {
   hasSomethingToDismiss() {
     if (this.calendarOpen || this.userMenuOpen || this.allocationHelpOpen || this.shortcutHelpOpen)
       return true;
-    if (this.rowMenu || this.addSymbolOpen || this.ticket.open) return true;
+    if (this.rowMenu) return true;
+    // The two dialog flags are mirrors of the shell's stack and can be stale
+    // (see `syncDialogFlags`). Escape must not be claimed on behalf of a
+    // surface that is no longer up -- claiming it swallows the keystroke and
+    // leaves the reader pressing a key that does nothing. `has_active_dialog`
+    // is legal from render, unlike the rest of the dialog API, so the question
+    // can be asked here.
+    if ((this.addSymbolOpen || this.ticket.open) && this.shellHasDialog()) return true;
     if (this.page === "orders" && this.selectedOrderId) return true;
     return Boolean(this.pageFilter().query);
   }

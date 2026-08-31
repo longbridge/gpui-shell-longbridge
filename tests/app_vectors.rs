@@ -718,6 +718,39 @@ fn order_vectors_run_against_this_application(cx: &mut TestAppContext) {
     let _loaded = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
 }
 
+/// A dialog the shell dismissed by itself must be openable again.
+///
+/// `DialogOptions` has no close callback, so `escape_dismissable` and
+/// `backdrop_dismissable` leave the application's own "is it open?" field
+/// saying yes about a surface that is gone. Every `open...` guard reads that
+/// field, so the ticket could otherwise be opened exactly once per run.
+#[gpui::test]
+fn a_dialog_dismissed_by_the_shell_can_be_opened_again(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("dialog_reopen.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let (_root, view) = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+    context.run_until_parked();
+    let draw_view = view.clone();
+    context.draw(
+        gpui::Point::default(),
+        gpui::size(gpui::px(1000.), gpui::px(760.)),
+        move |_, _| draw_view.into_any_element(),
+    );
+    let rendered = context.update(|_, cx| {
+        view.read(cx)
+            .snapshot()
+            .map(gpui_shell::RenderSnapshot::debug_tree)
+            .unwrap_or_default()
+    });
+    assert!(
+        rendered.contains("dialogs reopen after the shell dismisses them"),
+        "{rendered}"
+    );
+}
+
 #[gpui::test]
 fn the_order_ticket_states_what_it_will_send(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
