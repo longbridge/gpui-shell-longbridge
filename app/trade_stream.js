@@ -22,6 +22,7 @@ import {
   TRADE_TOPIC_PRIVATE,
   decodeFrame,
   decodeTradeNotification,
+  decodeTradeSubscribeResponse,
   decodeUtf8,
   encodeAuthRequest,
   encodeFrame,
@@ -256,7 +257,9 @@ export function createTradeStream(options) {
     // says what it let past. Which notifications carry an order is a fact
     // about the gateway, taken from an SDK rather than from a field table, and
     // a wrong reading of it looks exactly like no orders being sent at all.
-    if (!order) {
+    if (order) {
+      onStatus("order", { orderId: order.order_id, status: order.status });
+    } else {
       onStatus("ignored", {
         topic: notification.topic,
         contentType: notification.contentType,
@@ -326,12 +329,26 @@ export function createTradeStream(options) {
       if (!active(session)) throw new Error("trade stream disconnected during authentication");
 
       onStatus("subscribing");
-      await request(
-        session,
-        TRADE_COMMAND.SUBSCRIBE,
-        encodeTradeSubscribeRequest([TRADE_TOPIC_PRIVATE]),
+      const subscribed = decodeTradeSubscribeResponse(
+        await request(
+          session,
+          TRADE_COMMAND.SUBSCRIBE,
+          encodeTradeSubscribeRequest([TRADE_TOPIC_PRIVATE]),
+        ),
       );
       if (!active(session)) throw new Error("trade stream disconnected during subscription");
+      // The command succeeding is not the topic being granted. `SubResponse`
+      // reports them one at a time, so a status of zero says the gateway
+      // understood the request -- and a channel that reads only the status can
+      // sit there believing it is subscribed, waiting for pushes that were
+      // never going to come, which is indistinguishable from an account where
+      // nothing is happening.
+      if (!subscribed.success.includes(TRADE_TOPIC_PRIVATE)) {
+        const refused = subscribed.fail.find((entry) => entry.topic === TRADE_TOPIC_PRIVATE);
+        throw new Error(
+          `Longbridge refused the ${TRADE_TOPIC_PRIVATE} topic${refused?.reason ? `: ${refused.reason}` : ""}`,
+        );
+      }
 
       // One subscription, made once. Reaching this point is the whole of the
       // connection, so the backoff resets here rather than on the socket

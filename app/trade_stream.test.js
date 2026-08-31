@@ -11,6 +11,7 @@ import { v_flex } from "gpui-base";
 import {
   FRAME_TYPE,
   TRADE_COMMAND,
+  TRADE_TOPIC_PRIVATE,
   TRADE_CONTENT_JSON,
   decodeFrame,
   decodeTradeNotification,
@@ -124,12 +125,32 @@ class MockSocket {
   }
 }
 
+/** trade.SubResponse: repeated string success = 1, repeated Fail fail = 2. */
+function subscribeResponse({ success = [], fail = [] } = {}) {
+  const utf8 = (value) => [...value].map((character) => character.charCodeAt(0));
+  const bytes = [];
+  for (const topic of success) bytes.push(0x0a, topic.length, ...utf8(topic));
+  for (const entry of fail) {
+    const inner = [
+      0x0a,
+      entry.topic.length,
+      ...utf8(entry.topic),
+      0x12,
+      entry.reason.length,
+      ...utf8(entry.reason),
+    ];
+    bytes.push(0x12, inner.length, ...inner);
+  }
+  return Uint8Array.from(bytes);
+}
+
 class MockWebSocket {
-  constructor(failCommands = new Map()) {
+  constructor(failCommands = new Map(), subscribe = { success: [TRADE_TOPIC_PRIVATE] }) {
     this.urls = [];
     this.options = [];
     this.sockets = [];
     this.failCommands = failCommands;
+    this.subscribe = subscribe;
   }
 
   async connect(url, options) {
@@ -143,7 +164,10 @@ class MockWebSocket {
           command: packet.command,
           requestId: packet.requestId,
           status: this.failCommands.get(packet.command) ?? 0,
-          body: new Uint8Array(),
+          body:
+            packet.command === TRADE_COMMAND.SUBSCRIBE
+              ? subscribeResponse(this.subscribe)
+              : new Uint8Array(),
         }),
       );
     });
@@ -308,6 +332,36 @@ async function runVectors() {
   check(!refused.isConnected(), "and does not claim to be connected");
   check(refusing.sockets[0].closed, "the half-open session is closed");
   refused.stop();
+
+  // The command can succeed while the topic is refused: `SubResponse` reports
+  // them one at a time. A channel that reads only the status sits there
+  // believing it is subscribed, waiting for pushes that were never coming --
+  // which looks exactly like an account where nothing is happening.
+  const ungranted = new MockWebSocket(new Map(), {
+    success: [],
+    fail: [{ topic: TRADE_TOPIC_PRIVATE, reason: "no permission" }],
+  });
+  const ungrantedStatuses = [];
+  const ungrantedStream = createTradeStream({
+    accessToken: "test-token",
+    getOtp: async () => "trade-otp",
+    onOrder: () => {},
+    onStatus: (status, detail) => ungrantedStatuses.push({ status, detail }),
+    WebSocket: ungranted,
+    timers: new MockTimers(),
+  });
+  ungrantedStream.start();
+  await settle();
+  check(
+    ungrantedStatuses.at(-1).status === "reconnecting",
+    `a refused topic is a failed connection: ${ungrantedStatuses.map((e) => e.status).join(",")}`,
+  );
+  check(
+    String(ungrantedStatuses.at(-1).detail.error).includes("no permission"),
+    "and says the reason the gateway gave",
+  );
+  check(!ungrantedStream.isConnected(), "and does not claim to be connected");
+  ungrantedStream.stop();
 
   // Stopping is final: a session that has been stopped does not reconnect.
   stream.stop();

@@ -471,6 +471,45 @@ export function encodeTradeSubscribeRequest(topics) {
 }
 
 /**
+ * Decodes trade.SubResponse, the answer to a subscribe.
+ *
+ * The command succeeds and the topics are reported one by one: `success`,
+ * `fail` with a reason, and `current` for what is subscribed now. A status of
+ * zero therefore says the gateway understood the request, not that it granted
+ * it -- so a caller that only checks the status can believe it is subscribed
+ * to a topic it was refused, and then wait forever for pushes that were never
+ * going to come.
+ */
+export function decodeTradeSubscribeResponse(data) {
+  const response = { success: [], fail: [], current: [] };
+  decodeMessage(data, (reader, field, wireType) => {
+    if (field === 1) {
+      expectWireType(wireType, 2, field);
+      response.success.push(reader.readString("subscribe success"));
+    } else if (field === 2) {
+      expectWireType(wireType, 2, field);
+      const failure = { topic: "", reason: "" };
+      decodeMessage(reader.readBytes("subscribe fail"), (inner, innerField, innerWire) => {
+        if (innerField === 1) {
+          expectWireType(innerWire, 2, innerField);
+          failure.topic = inner.readString("subscribe fail topic");
+        } else if (innerField === 2) {
+          expectWireType(innerWire, 2, innerField);
+          failure.reason = inner.readString("subscribe fail reason");
+        } else return false;
+        return true;
+      });
+      response.fail.push(failure);
+    } else if (field === 3) {
+      expectWireType(wireType, 2, field);
+      response.current.push(reader.readString("subscribe current"));
+    } else return false;
+    return true;
+  });
+  return response;
+}
+
+/**
  * Decodes trade.Notification, which arrives as command 18.
  *
  * The payload is opaque at this layer: `contentType` says whether `data` is

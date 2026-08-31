@@ -42,10 +42,16 @@ export default class OrderPushProbe extends LongbridgeApp {
   init(_props, _cx) {
     this.initOrdersState();
     this.hasStoredTokens = true;
+    this.repaints = 0;
     this.results = [];
   }
 
   redraw() {}
+
+  /** The funnel a push must ask for, counted rather than run. */
+  scheduleRedraw() {
+    this.repaints += 1;
+  }
 
   check(condition, message) {
     if (!condition) this.results.push(message);
@@ -53,6 +59,7 @@ export default class OrderPushProbe extends LongbridgeApp {
 
   render() {
     this.results = [];
+    this.repaints = 0;
     const cx = null;
 
     // The push arrives before the page has ever been read. There is no list to
@@ -109,9 +116,12 @@ export default class OrderPushProbe extends LongbridgeApp {
       this.ordersState.today.map((order) => order.orderId).join(",") === "900,1",
       "a push reaches a list that is already showing",
     );
+    this.check(this.repaints === 1, "and asks for the repaint that shows it");
     const published = this.ordersState;
+    const painted = this.repaints;
     this.receiveOrderChange(pushedOrder(), cx);
     this.check(this.ordersState === published, "and a repeat of it does not republish the list");
+    this.check(this.repaints === painted, "nor repaint the window for news it already had");
     this.receiveOrderChange(pushedOrder({ status: "FilledStatus", updated_at: "1700000400" }), cx);
     this.check(
       this.ordersState.today[0].statusKind === "filled",

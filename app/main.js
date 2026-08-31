@@ -1858,7 +1858,16 @@ export default class LongbridgeApp extends View {
     const today = mergeOrder(this.ordersState.today, order);
     if (today === this.ordersState.today) return;
     this.ordersState = { ...this.ordersState, today };
-    this.redraw(cx);
+    // Through the application's one repaint funnel, as every quote push is.
+    //
+    // Not `redraw(cx)` directly. `cx` here was captured when the session
+    // connected and has been held across every await since; `scheduleRedraw`
+    // notifies from inside `cx.timer.after`, which hands its callback a
+    // context of its own, and that is the arrangement every working push in
+    // this application uses. It also coalesces, which a fill wants: one
+    // submission arrives as a short burst -- accepted, queued, filled in parts
+    // -- and each on its own paint would be three repaints for one event.
+    this.scheduleRedraw(cx);
   }
 
   /**
