@@ -83,7 +83,22 @@ export default class TradeUiProbe extends LongbridgeApp {
    */
   refreshTicket() {}
 
+  /**
+   * A render that throws produces an empty snapshot, and an empty snapshot
+   * fails every assertion with the same unhelpful message. Drawing the reason
+   * instead means the first failing assertion names the actual cause.
+   */
   render(cx) {
+    try {
+      return this.body(cx);
+    } catch (failure) {
+      return v_flex()
+        .id("trade-ui-probe-error")
+        .child(`THREW: ${failure instanceof Error ? failure.message : String(failure)}`);
+    }
+  }
+
+  body(cx) {
     const tokens = cx.theme();
 
     // A ticket on the sell side, filled in, so the form draws its fields and

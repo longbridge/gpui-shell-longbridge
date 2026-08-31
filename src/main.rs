@@ -121,22 +121,35 @@ fn main() {
         });
 }
 
-/// Exposes exactly one host-owned file instead of granting script code access
-/// to the user's home directory. Omarchy atomically replaces this file when a
-/// theme changes, so every call resolves the current path again.
+/// Exposes exactly two host-owned files instead of granting script code access
+/// to the user's home directory. Omarchy atomically replaces them when a theme
+/// changes, so every call resolves the current path again.
+///
+/// `colors.toml` is the palette; `shell.toml` is everything else a theme can
+/// influence — the spacing scale, the type scale, and the alphas a control's
+/// chrome is built from. Omarchy UI reads both, and a window that read only the
+/// first would follow the desktop's colours while ignoring its density.
 fn install_omarchy_theme_reader() -> Result<(), gpui_shell::HostError> {
-    let colors = std::env::var_os("HOME")
+    let theme_dir = std::env::var_os("HOME")
         .map(PathBuf::from)
-        .map(|home| home.join(".local/state/omarchy/current/theme/colors.toml"));
+        .map(|home| home.join(".local/state/omarchy/current/theme"));
+    let colors = theme_dir.as_ref().map(|dir| dir.join("colors.toml"));
+    let shell = theme_dir.as_ref().map(|dir| dir.join("shell.toml"));
+    fn read(path: Option<&PathBuf>) -> String {
+        path.and_then(|path| std::fs::read_to_string(path).ok())
+            .unwrap_or_default()
+    }
     gpui_shell::export_module(
         HostModule::new("omarchy-theme")
-            .declarations("export function current_colors(): string;")
+            .declarations(concat!(
+                "export function current_colors(): string;\n",
+                "export function current_shell(): string;",
+            ))
             .function("current_colors", move |_| {
-                let source = colors
-                    .as_ref()
-                    .and_then(|path| std::fs::read_to_string(path).ok())
-                    .unwrap_or_default();
-                Ok(HostValue::from(source))
+                Ok(HostValue::from(read(colors.as_ref())))
+            })
+            .function("current_shell", move |_| {
+                Ok(HostValue::from(read(shell.as_ref())))
             }),
     )
 }
