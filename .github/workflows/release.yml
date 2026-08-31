@@ -70,7 +70,7 @@ jobs:
           ref: ${{ env.RELEASE_TAG }}
       - name: Install packaging dependencies
         if: needs.prepare.outputs.reuse_host != 'true'
-        run: brew install imagemagick
+        run: brew install imagemagick librsvg
       - name: Build release binary
         if: needs.prepare.outputs.reuse_host != 'true'
         working-directory: longbridge-lite
