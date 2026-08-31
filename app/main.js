@@ -1788,6 +1788,28 @@ export default class LongbridgeApp extends View {
   startTradeStream(token, generation, cx) {
     this.stopTradeStream();
     let stream;
+    // Guarded, because the comment above is only true if this cannot throw.
+    // `createTradeStream` validates its arguments and its transport, and a
+    // throw here is on the connect path -- it would take the watchlist, the
+    // quotes and the chart down with it, over a channel none of them need.
+    try {
+      stream = this.buildTradeStream(token, generation, cx);
+    } catch (error) {
+      console.warn(`the trade stream could not be opened: ${error}`);
+      return;
+    }
+    this.tradeStream = stream;
+    stream.start();
+  }
+
+  /**
+   * The push channel itself, separated only so that opening one can be tried
+   * without the failure reaching the session it was opened from.
+   *
+   * @param {string} token @param {number} generation @param {import("gpui").AsyncContext} cx
+   */
+  buildTradeStream(token, generation, cx) {
+    let stream;
     stream = createTradeStream({
       accessToken: token,
       onOrder: (order) => {
@@ -1805,8 +1827,7 @@ export default class LongbridgeApp extends View {
         }
       },
     });
-    this.tradeStream = stream;
-    stream.start();
+    return stream;
   }
 
   /** Closes the push channel, if one is open. Safe to call when none is. */

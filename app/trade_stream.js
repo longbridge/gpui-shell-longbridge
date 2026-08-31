@@ -14,6 +14,7 @@
 // subscription, made once, and it never changes; there are no per-symbol
 // requests, no snapshots and no selection to keep in step.
 
+import { WebSocket } from "websocket";
 import {
   FRAME_TYPE,
   TRADE_COMMAND,

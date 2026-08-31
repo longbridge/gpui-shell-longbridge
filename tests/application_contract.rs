@@ -201,6 +201,14 @@ fn the_writable_surface_is_the_watchlist_and_an_account_s_orders() {
             && trade_stream.contains("TRADE_COMMAND.PUSH_NOTIFICATION"),
         "orders must be learned from the gateway's own topic"
     );
+    // The transport is the shell's module, not a browser global. This runtime
+    // has neither `WebSocket` nor `TextDecoder`, and reaching for either is a
+    // ReferenceError on the connect path rather than a missing feature.
+    assert!(
+        trade_stream.contains(r#"import { WebSocket } from "websocket""#)
+            && !trade_stream.contains("TextDecoder"),
+        "the push channel may only use what this runtime actually has"
+    );
     assert!(
         main.contains("this.startTradeStream(token, generation, cx)")
             && main.contains("receiveOrderChange(pushed, cx)")

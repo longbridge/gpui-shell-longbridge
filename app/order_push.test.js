@@ -119,6 +119,19 @@ export default class OrderPushProbe extends LongbridgeApp {
     );
     this.check(this.ordersState.today.length === 2, "without adding a second row for it");
 
+    // A push channel that cannot be opened is a channel, not a session. It is
+    // built on the connect path, ahead of the watchlist's own stream, so a
+    // throw here would take prices down with it -- which is exactly what
+    // happened when this module reached for a `WebSocket` global that this
+    // runtime does not have.
+    this.initOrdersState();
+    this.tradeStream = null;
+    this.buildTradeStream = () => {
+      throw new Error("WebSocket is not defined");
+    };
+    this.startTradeStream("token", 1, cx);
+    this.check(this.tradeStream === null, "a channel that will not open is not held as if it had");
+
     return v_flex()
       .id("order-push-probe")
       .child(this.results.length === 0 ? "ok" : "FAILED")
