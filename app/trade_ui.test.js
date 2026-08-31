@@ -56,6 +56,9 @@ export default class TradeUiProbe extends LongbridgeApp {
       error: "",
     };
     this.selectedOrderRowId = "884955210001";
+    // A board lot the socket has already answered for, so the ticket can be
+    // drawn with one without the probe reaching a socket at all.
+    this.lotSizes = new Map([["700.HK", 100]]);
   }
 
   /** The probe reaches no network: what is under test is what it draws. */
@@ -106,6 +109,24 @@ export default class TradeUiProbe extends LongbridgeApp {
     this.reviewTicket(cx);
     const refused = this.ticketDialog(tokens);
 
+    // Hong Kong trades in board lots: the form states the lot, and a part lot
+    // is refused before anything is sent.
+    this.ticket = {
+      ...this.blankTicket(),
+      open: true,
+      side: "Buy",
+      symbol: "700.HK",
+      name: "Tencent",
+      currency: "HKD",
+      lotSize: 100,
+    };
+    this.ticketPrice.set_value("320");
+    this.ticketQuantity.set_value("100");
+    const lotForm = this.ticketDialog(tokens);
+    this.ticketQuantity.set_value("150");
+    this.reviewTicket(cx);
+    const partLot = this.ticketDialog(tokens);
+
     // Withdrawing opens straight into its confirmation: nothing to fill in.
     this.ticket = {
       ...this.blankTicket(),
@@ -141,6 +162,8 @@ export default class TradeUiProbe extends LongbridgeApp {
       .child(review)
       .child(marketReview)
       .child(refused)
+      .child(lotForm)
+      .child(partLot)
       .child(withdraw)
       .child(this.tradeActions(tokens, "AAPL.US"))
       .child(watchlistMenu)

@@ -1151,6 +1151,18 @@ export default class LongbridgeApp extends View {
      * }}
      */
     this.ticket = this.blankTicket();
+    /**
+     * Board lots, by symbol, as the quote socket answered them.
+     *
+     * A lot is a property of the instrument and does not change while the
+     * window is open, so it is asked once and kept. A symbol that could not
+     * be looked up records nothing, which is why the ticket reads a missing
+     * entry as "not known" rather than as 1 -- a lot invented here would
+     * refuse quantities the exchange would have taken.
+     *
+     * @type {Map<string, number>}
+     */
+    this.lotSizes = new Map();
     /** Which stock-detail sections are expanded. */
     this.detailSections = { more: false };
     this.watchlistQuery = "";
@@ -1723,6 +1735,10 @@ export default class LongbridgeApp extends View {
           });
           return;
         }
+        // The same answer carries the board lot. Filing it here means a ticket
+        // opened on a security just added already knows its lot.
+        const lot = Number(info.lotSize);
+        if (Number.isFinite(lot) && lot > 0) this.lotSizes.set(symbol, lot);
         const quote = quotes.find((entry) => entry.symbol === symbol) ?? quotes[0] ?? {};
         const [row] = applyQuotes(initialQuotes([{ symbol, code: symbol.split(".")[0] }]), [
           { ...quote, symbol },
@@ -1877,6 +1893,8 @@ export default class LongbridgeApp extends View {
       // instead of a second one. A fresh id per press would make this field a
       // decoration.
       requestId: "",
+      /** @type {number | null} The board lot, once it is known. */
+      lotSize: null,
       type: "LO",
       timeInForce: "Day",
       outsideRth: false,
@@ -1958,10 +1976,65 @@ export default class LongbridgeApp extends View {
       name: facts.name,
       currency: facts.currency,
       requestId: randomUUID(),
+      lotSize: this.lotSizes.get(symbol) ?? null,
     };
     this.ticketPrice.set_value(last && last !== "--" ? last : "");
     this.ticketQuantity.set_value("");
     this.presentTicket();
+    this.loadLotSize(symbol, cx);
+    this.redraw(cx);
+  }
+
+  /**
+   * Asks the quote socket what one lot of an instrument is.
+   *
+   * Hong Kong trades in board lots -- 100 shares of one security, 500 of
+   * another -- and an order for part of a lot is refused by the exchange. The
+   * size is in the static info the socket already answers; nothing carried it
+   * up before, because nothing needed it until an order could be placed.
+   *
+   * It is fetched when a ticket opens rather than for the whole watchlist:
+   * one instrument is being traded, and asking about the other forty would be
+   * a request per window rather than per order.
+   *
+   * A lookup that fails is not reported. The ticket then validates without a
+   * lot, which refuses nothing -- the exchange still enforces it, and its
+   * refusal arrives with a reason, which is more than this client could say.
+   *
+   * @param {string} symbol @param {import("gpui").Context} cx
+   */
+  loadLotSize(symbol, cx) {
+    if (this.lotSizes.has(symbol)) return;
+    const stream = this.stream;
+    if (!stream) return;
+    cx.spawn(async (cx) => {
+      try {
+        const infos = await stream.queryStaticInfo([symbol]);
+        const info = infos.find((entry) => entry.symbol === symbol) ?? infos[0];
+        const lot = Number(info?.lotSize);
+        if (!Number.isFinite(lot) || lot <= 0) return;
+        this.rememberLotSize(symbol, lot, cx);
+      } catch (_) {
+        // Not knowing the lot is a state the ticket already handles.
+      }
+    });
+  }
+
+  /**
+   * Files a board lot, and tells an open ticket that is waiting on it.
+   *
+   * The ticket holds its own copy rather than reading the map as it renders,
+   * so this has to reach the one on screen -- which may have been opened
+   * before the answer arrived.
+   *
+   * @param {string} symbol @param {number} lot @param {import("gpui").Context} cx
+   */
+  rememberLotSize(symbol, lot, cx) {
+    this.lotSizes.set(symbol, lot);
+    if (this.ticket.open && this.ticket.symbol === symbol) {
+      this.ticket = { ...this.ticket, lotSize: lot };
+      this.refreshTicket();
+    }
     this.redraw(cx);
   }
 
@@ -2009,12 +2082,14 @@ export default class LongbridgeApp extends View {
       name: order.name || facts.name,
       currency: order.currency || facts.currency,
       orderId: order.orderId,
+      lotSize: this.lotSizes.get(order.symbol) ?? null,
       type: isLimitOrder(order.type) ? "LO" : "MO",
       timeInForce: order.timeInForce === "GTC" ? "GTC" : "Day",
     };
     this.ticketPrice.set_value(order.price === "--" ? "" : order.price);
     this.ticketQuantity.set_value(order.quantity === "--" ? "" : order.quantity);
     this.presentTicket();
+    this.loadLotSize(order.symbol, cx);
     this.redraw(cx);
   }
 
@@ -2114,6 +2189,7 @@ export default class LongbridgeApp extends View {
     if (!this.ticket.open || this.ticket.pending) return;
     const result = validateTicket(this.ticketForm(), {
       available: this.ticket.side === "Sell" ? this.sellableQuantity(this.ticket.symbol) : null,
+      lotSize: this.ticket.lotSize,
     });
     if (!result.ok) {
       this.ticket = { ...this.ticket, errors: result.errors, error: "" };
@@ -3183,75 +3259,85 @@ export default class LongbridgeApp extends View {
     const ticket = this.ticket;
     const limit = isLimitOrder(ticket.type);
     const sellable = ticket.side === "Sell" ? this.sellableQuantity(ticket.symbol) : null;
-    return v_flex()
-      .gap(tokens.spacing.sm)
-      .child(
-        ticketField(
-          tokens,
-          "Type",
-          segmented(tokens, "ticket-type", ORDER_TYPES, ticket.type, (value) =>
-            this.updateTicket({ type: value }),
-          ).w(180),
-        ),
-      )
-      .child(
-        ticketField(
-          tokens,
-          "Price",
-          // A market order has no price, and an empty box where one belongs
-          // invites someone to fill it in. The field is replaced by what the
-          // order will actually use.
-          limit
-            ? filterInput(tokens, this.ticketPrice, 180).h(26)
-            : muted(tokens, "At market price"),
-          ticket.errors.price,
-        ),
-      )
-      .child(
-        ticketField(
-          tokens,
-          "Quantity",
-          filterInput(tokens, this.ticketQuantity, 180).h(26),
-          ticket.errors.quantity,
-        ),
-      )
-      .when(sellable !== null, (element) =>
-        element.child(
-          h_flex()
-            .justify_end()
-            .child(muted(tokens, `${sellable} available to sell`)),
-        ),
-      )
-      .child(
-        ticketField(
-          tokens,
-          "Valid",
-          segmented(tokens, "ticket-tif", TIME_IN_FORCE, ticket.timeInForce, (value) =>
-            this.updateTicket({ timeInForce: value }),
-          ).w(180),
-        ),
-      )
-      .when(hasExtendedHours(ticket.symbol), (element) =>
-        element.child(
+    return (
+      v_flex()
+        .gap(tokens.spacing.sm)
+        .child(
           ticketField(
             tokens,
-            "Sessions",
-            segmented(
-              tokens,
-              "ticket-rth",
-              [
-                { value: "rth", label: "Regular" },
-                { value: "any", label: "Pre/post" },
-              ],
-              ticket.outsideRth ? "any" : "rth",
-              (value) => this.updateTicket({ outsideRth: value === "any" }),
+            "Type",
+            segmented(tokens, "ticket-type", ORDER_TYPES, ticket.type, (value) =>
+              this.updateTicket({ type: value }),
             ).w(180),
           ),
-        ),
-      )
-      .when(Boolean(ticket.errors.form), (element) =>
-        element.child(errorMessage(tokens, ticket.errors.form)),
-      );
+        )
+        .child(
+          ticketField(
+            tokens,
+            "Price",
+            // A market order has no price, and an empty box where one belongs
+            // invites someone to fill it in. The field is replaced by what the
+            // order will actually use.
+            limit
+              ? filterInput(tokens, this.ticketPrice, 180).h(26)
+              : muted(tokens, "At market price"),
+            ticket.errors.price,
+          ),
+        )
+        .child(
+          ticketField(
+            tokens,
+            "Quantity",
+            filterInput(tokens, this.ticketQuantity, 180).h(26),
+            ticket.errors.quantity,
+          ),
+        )
+        // What the quantity field has to respect, said before it is typed into
+        // rather than only when it is refused.
+        .when(sellable !== null || (ticket.lotSize ?? 1) > 1, (element) =>
+          element.child(
+            h_flex()
+              .justify_end()
+              .gap(tokens.spacing.sm)
+              .when((ticket.lotSize ?? 1) > 1, (row) =>
+                row.child(muted(tokens, `Lot ${ticket.lotSize}`)),
+              )
+              .when(sellable !== null, (row) =>
+                row.child(muted(tokens, `${sellable} available to sell`)),
+              ),
+          ),
+        )
+        .child(
+          ticketField(
+            tokens,
+            "Valid",
+            segmented(tokens, "ticket-tif", TIME_IN_FORCE, ticket.timeInForce, (value) =>
+              this.updateTicket({ timeInForce: value }),
+            ).w(180),
+          ),
+        )
+        .when(hasExtendedHours(ticket.symbol), (element) =>
+          element.child(
+            ticketField(
+              tokens,
+              "Sessions",
+              segmented(
+                tokens,
+                "ticket-rth",
+                [
+                  { value: "rth", label: "Regular" },
+                  { value: "any", label: "Pre/post" },
+                ],
+                ticket.outsideRth ? "any" : "rth",
+                (value) => this.updateTicket({ outsideRth: value === "any" }),
+              ).w(180),
+            ),
+          ),
+        )
+        .when(Boolean(ticket.errors.form), (element) =>
+          element.child(errorMessage(tokens, ticket.errors.form)),
+        )
+    );
   }
 
   /** @param {import("gpui-base").Theme} tokens */

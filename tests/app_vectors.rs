@@ -781,6 +781,17 @@ fn the_order_ticket_states_what_it_will_send(cx: &mut TestAppContext) {
         rendered.contains("This account holds 25."),
         "an oversized sale must be refused locally:\n{rendered}"
     );
+    // A Hong Kong ticket states its board lot up front, and refuses a part lot
+    // locally -- the exchange would refuse it anyway, a round trip later.
+    assert!(
+        rendered.contains("Lot 100"),
+        "a board lot must be stated before it is typed against:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("Board lot is 100."),
+        "a part lot must be refused locally:\n{rendered}"
+    );
+
     // Withdrawing confirms which order, and offers no fields.
     assert!(
         rendered.contains("This order will be withdrawn.")

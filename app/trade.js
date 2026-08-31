@@ -116,13 +116,20 @@ export function emptyTicket(symbol, side) {
  * each one under the field it is about. `form` holds the ones that belong to
  * no single field -- selling more than is held is about the pair of them.
  *
+ * Both facts about the instrument may be absent, and absent is not zero:
+ *
  * `available` is the quantity a sale may not exceed, or `null` when the
  * account's position is not known. Not knowing is not the same as owning
  * none: a portfolio that has not loaded yet would otherwise refuse every
  * sale on the grounds that it had not looked.
  *
+ * `lotSize` is the board lot, or `null` when it has not been looked up. A
+ * lot that is not known refuses nothing -- the exchange still enforces it,
+ * and the refusal comes back with its reason, which is better than this
+ * module inventing a rule it cannot see.
+ *
  * @param {TicketForm} form
- * @param {{ available?: number | null }} [context]
+ * @param {{ available?: number | null, lotSize?: number | null }} [context]
  */
 export function validateTicket(form, context = {}) {
   /** @type {{ price?: string, quantity?: string, form?: string }} */
@@ -138,10 +145,15 @@ export function validateTicket(form, context = {}) {
     else if (price <= 0) errors.price = "Price must be above zero.";
   }
 
+  const lotSize = context.lotSize ?? null;
   const quantity = typedNumber(form?.quantity);
   if (quantity === null) errors.quantity = "Enter a quantity.";
   else if (quantity <= 0) errors.quantity = "Quantity must be above zero.";
   else if (!Number.isInteger(quantity)) errors.quantity = "Quantity must be a whole number.";
+  // A board lot of one is every quantity, so it is not a rule worth stating.
+  else if (lotSize !== null && lotSize > 1 && quantity % lotSize !== 0) {
+    errors.quantity = `${symbol.split(".")[1] === "HK" ? "Board lot" : "Lot"} is ${lotSize}.`;
+  }
 
   const available = context.available ?? null;
   if (

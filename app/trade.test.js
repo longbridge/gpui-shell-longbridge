@@ -50,6 +50,37 @@ function runVectors() {
   check(market.ok, "a market order needs no price");
   check(market.normalized.price === null, "a market order carries no price at all");
 
+  // Board lots. Hong Kong trades in them; a part lot is refused by the
+  // exchange, so it is refused here first -- but only when the lot is known.
+  const hk = (overrides = {}) => ticket({ symbol: "700.HK", ...overrides });
+  check(
+    validateTicket(hk({ quantity: "150" }), { lotSize: 100 }).errors.quantity,
+    "a part lot is refused",
+  );
+  check(validateTicket(hk({ quantity: "200" }), { lotSize: 100 }).ok, "whole lots are allowed");
+  check(
+    validateTicket(hk({ quantity: "150" }), { lotSize: 100 }).errors.quantity ===
+      "Board lot is 100.",
+    "the refusal names the lot, so the reader knows what to type",
+  );
+  check(
+    validateTicket(hk({ quantity: "150" }), {}).ok,
+    "an unknown lot refuses nothing -- the exchange still enforces it",
+  );
+  check(
+    validateTicket(hk({ quantity: "150" }), { lotSize: null }).ok,
+    "an absent lot is not a lot of one",
+  );
+  check(
+    validateTicket(ticket({ quantity: "150" }), { lotSize: 1 }).ok,
+    "a lot of one is every quantity, and is not a rule worth stating",
+  );
+  check(
+    validateTicket(hk({ quantity: "0" }), { lotSize: 100 }).errors.quantity ===
+      "Quantity must be above zero.",
+    "zero is refused as zero, not as a part lot",
+  );
+
   // Selling more than is held.
   check(
     validateTicket(ticket({ side: "Sell", quantity: "200" }), { available: 100 }).errors.form,
