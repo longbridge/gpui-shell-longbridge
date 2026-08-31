@@ -8,9 +8,16 @@ application can run as a native GPUI desktop program through
 [GPUI Shell](https://longbridge.github.io/gpui-component/shell/).
 
 The active palette is read from Omarchy's materialized theme state at
-`~/.local/state/omarchy/current/theme/colors.toml`. Switching the Omarchy theme
-updates Longbridge Lite automatically; the application does not inspect
+`~/.local/state/omarchy/current/theme/colors.toml`, and the spacing, type and
+control scales from `shell.toml` beside it. Switching the Omarchy theme updates
+Longbridge Lite automatically; the application does not inspect
 `/etc/os-release` or bundle its own font.
+
+The interface is built from [Omarchy UI](https://github.com/huacnlee/omarchy-ui),
+declared as a Git dependency in `app/gpui-shell.json` and resolved by gpui-shell
+before the application starts. Everything generic — a button, a badge, a panel,
+a table's header, a reading, a key cap — is one of its classes; what stays in
+this repository is what only a market terminal knows.
 
 ## Install
 
@@ -148,7 +155,9 @@ process execution or trading mutation API is exposed to the JavaScript layer.
 | `app/market.js`       | Pure Watchlist normalization, quote reduction and ordering |
 | `app/watchlist_edit.js` | Pure group selection and typed-symbol rules              |
 | `app/orders.js`       | Pure order normalization, statuses and history window      |
-| `app/ui.js`           | Theme-aware presentation components                        |
+| `app/ui.js`           | This terminal's presentation, composed from Omarchy UI      |
+| `app/style.js`        | The one spacing, type and control scale the window is drawn on |
+| `app/palette.js`      | The colours the semantic token set cannot carry: direction and feed health |
 
 The application changes exactly one thing about an account: which securities it
 watches. `PUT /v1/watchlist/groups` is the only write the HTTP boundary can

@@ -19,8 +19,23 @@ export function setOmarchyAvatarColors(colors) {
   omarchyAvatarColors = colors.slice(0, 6);
 }
 
+/**
+ * Adopt Omarchy's status row as this terminal's market colours.
+ *
+ * `omarchyStatusColors` names them for what they mean to an interface —
+ * success, danger — and a market names the same two readings for what they
+ * mean to a price. The translation is one line and it belongs here, with the
+ * other colour this application draws that is not a semantic token.
+ *
+ * @param {{ success?: string, danger?: string, warning?: string, info?: string }} colors
+ */
 export function setOmarchyMarketColors(colors) {
-  omarchyMarketColors = { ...colors };
+  omarchyMarketColors = {
+    up: colors.success,
+    down: colors.danger,
+    warning: colors.warning,
+    info: colors.info,
+  };
 }
 
 export function avatarColor(tokens, initial, strength = 0.55) {
