@@ -161,8 +161,10 @@ export default class TradeUiProbe extends LongbridgeApp {
     this.reviewTicket(cx);
     const marketAmountReview = this.ticketDialog(tokens);
 
-    // Too little to buy a share is refused in the form.
-    this.ticket = { ...this.ticket, stage: "form", type: "LO" };
+    // Outside the regular session there is no fractional matching, so the same
+    // amount that buys a fraction during it buys nothing at all -- which is
+    // the session deciding the size, and the reason it is said on the ticket.
+    this.ticket = { ...this.ticket, stage: "form", type: "LO", outsideRth: true };
     this.ticketPrice.set_value("214.07");
     this.ticketAmount.set_value("10");
     this.reviewTicket(cx);

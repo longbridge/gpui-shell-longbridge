@@ -2,6 +2,7 @@ import { View } from "gpui";
 import {
   ANY_TIME,
   RTH_ONLY,
+  allowsFractionalShares,
   sharesForAmount,
   supportsAmountSizing,
   canCancel,
@@ -86,10 +87,33 @@ function runVectors() {
   // Sizing by amount. The wire only ever takes a quantity, so an amount is a
   // second way of arriving at that field -- and the arithmetic rounds down
   // twice, to a whole share and then to a whole lot.
-  check(sharesForAmount(1500, 214.07) === 7, "an amount buys what it covers");
+  check(sharesForAmount(1500, 214.07) === 7, "an amount buys the whole shares it covers");
   check(sharesForAmount(1500, 214.07, 1) === 7, "a lot of one changes nothing");
   check(sharesForAmount(1500, 214.07, 5) === 5, "a lot rounds the share count down");
   check(sharesForAmount(100, 214.07) === 0, "an amount under one share buys none");
+
+  // Where fractional shares match, the budget is not left an odd hair short:
+  // the count is the division to four places, which is the scale Longbridge
+  // settles them at.
+  check(sharesForAmount(1500, 214.07, null, true) === 7.0071, "a fraction spends the amount");
+  check(sharesForAmount(100, 214.07, null, true) === 0.4671, "under a share is still an order");
+  check(sharesForAmount(0.01, 214.07, null, true) === 0, "under the minimum fraction is nothing");
+  check(
+    sharesForAmount(1500, 214.07, 100, true) === 7.0071,
+    "a lot does not bound a fraction -- the two do not both apply",
+  );
+  check(
+    allowsFractionalShares({ symbol: "QQQ.US", outsideRth: RTH_ONLY }),
+    "a US order in the regular session may be fractional",
+  );
+  check(
+    !allowsFractionalShares({ symbol: "QQQ.US", outsideRth: ANY_TIME }),
+    "there is no fractional matching outside the regular session",
+  );
+  check(
+    !allowsFractionalShares({ symbol: "700.HK", outsideRth: null }),
+    "Hong Kong trades in lots, not fractions",
+  );
   check(sharesForAmount(0, 214.07) === 0, "no amount buys nothing");
   check(sharesForAmount(1500, 0) === 0, "a free instrument is not an infinite one");
   check(sharesForAmount(1500, -1) === 0, "a negative price buys nothing");
@@ -104,11 +128,11 @@ function runVectors() {
   });
   const spend = validateTicket(byAmount());
   check(spend.ok, "1500 USD of QQQ at 214.07 is a valid order");
-  check(spend.normalized.quantity === 7, "the amount became a share count");
+  check(spend.normalized.quantity === 7.0071, "the amount became a share count");
   check(spend.normalized.amount === 1500, "the amount the reader typed is kept");
   check(spend.normalized.sizing === "amount", "the ticket remembers how it was sized");
   check(
-    submitOrderBody(spend.normalized, "r").submitted_quantity === "7",
+    submitOrderBody(spend.normalized, "r").submitted_quantity === "7.0071",
     "the wire is sent shares, never the amount",
   );
   check(
@@ -119,8 +143,9 @@ function runVectors() {
   check(validateTicket(byAmount({ amount: "0" })).errors.amount, "zero is not an amount");
   check(validateTicket(byAmount({ amount: "-5" })).errors.amount, "a negative amount is not one");
   check(
-    validateTicket(byAmount({ amount: "10" })).errors.amount === "Not enough for one share.",
-    "an amount under one share says so",
+    validateTicket(byAmount({ amount: "10", outsideRth: true })).errors.amount ===
+      "Not enough for one share.",
+    "an amount under one share says so where fractions do not match",
   );
   check(
     validateTicket(byAmount({ symbol: "700.HK", amount: "1000", price: "320" }), { lotSize: 100 })
@@ -133,7 +158,7 @@ function runVectors() {
   );
   // A quantity typed in the other mode must not leak into this one.
   check(
-    validateTicket(byAmount({ quantity: "999" })).normalized.quantity === 7,
+    validateTicket(byAmount({ quantity: "999" })).normalized.quantity === 7.0071,
     "the amount decides the size, not a stale quantity field",
   );
 
@@ -142,7 +167,7 @@ function runVectors() {
   // assertion.
   const atMarket = validateTicket(byAmount({ type: "MO", price: "" }), { lastPrice: 214.07 });
   check(atMarket.ok, "a market order can be sized by amount");
-  check(atMarket.normalized.quantity === 7, "it sizes against the last trade");
+  check(atMarket.normalized.quantity === 7.0071, "it sizes against the last trade");
   check(atMarket.normalized.sizedAt === 214.07, "it records what it sized against");
   check(
     validateTicket(byAmount({ type: "MO", price: "" })).errors.amount ===

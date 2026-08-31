@@ -943,15 +943,18 @@ fn the_order_ticket_states_what_it_will_send(cx: &mut TestAppContext) {
         rendered.contains("Use shares") && rendered.contains("Amount"),
         "a purchase must offer to be sized by amount:\n{rendered}"
     );
+    // 1500 USD at 214.07 in the regular session, where fractional shares
+    // match: the division to four places rather than the seven whole shares
+    // that would leave the budget an odd hair short.
     assert!(
-        rendered.contains("Buys 7 shares"),
+        rendered.contains("Buys 7.0071 shares"),
         "the form must preview what the amount buys:\n{rendered}"
     );
     // The confirmation shows the sum asked for beside what it actually buys.
     // They differ by the remainder, and showing only the budget would claim
     // the whole of it was spent.
     assert!(
-        rendered.contains("1,500.00 USD") && rendered.contains("1,498.49 USD"),
+        rendered.contains("1,500.00 USD") && rendered.contains("1,500.00 USD"),
         "the confirmation must show the budget and its cost:\n{rendered}"
     );
     // A market order sized by amount has no price of its own, so it names what

@@ -59,6 +59,9 @@ import {
   canReplace,
   cancelOrderBody,
   emptyTicket,
+  ANY_TIME,
+  RTH_ONLY,
+  allowsFractionalShares,
   hasExtendedHours,
   isLimitOrder,
   replaceOrderBody,
@@ -3540,8 +3543,16 @@ export default class LongbridgeApp extends View {
     // The running conversion, shown while the amount is still editable. It
     // goes through the same function the validation uses, so what is previewed
     // here and what is sent cannot drift apart.
+    const fractional = allowsFractionalShares({
+      symbol: ticket.symbol,
+      outsideRth: hasExtendedHours(ticket.symbol)
+        ? ticket.outsideRth
+          ? ANY_TIME
+          : RTH_ONLY
+        : null,
+    });
     const shares = byAmount
-      ? sharesForAmount(Number(this.ticketAmount.value()), reference, ticket.lotSize)
+      ? sharesForAmount(Number(this.ticketAmount.value()), reference, ticket.lotSize, fractional)
       : 0;
     return (
       v_flex()

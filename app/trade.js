@@ -40,6 +40,12 @@ export const TIME_IN_FORCE = Object.freeze([
 export const RTH_ONLY = "RTH_ONLY";
 export const ANY_TIME = "ANY_TIME";
 
+/** The scale Longbridge settles a fractional share at: four decimal places. */
+const FRACTIONAL_SCALE = 10_000;
+
+/** The smallest fraction of a share an order may name. */
+export const MIN_FRACTIONAL_SHARES = 1 / FRACTIONAL_SCALE;
+
 /** @param {unknown} type */
 export function isLimitOrder(type) {
   return String(type ?? "") === "LO";
@@ -132,11 +138,35 @@ export const SIZING = Object.freeze([
  *
  * @param {number} amount @param {number} price @param {number | null} [lotSize]
  */
-export function sharesForAmount(amount, price, lotSize = null) {
+export function sharesForAmount(amount, price, lotSize = null, fractional = false) {
   if (!Number.isFinite(amount) || amount <= 0) return 0;
   if (!Number.isFinite(price) || price <= 0) return 0;
+  if (fractional) {
+    // A fractional order is placed in shares to four places, which is the
+    // scale Longbridge settles them at. Rounding rather than flooring: the
+    // remainder here is a ten-thousandth of a share, and floor would leave a
+    // budget an odd hair short of what it asked for for no reason a reader
+    // could see.
+    const shares = Math.round((amount / price) * FRACTIONAL_SCALE) / FRACTIONAL_SCALE;
+    return shares >= MIN_FRACTIONAL_SHARES ? shares : 0;
+  }
   const lot = Number.isFinite(lotSize) && lotSize !== null && lotSize > 1 ? lotSize : 1;
   return Math.floor(Math.floor(amount / price) / lot) * lot;
+}
+
+/**
+ * Whether this order may be placed in a fraction of a share.
+ *
+ * Fractional shares only match during the regular session -- there is no
+ * fractional matching pre- or post-market -- and only on instruments whose
+ * market has them at all, which of the two this application trades is the US.
+ * Longbridge also gates them per channel, which this client cannot see; an
+ * order that clears these and is refused there comes back with its reason.
+ *
+ * @param {{ symbol: string, outsideRth: string | null }} order
+ */
+export function allowsFractionalShares(order) {
+  return hasExtendedHours(order?.symbol) && order?.outsideRth === RTH_ONLY;
 }
 
 /**
@@ -211,6 +241,8 @@ export function validateTicket(form, context = {}) {
   let amount = null;
   /** What an amount was divided by to reach a share count. */
   let sizedAt = null;
+  /** Whether the share count may be a fraction of one. */
+  let fractional = false;
 
   if (byAmount) {
     // A limit order sizes against the price it names; a market order has none
@@ -227,10 +259,18 @@ export function validateTicket(form, context = {}) {
       errors.amount = limit ? "Enter a price first." : "No recent price to size against.";
     } else {
       sizedAt = reference;
-      quantity = sharesForAmount(amount, reference, lotSize);
+      // The session decides this, and the session is chosen on the same
+      // ticket -- so a reader who switches to pre/post sees the size become
+      // whole, which is the truth about where their order can match.
+      fractional = allowsFractionalShares({
+        symbol,
+        outsideRth: hasExtendedHours(symbol) ? (form?.outsideRth ? ANY_TIME : RTH_ONLY) : null,
+      });
+      quantity = sharesForAmount(amount, reference, lotSize, fractional);
       if (quantity === 0) {
-        errors.amount =
-          lotSize !== null && lotSize > 1
+        errors.amount = fractional
+          ? `Not enough for ${MIN_FRACTIONAL_SHARES} of a share.`
+          : lotSize !== null && lotSize > 1
             ? `Not enough for one lot of ${lotSize}.`
             : "Not enough for one share.";
       }
@@ -239,6 +279,8 @@ export function validateTicket(form, context = {}) {
     quantity = typedNumber(form?.quantity);
     if (quantity === null) errors.quantity = "Enter a quantity.";
     else if (quantity <= 0) errors.quantity = "Quantity must be above zero.";
+    // Typed in shares, a quantity is whole. A fraction is something an amount
+    // works out to, not something anyone means to type.
     else if (!Number.isInteger(quantity)) errors.quantity = "Quantity must be a whole number.";
     // A board lot of one is every quantity, so it is not a rule worth stating.
     else if (lotSize !== null && lotSize > 1 && quantity % lotSize !== 0) {
@@ -247,14 +289,7 @@ export function validateTicket(form, context = {}) {
   }
 
   const available = context.available ?? null;
-  if (
-    side === "Sell" &&
-    available !== null &&
-    quantity !== null &&
-    quantity > 0 &&
-    Number.isInteger(quantity) &&
-    quantity > available
-  ) {
+  if (side === "Sell" && available !== null && quantity !== null && quantity > available) {
     // The same ceiling either way: a sum of money that works out to more
     // shares than are held is the same mistake as typing that many shares.
     errors.form = `This account holds ${available}.`;
@@ -282,6 +317,7 @@ export function validateTicket(form, context = {}) {
           // order was sized against the price already on the confirmation, and
           // repeating it there would be the same number twice.
           sizedAt: byAmount && !limit ? sizedAt : null,
+          fractional,
           timeInForce: String(form?.timeInForce ?? "Day"),
           outsideRth: hasExtendedHours(symbol) ? (form?.outsideRth ? ANY_TIME : RTH_ONLY) : null,
         })
