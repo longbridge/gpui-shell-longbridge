@@ -39,7 +39,7 @@ import {
   DefinitionList,
   EmptyState,
   ExternalLink,
-  FilterField,
+  TextField,
   GlyphButton,
   IconButton,
   Keycap,
@@ -376,7 +376,28 @@ export function popoverSurface(tokens, id, options = {}) {
  * @param {number} [width]
  */
 export function filterInput(tokens, state, width = 180) {
-  return new FilterField().state(state).width(width).build(context(tokens));
+  return new TextField().state(state).width(width).build(context(tokens));
+}
+
+/**
+ * A field whose value is in something: a price in a currency, a size in
+ * shares.
+ *
+ * The unit goes to the field rather than beside it, because it belongs to the
+ * value. Beside it, a reader has to work out whether the word is part of this
+ * control or the label of the next one, and the answer moves with the width of
+ * the column they are in.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {import("gpui-base").InputState} state
+ * @param {{ unit?: string, width?: number }} [options]
+ */
+export function valueField(tokens, state, options = {}) {
+  const { unit = "", width } = options;
+  const field = new TextField().state(state);
+  if (unit) field.suffix(unit);
+  if (width !== undefined) field.width(width);
+  return field.build(context(tokens));
 }
 
 /**
@@ -1493,10 +1514,10 @@ export function segmented(tokens, id, options, value, onChange) {
  * @param {import("gpui-base").Theme} tokens
  * @param {string} caption
  * @param {import("gpui").Element} control
- * @param {{ error?: string, hint?: string, unit?: string, accessory?: import("gpui").Element | null }} [options]
+ * @param {{ error?: string, hint?: string, accessory?: import("gpui").Element | null }} [options]
  */
 export function ticketField(tokens, caption, control, options = {}) {
-  const { error = "", hint = "", unit = "", accessory = null } = options;
+  const { error = "", hint = "", accessory = null } = options;
   return (
     v_flex()
       .gap(style().spacing.xs)
@@ -1510,18 +1531,10 @@ export function ticketField(tokens, caption, control, options = {}) {
           // the sizing switch above the amount, and nothing anywhere else.
           .when(Boolean(accessory), (element) => element.child(accessory)),
       )
-      .child(
-        unit
-          ? // The unit belongs to the value, so it sits against the field rather
-            // than floating in the label.
-            h_flex()
-              .items_center()
-              .gap(style().spacing.xs)
-              .w_full()
-              .child(control)
-              .child(muted(tokens, unit))
-          : control,
-      )
+      // The control, whatever it is. A field whose value is in something
+      // carries that unit itself -- see `valueField` -- rather than having it
+      // hung beside it here.
+      .child(control)
       // An error replaces the hint rather than stacking under it: both are about
       // the same field, and the correction is what matters while it applies.
       .when(Boolean(error), (element) =>

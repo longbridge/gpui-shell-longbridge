@@ -838,10 +838,12 @@ fn the_order_ticket_states_what_it_will_send(cx: &mut TestAppContext) {
         rendered.find("ORDER") < rendered.find("DURATION"),
         "what is traded comes before how long it stands:\n{rendered}"
     );
-    // The unit belongs to the value, not to the label.
+    // The unit belongs to the value, so it is inside the field rather than
+    // hung beside it -- `TextField.suffix`, drawn over the field's own right
+    // edge with the padding to keep the digits clear of it.
     assert!(
-        rendered.contains("text \"USD\""),
-        "a priced field must carry its currency:\n{rendered}"
+        rendered.contains("text \"USD\"") && rendered.contains("text \"shares\""),
+        "a field whose value is in something must carry that unit:\n{rendered}"
     );
     // A US instrument can be traded outside regular hours, so the choice is
     // offered rather than decided silently.

@@ -105,6 +105,7 @@ import {
   kbd,
   errorMessage,
   filterInput,
+  valueField,
   HOLDING_ROW_HEIGHT,
   PANE_INSET,
   WATCHLIST_MIN_WIDTH,
@@ -3430,9 +3431,9 @@ export default class LongbridgeApp extends View {
                 // belongs invites someone to fill it in. The field is replaced
                 // by what the order will actually use.
                 limit
-                  ? filterInput(tokens, this.ticketPrice).flex_1().h(28)
+                  ? valueField(tokens, this.ticketPrice, { unit: ticket.currency }).h(28)
                   : muted(tokens, "At the market price when it fills"),
-                { error: ticket.errors.price, unit: limit ? ticket.currency : "" },
+                { error: ticket.errors.price },
               ),
             )
             .child(
@@ -3440,10 +3441,9 @@ export default class LongbridgeApp extends View {
                 ? ticketField(
                     tokens,
                     "Amount",
-                    filterInput(tokens, this.ticketAmount).flex_1().h(28),
+                    valueField(tokens, this.ticketAmount, { unit: ticket.currency }).h(28),
                     {
                       error: ticket.errors.amount,
-                      unit: ticket.currency,
                       // The share count the amount works out to, under the field
                       // that decides it -- the order is placed in shares, so this
                       // is the number actually being sent.
@@ -3454,14 +3454,9 @@ export default class LongbridgeApp extends View {
                 : ticketField(
                     tokens,
                     "Quantity",
-                    filterInput(tokens, this.ticketQuantity).flex_1().h(28),
+                    valueField(tokens, this.ticketQuantity, { unit: "shares" }).h(28),
                     {
                       error: ticket.errors.quantity,
-                      // Shares, not lots: Hong Kong quantities are still typed
-                      // in shares, they just have to come in whole lots of
-                      // them. Labelling the field in lots would invite someone
-                      // to type 2 and mean 200.
-                      unit: "shares",
                       // What the field has to respect, said before it is typed
                       // into rather than only when it is refused.
                       hint: [
