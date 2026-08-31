@@ -186,8 +186,20 @@ fn the_writable_surface_is_the_watchlist_and_an_account_s_orders() {
         .and_then(|source| source.split("\n  /**").next())
         .expect("confirmTicket method");
     assert!(
-        confirm.contains("await this.reloadOrders(cx)") && !confirm.contains("this.loadOrders("),
+        confirm.contains("await this.settleOrders(cx, before)") && !confirm.contains("this.loadOrders("),
         "the read after a write must be awaited in the task that wrote"
+    );
+    // Longbridge accepts an order before its list reports one, so the first
+    // read after a write does not contain it. The condition waited on is the
+    // list changing -- not a fixed delay, which would be a guess at how long
+    // the other side takes -- and the re-reads are quiet, because flashing
+    // "Loading orders" three times says the page is broken rather than
+    // waiting.
+    assert!(
+        main.contains("ordersFingerprint(this.ordersState.today) !== before")
+            && main.contains("async reloadOrders(cx, quiet = false)")
+            && main.contains("await this.reloadOrders(cx, attempt > 0)"),
+        "a write must wait for the list to report it, quietly"
     );
     // Retained text state is the four list filters, the field that names a
     // security to add, and the three an order is composed in.

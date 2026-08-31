@@ -2,7 +2,7 @@
 // quotes use the documented WebSocket protocol, and no trading API is exposed.
 
 import { View, div, svg } from "gpui";
-import { holdContext } from "./context.js";
+import { context, holdContext } from "./context.js";
 import {
   CalendarState,
   Button,
@@ -1757,6 +1757,63 @@ export default class LongbridgeApp extends View {
   }
 
   /**
+   * How many times a write waits for the list to report it, and how long
+   * between tries.
+   *
+   * Longbridge accepts an order before its list reports one: the write and the
+   * read reach different sides of the same system. So the first read after a
+   * submit usually does not contain what was just submitted, and the page a
+   * reader is sent to shows everything except the thing they just did.
+   */
+  static get ORDER_SETTLE_ATTEMPTS() {
+    return 4;
+  }
+
+  static get ORDER_SETTLE_INTERVAL_MS() {
+    return 600;
+  }
+
+  /**
+   * What the order list currently says, as one string.
+   *
+   * A write changes it in one of three ways -- a row appears, a status
+   * changes, a quantity or price changes -- so comparing this before and after
+   * is one condition covering all three, without the caller having to know
+   * which kind of write it made.
+   *
+   * @param {readonly LongbridgeOrderRow[]} orders
+   */
+  ordersFingerprint(orders) {
+    return orders
+      .map((order) => `${order.orderId}:${order.status}:${order.quantity}:${order.price}`)
+      .join("|");
+  }
+
+  /**
+   * Reads the list back until it reports the write that was just made.
+   *
+   * Waiting a fixed delay would be guessing at how long the other side takes.
+   * Waiting for the list to change is the actual condition, and it stops the
+   * moment it is met -- usually on the second read.
+   *
+   * It gives up after a few tries and leaves the list as it last read it. The
+   * order exists either way; what is uncertain is only when this account's
+   * list will say so, and a page that retried forever would be worse than one
+   * that is briefly a few seconds behind.
+   *
+   * @param {import("gpui").Context} cx @param {string} before the fingerprint before the write
+   */
+  async settleOrders(cx, before) {
+    for (let attempt = 0; attempt < LongbridgeApp.ORDER_SETTLE_ATTEMPTS; attempt += 1) {
+      await this.reloadOrders(cx, attempt > 0);
+      if (this.ordersFingerprint(this.ordersState.today) !== before) return;
+      if (attempt + 1 < LongbridgeApp.ORDER_SETTLE_ATTEMPTS) {
+        await context().sleep(LongbridgeApp.ORDER_SETTLE_INTERVAL_MS);
+      }
+    }
+  }
+
+  /**
    * Reads both order lists, in whatever task is already running.
    *
    * Separate from `loadOrders` because a caller that is *already* inside a
@@ -1773,12 +1830,17 @@ export default class LongbridgeApp extends View {
    *
    * @param {import("gpui").Context} cx
    */
-  async reloadOrders(cx) {
+  async reloadOrders(cx, quiet = false) {
     if (!this.hasStoredTokens) return;
     const generation = (this.ordersGeneration ?? 0) + 1;
     this.ordersGeneration = generation;
-    this.ordersState = { ...this.ordersState, status: "loading", error: "" };
-    this.redraw(cx);
+    // A re-read while waiting for a write to land keeps the list on screen.
+    // Flashing "Loading orders" three times over two seconds would say the
+    // page was broken rather than that it was waiting.
+    if (!quiet) {
+      this.ordersState = { ...this.ordersState, status: "loading", error: "" };
+      this.redraw(cx);
+    }
     try {
       const { today, history } = await this.refreshOrders();
       if (generation !== this.ordersGeneration) return;
@@ -2533,6 +2595,7 @@ export default class LongbridgeApp extends View {
     if (ticket.mode !== "cancel" && !ticket.review) return;
     this.ticket = { ...this.ticket, pending: true, error: "" };
     this.refreshTicket();
+    const before = this.ordersFingerprint(this.ordersState.today);
     cx.spawn(async (cx) => {
       try {
         if (ticket.mode === "submit") {
@@ -2572,8 +2635,9 @@ export default class LongbridgeApp extends View {
         // and reports a failed read on the page that could not be read, which
         // is where a failed read belongs rather than on a ticket that
         // succeeded. Awaited in this task rather than started in a new one --
-        // see `reloadOrders`.
-        await this.reloadOrders(cx);
+        // see `reloadOrders` -- and read until the list reports the write,
+        // because it does not on the first try.
+        await this.settleOrders(cx, before);
       } catch (failure) {
         this.ticket = {
           ...this.ticket,
