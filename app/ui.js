@@ -176,6 +176,7 @@ export function iconAction(tokens, id, hint, asset, onClick) {
   return new IconButton(id)
     .icon(asset)
     .description(hint)
+    .quiet()
     .size("small")
     .onClick(onClick)
     .build(context(tokens));
@@ -188,6 +189,7 @@ export function themeButton(tokens, onClick) {
   return new IconButton("theme-toggle")
     .icon(dark ? "assets/sun.svg" : "assets/moon.svg")
     .description(hint)
+    .quiet()
     .size("small")
     .onClick(onClick)
     .build(context(tokens));
@@ -402,6 +404,7 @@ export function menuTrigger(tokens, id, hint, open = false) {
     .glyph("⋯")
     .description(hint)
     .selected(open)
+    .quiet()
     .size("small")
     .build(context(tokens));
 }
@@ -1472,6 +1475,7 @@ export function sessionAvatar(tokens, id, hint, open = false) {
     .icon("assets/user.svg")
     .description(hint)
     .selected(open)
+    .quiet()
     .size("small")
     .build(context(tokens));
 }
