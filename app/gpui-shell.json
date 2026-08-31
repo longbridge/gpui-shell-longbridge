@@ -1,6 +1,6 @@
 {
-  "id": "com.longbridge.gpui-shell-example",
-  "name": "Longbridge gpui-shell-example",
+  "id": "com.longbridge.desktop-lite",
+  "name": "Longbridge Lite",
   "version": "0.4.0",
   "shell-version": "0.1.0",
   "entry": "main.js",
@@ -9,10 +9,7 @@
       "read": ["${pluginDir}"]
     },
     "network": {
-      "hosts": [
-        "openapi.longbridge.com",
-        "openapi-quote.longbridge.com"
-      ]
+      "hosts": ["openapi.longbridge.com", "openapi-quote.longbridge.com"]
     },
     "storage": true,
     "clipboard": {

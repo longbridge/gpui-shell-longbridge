@@ -814,6 +814,35 @@ fn the_order_ticket_states_what_it_will_send(cx: &mut TestAppContext) {
         rendered.contains("This account holds 25."),
         "an oversized sale must be refused locally:\n{rendered}"
     );
+    // Sizing by amount. 1500 USD at 214.07 is 7 shares -- rounded down, since
+    // a share is whole -- and the ticket previews that while the amount is
+    // still editable rather than only at the confirmation.
+    assert!(
+        rendered.contains("Size by") && rendered.contains("Amount"),
+        "the ticket must offer to size by amount:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("\u{2248} 7 shares"),
+        "the form must preview what the amount buys:\n{rendered}"
+    );
+    // The confirmation shows the sum asked for beside what it actually buys.
+    // They differ by the remainder, and showing only the budget would claim
+    // the whole of it was spent.
+    assert!(
+        rendered.contains("1,500.00 USD") && rendered.contains("1,498.49 USD"),
+        "the confirmation must show the budget and its cost:\n{rendered}"
+    );
+    // A market order sized by amount has no price of its own, so it names what
+    // it divided by -- a share count nobody can check is an assertion.
+    assert!(
+        rendered.contains("Sized at") && rendered.contains("214.07 USD last"),
+        "a market order sized by amount must name its basis:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("Not enough for one share."),
+        "an amount below one share must be refused locally:\n{rendered}"
+    );
+
     // A Hong Kong ticket states its board lot up front, and refuses a part lot
     // locally -- the exchange would refuse it anyway, a round trip later.
     assert!(

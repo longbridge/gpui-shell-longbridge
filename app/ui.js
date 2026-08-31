@@ -1881,32 +1881,44 @@ export function orderConfirmSummary(tokens, summary) {
           ? numeric(tokens, value).text_color(tone).font_weight(600)
           : numeric(tokens, value).font_weight(600),
       );
-  return v_flex()
-    .id("order-confirm-summary")
-    .gap(tokens.spacing.xs)
-    .p(tokens.spacing.sm)
-    .rounded(tokens.radius.sm)
-    .bg(tokens.background)
-    .child(
-      h_flex()
-        .items_baseline()
-        .gap(tokens.spacing.xs)
-        .child(
-          label(tokens, summary.side.toUpperCase(), 13)
-            .font_weight(700)
-            .text_color(tradeSideTone(tokens, summary.side)),
-        )
-        .child(label(tokens, summary.quantity, 13).font_weight(700))
-        .child(label(tokens, summary.symbol, 13).font_weight(600))
-        .when(Boolean(summary.name), (element) => element.child(muted(tokens, summary.name))),
-    )
-    .child(rule(tokens))
-    .child(line("Type", summary.type))
-    .child(line("Price", summary.price))
-    .child(line("Valid", summary.timeInForce))
-    .when(Boolean(summary.sessions), (element) => element.child(line("Sessions", summary.sessions)))
-    .child(rule(tokens))
-    .child(line("Estimated", summary.amount));
+  return (
+    v_flex()
+      .id("order-confirm-summary")
+      .gap(tokens.spacing.xs)
+      .p(tokens.spacing.sm)
+      .rounded(tokens.radius.sm)
+      .bg(tokens.background)
+      .child(
+        h_flex()
+          .items_baseline()
+          .gap(tokens.spacing.xs)
+          .child(
+            label(tokens, summary.side.toUpperCase(), 13)
+              .font_weight(700)
+              .text_color(tradeSideTone(tokens, summary.side)),
+          )
+          .child(label(tokens, summary.quantity, 13).font_weight(700))
+          .child(label(tokens, summary.symbol, 13).font_weight(600))
+          .when(Boolean(summary.name), (element) => element.child(muted(tokens, summary.name))),
+      )
+      .child(rule(tokens))
+      .child(line("Type", summary.type))
+      .child(line("Price", summary.price))
+      // What an amount was divided by to reach the share count above. Only a
+      // market order shows it: a limit order was sized against the price on the
+      // line before, and repeating it would be the same number twice.
+      .when(Boolean(summary.sizedAt), (element) => element.child(line("Sized at", summary.sizedAt)))
+      .child(line("Valid", summary.timeInForce))
+      .when(Boolean(summary.sessions), (element) =>
+        element.child(line("Sessions", summary.sessions)),
+      )
+      .child(rule(tokens))
+      // The sum the reader typed, above what it actually buys. Shares are whole
+      // and lots are whole, so the two differ by the remainder -- showing only
+      // the budget would claim all of it was spent.
+      .when(Boolean(summary.budget), (element) => element.child(line("Amount", summary.budget)))
+      .child(line(summary.amountLabel, summary.amount))
+  );
 }
 
 export function deviceCodeBox(tokens, code) {

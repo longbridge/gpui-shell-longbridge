@@ -2,6 +2,7 @@ import { View } from "gpui";
 import {
   ANY_TIME,
   RTH_ONLY,
+  sharesForAmount,
   canCancel,
   canReplace,
   cancelOrderBody,
@@ -79,6 +80,83 @@ function runVectors() {
     validateTicket(hk({ quantity: "0" }), { lotSize: 100 }).errors.quantity ===
       "Quantity must be above zero.",
     "zero is refused as zero, not as a part lot",
+  );
+
+  // Sizing by amount. The wire only ever takes a quantity, so an amount is a
+  // second way of arriving at that field -- and the arithmetic rounds down
+  // twice, to a whole share and then to a whole lot.
+  check(sharesForAmount(1500, 214.07) === 7, "an amount buys what it covers");
+  check(sharesForAmount(1500, 214.07, 1) === 7, "a lot of one changes nothing");
+  check(sharesForAmount(1500, 214.07, 5) === 5, "a lot rounds the share count down");
+  check(sharesForAmount(100, 214.07) === 0, "an amount under one share buys none");
+  check(sharesForAmount(0, 214.07) === 0, "no amount buys nothing");
+  check(sharesForAmount(1500, 0) === 0, "a free instrument is not an infinite one");
+  check(sharesForAmount(1500, -1) === 0, "a negative price buys nothing");
+  check(sharesForAmount(1500, 500) === 3, "an exact multiple keeps every share");
+
+  const byAmount = (overrides = {}) => ({
+    ...emptyTicket("QQQ.US", "Buy"),
+    sizing: "amount",
+    price: "214.07",
+    amount: "1500",
+    ...overrides,
+  });
+  const spend = validateTicket(byAmount());
+  check(spend.ok, "1500 USD of QQQ at 214.07 is a valid order");
+  check(spend.normalized.quantity === 7, "the amount became a share count");
+  check(spend.normalized.amount === 1500, "the amount the reader typed is kept");
+  check(spend.normalized.sizing === "amount", "the ticket remembers how it was sized");
+  check(
+    submitOrderBody(spend.normalized, "r").submitted_quantity === "7",
+    "the wire is sent shares, never the amount",
+  );
+  check(
+    !("amount" in submitOrderBody(spend.normalized, "r")),
+    "no amount key reaches an endpoint that has none",
+  );
+  check(validateTicket(byAmount({ amount: "" })).errors.amount, "an empty amount is not zero");
+  check(validateTicket(byAmount({ amount: "0" })).errors.amount, "zero is not an amount");
+  check(validateTicket(byAmount({ amount: "-5" })).errors.amount, "a negative amount is not one");
+  check(
+    validateTicket(byAmount({ amount: "10" })).errors.amount === "Not enough for one share.",
+    "an amount under one share says so",
+  );
+  check(
+    validateTicket(byAmount({ symbol: "700.HK", amount: "1000", price: "320" }), { lotSize: 100 })
+      .errors.amount === "Not enough for one lot of 100.",
+    "an amount under one board lot names the lot",
+  );
+  check(
+    validateTicket(byAmount({ price: "" })).errors.amount === "Enter a price first.",
+    "a limit order sized by amount needs the price it divides by",
+  );
+  // A quantity typed in the other mode must not leak into this one.
+  check(
+    validateTicket(byAmount({ quantity: "999" })).normalized.quantity === 7,
+    "the amount decides the size, not a stale quantity field",
+  );
+
+  // A market order has no price of its own, so it sizes against the last trade
+  // -- and records what it used, because a share count nobody can check is an
+  // assertion.
+  const atMarket = validateTicket(byAmount({ type: "MO", price: "" }), { lastPrice: 214.07 });
+  check(atMarket.ok, "a market order can be sized by amount");
+  check(atMarket.normalized.quantity === 7, "it sizes against the last trade");
+  check(atMarket.normalized.sizedAt === 214.07, "it records what it sized against");
+  check(
+    validateTicket(byAmount({ type: "MO", price: "" })).errors.amount ===
+      "No recent price to size against.",
+    "without a recent price there is nothing to divide by",
+  );
+  check(
+    spend.normalized.sizedAt === null,
+    "a limit order does not repeat its own price as a basis",
+  );
+
+  // Selling by amount is bounded by the position, exactly as selling by count.
+  check(
+    validateTicket(byAmount({ side: "Sell", amount: "1500" }), { available: 3 }).errors.form,
+    "a sale sized by amount still cannot exceed the position",
   );
 
   // Selling more than is held.

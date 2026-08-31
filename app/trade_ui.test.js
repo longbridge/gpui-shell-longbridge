@@ -37,6 +37,14 @@ export default class TradeUiProbe extends LongbridgeApp {
         currency: "USD",
         last: "188.500",
       },
+      {
+        symbol: "QQQ.US",
+        code: "QQQ",
+        name: "Invesco QQQ Trust",
+        market: "US",
+        currency: "USD",
+        last: "214.070",
+      },
     ];
     this.instruments = [];
     this.holdings = [
@@ -109,6 +117,39 @@ export default class TradeUiProbe extends LongbridgeApp {
     this.reviewTicket(cx);
     const refused = this.ticketDialog(tokens);
 
+    // Sizing by amount: 1500 USD of QQQ. The form previews the share count
+    // while the amount is still editable, and the confirmation shows the sum
+    // asked for beside what it actually buys -- they differ by the remainder.
+    this.ticket = {
+      ...this.blankTicket(),
+      open: true,
+      side: "Buy",
+      symbol: "QQQ.US",
+      name: "Invesco QQQ Trust",
+      currency: "USD",
+      sizing: "amount",
+    };
+    this.ticketPrice.set_value("214.07");
+    this.ticketAmount.set_value("1500");
+    const amountForm = this.ticketDialog(tokens);
+    this.reviewTicket(cx);
+    const amountReview = this.ticketDialog(tokens);
+
+    // The same budget at market: no price of its own, so it is sized against
+    // the last trade and says so.
+    this.ticket = { ...this.ticket, stage: "form", type: "MO" };
+    this.ticketPrice.set_value("");
+    this.ticketAmount.set_value("1500");
+    this.reviewTicket(cx);
+    const marketAmountReview = this.ticketDialog(tokens);
+
+    // Too little to buy a share is refused in the form.
+    this.ticket = { ...this.ticket, stage: "form", type: "LO" };
+    this.ticketPrice.set_value("214.07");
+    this.ticketAmount.set_value("10");
+    this.reviewTicket(cx);
+    const tooLittle = this.ticketDialog(tokens);
+
     // Hong Kong trades in board lots: the form states the lot, and a part lot
     // is refused before anything is sent.
     this.ticket = {
@@ -162,6 +203,10 @@ export default class TradeUiProbe extends LongbridgeApp {
       .child(review)
       .child(marketReview)
       .child(refused)
+      .child(amountForm)
+      .child(amountReview)
+      .child(marketAmountReview)
+      .child(tooLittle)
       .child(lotForm)
       .child(partLot)
       .child(withdraw)

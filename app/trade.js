@@ -81,16 +81,48 @@ function typedNumber(value) {
 }
 
 /**
+ * How the size of an order was said.
+ *
+ * Longbridge takes a quantity and nothing else, so an amount is not a second
+ * kind of order -- it is a second way of arriving at the same field. What
+ * differs is which number the reader typed and therefore which one has to be
+ * checked, reported back, and shown on the confirmation.
+ */
+export const SIZING = Object.freeze([
+  Object.freeze({ value: "shares", label: "Shares" }),
+  Object.freeze({ value: "amount", label: "Amount" }),
+]);
+
+/**
  * @typedef {{
  *   symbol: string,
  *   side: string,
  *   type: string,
  *   price: string,
  *   quantity: string,
+ *   sizing: string,
+ *   amount: string,
  *   timeInForce: string,
  *   outsideRth: boolean,
  * }} TicketForm
  */
+
+/**
+ * The shares a sum of money buys at a price, as a quantity that can be sent.
+ *
+ * Rounded **down**, twice: to a whole share, and then to a whole lot. An
+ * order is placed in shares, so the fractional remainder is not a thing that
+ * can be bought -- and rounding up would spend more than was asked for, which
+ * is the one direction a number typed as a budget must not move.
+ *
+ * @param {number} amount @param {number} price @param {number | null} [lotSize]
+ */
+export function sharesForAmount(amount, price, lotSize = null) {
+  if (!Number.isFinite(amount) || amount <= 0) return 0;
+  if (!Number.isFinite(price) || price <= 0) return 0;
+  const lot = Number.isFinite(lotSize) && lotSize !== null && lotSize > 1 ? lotSize : 1;
+  return Math.floor(Math.floor(amount / price) / lot) * lot;
+}
 
 /**
  * A ticket with nothing filled in, for the instrument and direction chosen.
@@ -104,6 +136,8 @@ export function emptyTicket(symbol, side) {
     type: "LO",
     price: "",
     quantity: "",
+    sizing: "shares",
+    amount: "",
     timeInForce: "Day",
     outsideRth: false,
   });
@@ -128,16 +162,21 @@ export function emptyTicket(symbol, side) {
  * and the refusal comes back with its reason, which is better than this
  * module inventing a rule it cannot see.
  *
+ * `lastPrice` is what an amount is sized against when the order names no
+ * price of its own -- a market order. It is an estimate and is treated as
+ * one; see `ticketSummary`.
+ *
  * @param {TicketForm} form
- * @param {{ available?: number | null, lotSize?: number | null }} [context]
+ * @param {{ available?: number | null, lotSize?: number | null, lastPrice?: number | null }} [context]
  */
 export function validateTicket(form, context = {}) {
-  /** @type {{ price?: string, quantity?: string, form?: string }} */
+  /** @type {{ price?: string, quantity?: string, amount?: string, form?: string }} */
   const errors = {};
   const symbol = String(form?.symbol ?? "").trim();
   const side = normalizeSide(form?.side);
   const type = String(form?.type ?? "");
   const limit = isLimitOrder(type);
+  const byAmount = String(form?.sizing ?? "shares") === "amount";
 
   const price = typedNumber(form?.price);
   if (limit) {
@@ -146,13 +185,46 @@ export function validateTicket(form, context = {}) {
   }
 
   const lotSize = context.lotSize ?? null;
-  const quantity = typedNumber(form?.quantity);
-  if (quantity === null) errors.quantity = "Enter a quantity.";
-  else if (quantity <= 0) errors.quantity = "Quantity must be above zero.";
-  else if (!Number.isInteger(quantity)) errors.quantity = "Quantity must be a whole number.";
-  // A board lot of one is every quantity, so it is not a rule worth stating.
-  else if (lotSize !== null && lotSize > 1 && quantity % lotSize !== 0) {
-    errors.quantity = `${symbol.split(".")[1] === "HK" ? "Board lot" : "Lot"} is ${lotSize}.`;
+  const lotWord = symbol.split(".")[1] === "HK" ? "Board lot" : "Lot";
+  /** @type {number | null} */
+  let quantity = null;
+  /** @type {number | null} */
+  let amount = null;
+  /** What an amount was divided by to reach a share count. */
+  let sizedAt = null;
+
+  if (byAmount) {
+    // A limit order sizes against the price it names; a market order has none
+    // to name, so it sizes against the last trade -- which is an estimate, and
+    // is the reason the confirmation says so rather than showing the sum back
+    // as though it were settled.
+    const reference = limit ? price : (context.lastPrice ?? null);
+    amount = typedNumber(form?.amount);
+    if (amount === null) errors.amount = "Enter an amount.";
+    else if (amount <= 0) errors.amount = "Amount must be above zero.";
+    else if (reference === null || reference <= 0) {
+      // Not an error about the amount so much as about what it could be
+      // divided by, which is why it names the missing half.
+      errors.amount = limit ? "Enter a price first." : "No recent price to size against.";
+    } else {
+      sizedAt = reference;
+      quantity = sharesForAmount(amount, reference, lotSize);
+      if (quantity === 0) {
+        errors.amount =
+          lotSize !== null && lotSize > 1
+            ? `Not enough for one lot of ${lotSize}.`
+            : "Not enough for one share.";
+      }
+    }
+  } else {
+    quantity = typedNumber(form?.quantity);
+    if (quantity === null) errors.quantity = "Enter a quantity.";
+    else if (quantity <= 0) errors.quantity = "Quantity must be above zero.";
+    else if (!Number.isInteger(quantity)) errors.quantity = "Quantity must be a whole number.";
+    // A board lot of one is every quantity, so it is not a rule worth stating.
+    else if (lotSize !== null && lotSize > 1 && quantity % lotSize !== 0) {
+      errors.quantity = `${lotWord} is ${lotSize}.`;
+    }
   }
 
   const available = context.available ?? null;
@@ -160,9 +232,12 @@ export function validateTicket(form, context = {}) {
     side === "Sell" &&
     available !== null &&
     quantity !== null &&
+    quantity > 0 &&
     Number.isInteger(quantity) &&
     quantity > available
   ) {
+    // The same ceiling either way: a sum of money that works out to more
+    // shares than are held is the same mistake as typing that many shares.
     errors.form = `This account holds ${available}.`;
   }
 
@@ -179,6 +254,15 @@ export function validateTicket(form, context = {}) {
           type,
           price: limit ? price : null,
           quantity: /** @type {number} */ (quantity),
+          // How the size was arrived at. The wire only ever sees `quantity`;
+          // this is carried so the confirmation can show the reader the number
+          // they actually typed alongside the one being sent.
+          sizing: byAmount ? "amount" : "shares",
+          amount: byAmount ? amount : null,
+          // Only interesting when the order names no price of its own: a limit
+          // order was sized against the price already on the confirmation, and
+          // repeating it there would be the same number twice.
+          sizedAt: byAmount && !limit ? sizedAt : null,
           timeInForce: String(form?.timeInForce ?? "Day"),
           outsideRth: hasExtendedHours(symbol) ? (form?.outsideRth ? ANY_TIME : RTH_ONLY) : null,
         })
@@ -328,6 +412,8 @@ export function ticketSummary(order, instrument = {}) {
       : order.outsideRth === ANY_TIME
         ? "Pre- and post-market"
         : "Regular hours only";
+  const byAmount = order.sizing === "amount";
+  const withCurrency = (value) => `${formatAmount(value)}${currency ? ` ${currency}` : ""}`;
   return Object.freeze({
     side: order.side,
     sideKind: order.side.toLowerCase(),
@@ -339,6 +425,23 @@ export function ticketSummary(order, instrument = {}) {
       order.price === null ? "Market price" : `${order.price}${currency ? ` ${currency}` : ""}`,
     timeInForce,
     sessions,
-    amount: amount === null ? "--" : `${formatAmount(amount)}${currency ? ` ${currency}` : ""}`,
+    // What was asked for, when that was a sum of money rather than a count.
+    // The order is still placed in shares -- rounded down to a whole share and
+    // a whole lot -- so the budget and what it actually buys are both shown.
+    // They differ by the remainder, and hiding that would make the ticket
+    // claim the whole sum was spent.
+    budget: byAmount && order.amount !== null ? withCurrency(order.amount) : "",
+    // A market order sized by amount reached its share count through the last
+    // trade. Showing that number is what makes the count checkable rather than
+    // something the ticket simply asserts.
+    sizedAt:
+      order.sizedAt === null || order.sizedAt === undefined
+        ? ""
+        : `${order.sizedAt}${currency ? ` ${currency}` : ""} last`,
+    // A market order's estimate is a reading of the last trade, not a price
+    // the order carries. Naming it as an estimate is the difference between
+    // reporting and promising.
+    amountLabel: order.price === null ? "Estimated" : byAmount ? "Cost" : "Estimated",
+    amount: amount === null ? "--" : withCurrency(amount),
   });
 }

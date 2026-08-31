@@ -6,7 +6,7 @@ use gpui::{
 };
 use gpui_shell::{AppAssets, HostModule, HostValue, ShellRuntime, plugin::PluginManifest};
 
-const PLUGIN_ID: &str = "com.longbridge.gpui-shell-example";
+const PLUGIN_ID: &str = "com.longbridge.desktop-lite";
 
 /// How tall the application draws its own title bar, and where the macOS
 /// traffic lights have to sit inside it.

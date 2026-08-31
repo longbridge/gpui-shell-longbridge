@@ -53,6 +53,7 @@ import { depthRatio, mergeTrades, normalizeDepth, validDepthLevel } from "./mark
 import { HISTORY_WINDOW_DAYS, historyRange, normalizeOrders } from "./orders.js";
 import {
   ORDER_TYPES,
+  SIZING,
   TIME_IN_FORCE,
   canCancel,
   canReplace,
@@ -61,6 +62,7 @@ import {
   hasExtendedHours,
   isLimitOrder,
   replaceOrderBody,
+  sharesForAmount,
   submitOrderBody,
   ticketSummary,
   validateTicket,
@@ -1204,6 +1206,13 @@ export default class LongbridgeApp extends View {
     this.ticketQuantity.set_step(1);
     this.ticketQuantity.set_min(0);
     this.ticketQuantity.on("change", (_event, _cx) => this.clearTicketFieldError("quantity"));
+    // Sizing by amount is a second field rather than a reinterpretation of the
+    // first: the two carry different numbers, and switching between them must
+    // not silently turn 1500 dollars into 1500 shares.
+    this.ticketAmount = InputState.new({ placeholder: "0.00" });
+    this.ticketAmount.set_step(100);
+    this.ticketAmount.set_min(0);
+    this.ticketAmount.on("change", (_event, _cx) => this.clearTicketFieldError("amount"));
     // The one text state that is not a filter: what a filter narrows is
     // already here, and this names something that is not yet.
     this.symbolInput = InputState.new({ placeholder: "AAPL.US" });
@@ -1895,6 +1904,8 @@ export default class LongbridgeApp extends View {
       requestId: "",
       /** @type {number | null} The board lot, once it is known. */
       lotSize: null,
+      /** @type {"shares" | "amount"} Which number the reader is typing. */
+      sizing: "shares",
       type: "LO",
       timeInForce: "Day",
       outsideRth: false,
@@ -1903,6 +1914,21 @@ export default class LongbridgeApp extends View {
       pending: false,
       error: "",
     };
+  }
+
+  /**
+   * The last traded price, as a number, or `null`.
+   *
+   * What an amount is divided by when the order names no price of its own. It
+   * is a reading rather than a promise, which is why a market order sized this
+   * way says on its confirmation what it was sized against.
+   *
+   * @param {string} symbol
+   */
+  lastTradedPrice(symbol) {
+    const quote = this.quotes.find((entry) => entry.symbol === symbol);
+    const value = Number(String(quote?.last ?? "").trim());
+    return Number.isFinite(value) && value > 0 ? value : null;
   }
 
   /**
@@ -1988,6 +2014,7 @@ export default class LongbridgeApp extends View {
     };
     this.ticketPrice.set_value(last && last !== "--" ? last : "");
     this.ticketQuantity.set_value("");
+    this.ticketAmount.set_value("");
     this.presentTicket();
     this.loadLotSize(symbol, cx);
     this.redraw(cx);
@@ -2100,6 +2127,9 @@ export default class LongbridgeApp extends View {
     };
     this.ticketPrice.set_value(order.price === "--" ? "" : order.price);
     this.ticketQuantity.set_value(order.quantity === "--" ? "" : order.quantity);
+    // A replacement edits an order that already exists, and what it holds is a
+    // share count -- so it opens on the field that number belongs in.
+    this.ticketAmount.set_value("");
     this.presentTicket();
     this.loadLotSize(order.symbol, cx);
     this.redraw(cx);
@@ -2202,7 +2232,7 @@ export default class LongbridgeApp extends View {
    * value that no longer exists. It is cleared on change rather than
    * re-validated: the answer is not finished being typed.
    *
-   * @param {"price" | "quantity"} field
+   * @param {"price" | "quantity" | "amount"} field
    */
   clearTicketFieldError(field) {
     if (!this.ticket.open || !this.ticket.errors[field]) return;
@@ -2220,14 +2250,26 @@ export default class LongbridgeApp extends View {
       type: this.ticket.type,
       price: this.ticketPrice.value(),
       quantity: this.ticketQuantity.value(),
+      sizing: this.ticket.sizing,
+      amount: this.ticketAmount.value(),
       timeInForce: this.ticket.timeInForce,
       outsideRth: this.ticket.outsideRth,
     };
   }
 
-  /** @param {Partial<{ type: string, timeInForce: string, outsideRth: boolean }>} change */
+  /**
+   * Changes one of the ticket's choices.
+   *
+   * Field errors are dropped with it. Every one of these choices changes which
+   * fields exist or what they mean -- switching to a market order takes the
+   * price away, switching to an amount takes the quantity away -- so a
+   * complaint about the previous arrangement is about a field the reader is no
+   * longer looking at.
+   *
+   * @param {Partial<{ type: string, timeInForce: string, outsideRth: boolean, sizing: string }>} change
+   */
   updateTicket(change) {
-    this.ticket = { ...this.ticket, ...change, error: "" };
+    this.ticket = { ...this.ticket, ...change, errors: {}, error: "" };
     this.refreshTicket();
   }
 
@@ -2245,6 +2287,7 @@ export default class LongbridgeApp extends View {
     const result = validateTicket(this.ticketForm(), {
       available: this.ticket.side === "Sell" ? this.sellableQuantity(this.ticket.symbol) : null,
       lotSize: this.ticket.lotSize,
+      lastPrice: this.lastTradedPrice(this.ticket.symbol),
     });
     if (!result.ok) {
       this.ticket = { ...this.ticket, errors: result.errors, error: "" };
@@ -3318,7 +3361,18 @@ export default class LongbridgeApp extends View {
   ticketFormBody(tokens) {
     const ticket = this.ticket;
     const limit = isLimitOrder(ticket.type);
+    const byAmount = ticket.sizing === "amount";
     const sellable = ticket.side === "Sell" ? this.sellableQuantity(ticket.symbol) : null;
+    // The running conversion, shown while the amount is still being typed. It
+    // goes through the same function the validation uses, so what is previewed
+    // here and what is sent cannot drift apart.
+    const shares = byAmount
+      ? sharesForAmount(
+          Number(this.ticketAmount.value()),
+          limit ? Number(this.ticketPrice.value()) : (this.lastTradedPrice(ticket.symbol) ?? 0),
+          ticket.lotSize,
+        )
+      : 0;
     return (
       v_flex()
         .gap(tokens.spacing.sm)
@@ -3347,9 +3401,34 @@ export default class LongbridgeApp extends View {
         .child(
           ticketField(
             tokens,
-            "Quantity",
-            filterInput(tokens, this.ticketQuantity, 180).h(26),
-            ticket.errors.quantity,
+            "Size by",
+            segmented(tokens, "ticket-sizing", SIZING, ticket.sizing, (value) =>
+              this.updateTicket({ sizing: value }),
+            ).w(180),
+          ),
+        )
+        .child(
+          byAmount
+            ? ticketField(
+                tokens,
+                "Amount",
+                filterInput(tokens, this.ticketAmount, 180).h(26),
+                ticket.errors.amount,
+              )
+            : ticketField(
+                tokens,
+                "Quantity",
+                filterInput(tokens, this.ticketQuantity, 180).h(26),
+                ticket.errors.quantity,
+              ),
+        )
+        // What the amount works out to, while it is still editable. The order
+        // is placed in shares, so this is the number actually being sent.
+        .when(byAmount && shares > 0, (element) =>
+          element.child(
+            h_flex()
+              .justify_end()
+              .child(muted(tokens, `≈ ${shares} ${shares === 1 ? "share" : "shares"}`)),
           ),
         )
         // What the quantity field has to respect, said before it is typed into
