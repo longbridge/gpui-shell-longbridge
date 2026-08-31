@@ -89,6 +89,28 @@ fn load_test_view(
     (root, view)
 }
 
+/// The modifier this application binds its commands to.
+///
+/// The keymap picks it from `process.platform`: `cmd` on macOS, `ctrl`
+/// everywhere else. A test that hard-codes one of them passes on the platform
+/// it was written on and, on the other, presses a chord nothing is bound to --
+/// which looks like a broken keymap and is a broken test.
+const PRIMARY_MODIFIER: &str = if cfg!(target_os = "macos") { "cmd" } else { "ctrl" };
+
+/// The same modifier as `chordLabel` writes it for a reader.
+const PRIMARY_MODIFIER_LABEL: &str = if cfg!(target_os = "macos") { "Cmd" } else { "Ctrl" };
+
+/// The same modifier as a held key rather than as part of a chord. GPUI names
+/// the macOS one `platform`, and the workspace reads whichever its own
+/// platform means.
+fn primary_modifiers() -> gpui::Modifiers {
+    if cfg!(target_os = "macos") {
+        gpui::Modifiers { platform: true, ..Default::default() }
+    } else {
+        gpui::Modifiers { control: true, ..Default::default() }
+    }
+}
+
 #[gpui::test]
 fn omarchy_application_follows_system_appearance(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
@@ -97,6 +119,17 @@ fn omarchy_application_follows_system_appearance(cx: &mut TestAppContext) {
     let main_path = fixture.root.join("main.js");
     let main = fs::read_to_string(&main_path)
         .expect("copied main.js")
+        // What this test is about is an Omarchy desktop, and the application
+        // asks `process.platform` three times before it will read one: the two
+        // theme readers and the sync itself all return early off it. Pinning
+        // the import is one replacement covering all three -- otherwise the
+        // whole path short-circuits on any host that is not Linux and the test
+        // passes its first assertion, fails its second, and exercises none of
+        // the behaviour it names.
+        .replace(
+            "import { exit, platform } from \"process\";",
+            "import { exit } from \"process\";\nconst platform = \"linux\";",
+        )
         .replace(
             "this.syncSystemTheme(cx);",
             "this.statusBarVisible = true;\n      this.syncSystemTheme(cx);",
@@ -2196,7 +2229,7 @@ fn a_bound_chord_reaches_the_action_that_switches_page(cx: &mut TestAppContext) 
         "the application must inherit the platform font without an override:\n{before}"
     );
 
-    context.simulate_keystrokes("ctrl-k");
+    context.simulate_keystrokes(&format!("{PRIMARY_MODIFIER}-k"));
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));
     let shortcuts = tree(&mut context);
@@ -2205,7 +2238,7 @@ fn a_bound_chord_reaches_the_action_that_switches_page(cx: &mut TestAppContext) 
             && shortcuts.contains(r#":key_context[Str("ShortcutHelp")]"#)
             && shortcuts.contains(":track_focus[")
             && shortcuts.contains("Keyboard shortcuts")
-            && shortcuts.contains("Ctrl + K")
+            && shortcuts.contains(&format!("{PRIMARY_MODIFIER_LABEL} + K"))
             && shortcuts.contains("Arrow Up / K")
             && shortcuts.contains("Home / G G")
             && !shortcuts.contains("Shift + F10"),
@@ -2220,7 +2253,7 @@ fn a_bound_chord_reaches_the_action_that_switches_page(cx: &mut TestAppContext) 
         "escape must close keyboard help"
     );
 
-    context.simulate_keystrokes("ctrl-2");
+    context.simulate_keystrokes(&format!("{PRIMARY_MODIFIER}-2"));
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));
     let after = tree(&mut context);
@@ -2232,7 +2265,7 @@ fn a_bound_chord_reaches_the_action_that_switches_page(cx: &mut TestAppContext) 
     // a key press, so the footer's readout stays empty for it. An unbound one
     // reaches `on_key_down`, and arrives already unparsed as the whole chord —
     // spelled `cmd` on every platform, this one included.
-    assert!(!after.contains("text \"ctrl-2\""), "{after}");
+    assert!(!after.contains(&format!("text \"{PRIMARY_MODIFIER}-2\"")), "{after}");
 
     context.simulate_keystrokes("end enter");
     context.run_until_parked();
@@ -2243,7 +2276,7 @@ fn a_bound_chord_reaches_the_action_that_switches_page(cx: &mut TestAppContext) 
         "Holdings must support last-row selection and keyboard activation:\n{holding_opened}"
     );
 
-    context.simulate_keystrokes("ctrl-3");
+    context.simulate_keystrokes(&format!("{PRIMARY_MODIFIER}-3"));
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));
     let orders = tree(&mut context);
@@ -2294,7 +2327,7 @@ fn a_bound_chord_reaches_the_action_that_switches_page(cx: &mut TestAppContext) 
         "an unbound chord must reach on_key_down:\n{typed}"
     );
 
-    context.simulate_keystrokes("ctrl-1");
+    context.simulate_keystrokes(&format!("{PRIMARY_MODIFIER}-1"));
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));
     let back = tree(&mut context);
@@ -2382,10 +2415,7 @@ fn modifier_hold_reveals_workspace_tab_shortcuts_until_release(cx: &mut TestAppC
     let before = tree(&mut context);
     assert!(!before.contains("page-watchlist-shortcut"), "{before}");
 
-    context.simulate_modifiers_change(gpui::Modifiers {
-        control: true,
-        ..Default::default()
-    });
+    context.simulate_modifiers_change(primary_modifiers());
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));
     let held = tree(&mut context);
@@ -2393,7 +2423,7 @@ fn modifier_hold_reveals_workspace_tab_shortcuts_until_release(cx: &mut TestAppC
         assert!(
             held.contains(&format!("page-{page}-shortcut"))
                 && held.contains(&format!("text \"{number}\"")),
-            "holding Ctrl must reveal {number} on {page}:\n{held}"
+            "holding the platform modifier must reveal {number} on {page}:\n{held}"
         );
     }
 

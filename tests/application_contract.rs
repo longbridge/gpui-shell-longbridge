@@ -57,7 +57,16 @@ fn host_reads_only_the_materialized_omarchy_palette() {
             .join("main.rs"),
     )
     .expect("host main.rs");
-    assert!(host.contains(".local/state/omarchy/current/theme/colors.toml"));
+    // The path is assembled once and joined twice now -- `colors.toml` for the
+    // palette, `shell.toml` for the density, type scale and rounding a theme
+    // also carries -- so the whole string no longer appears anywhere. What the
+    // host must still do is root both at the materialized theme directory and
+    // read nothing else.
+    assert!(
+        host.contains(".local/state/omarchy/current/theme")
+            && host.contains("colors.toml")
+            && host.contains("shell.toml")
+    );
     assert!(host.contains("HostModule::new(\"omarchy-theme\")"));
     assert!(
         host.contains("gpui-shell/plugins"),
@@ -79,7 +88,7 @@ fn debug_builds_watch_application_sources() {
 }
 
 #[test]
-fn the_only_change_this_application_makes_is_to_the_watchlist() {
+fn the_writable_surface_is_the_watchlist_and_an_account_s_orders() {
     let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
     let ui = fs::read_to_string(app_dir().join("ui.js")).expect("ui.js");
     let market = fs::read_to_string(app_dir().join("market.js")).expect("market.js");
@@ -120,75 +129,62 @@ fn the_only_change_this_application_makes_is_to_the_watchlist() {
         main.contains("priceChart") && main.contains("allocationChart"),
         "read-only market and allocation charts must remain wired"
     );
-    // The application changes exactly one thing about an account: which
-    // securities it watches. That is one path, one method, and the HTTP
-    // boundary is where it is enforced rather than remembered -- a second
-    // writable path would have to be added here before it could be added
-    // there.
+    // The application changes two things about an account: which securities it
+    // watches, and its orders. What makes that a boundary rather than a habit
+    // is that both are a *list* -- path and method together -- and the list is
+    // in one place. A third path, or a fourth method on one of these two, has
+    // to be added here before it can be added there.
+    // The whole map, not two lines of it: a third entry has to change this
+    // assertion, which is the point of writing the boundary down.
     assert!(
-        http.contains(r#"const EDITABLE_PATHS = new Set(["/v1/watchlist/groups"]);"#)
-            && http.contains("assertEditablePath(path);")
-            && http.matches(r#"method: "#).count() == 1
-            && http.contains(r#"method: "PUT","#),
-        "the only write this boundary can make is to the watchlist's own groups"
+        http.contains(
+            r#"const WRITABLE = new Map([
+  ["/v1/watchlist/groups", new Set(["PUT"])],
+  [TRADE_ORDER_PATH, new Set(["POST", "PUT", "DELETE"])],
+]);"#
+        ),
+        "the writable surface is a list of two paths and the methods each allows"
     );
-    // Everything else stays a reading. An order is something an account
-    // already placed; nothing here submits, amends or withdraws one.
-    for forbidden in [
-        "Place order",
-        "Cancel order",
-        "/v1/trade/order/submit",
-        "/v1/trade/order/replace",
-        "/v1/trade/order/withdraw",
-    ] {
-        assert!(
-            !main.contains(forbidden)
-                && !ui.contains(forbidden)
-                && !market.contains(forbidden)
-                && !orders.contains(forbidden),
-            "forbidden trading surface {forbidden}"
-        );
-    }
-    // The two side captions exist in exactly one place, `orders.js`, and only
-    // as the reading of an order the account already placed. Nothing that
-    // draws a control may name them: a caption in `ui.js` or `main.js` would
-    // be a button that trades, which this application does not have.
-    for forbidden in ["Buy", "Sell"] {
-        assert!(
-            !main.contains(&format!("\"{forbidden}\""))
-                && !ui.contains(&format!("\"{forbidden}\""))
-                && !market.contains(&format!("\"{forbidden}\"")),
-            "forbidden trading control label {forbidden}"
-        );
-    }
+    assert!(
+        http.contains("assertWritable(method, path);")
+            && http.matches("assertWritable(").count() == 2,
+        "every write goes through the one guard, and the guard takes the method"
+    );
+    // An order is composed here and nowhere else. `orders.js` reads one back;
+    // `trade.js` decides what may be sent, and does it without a socket, which
+    // is what makes that decision checkable.
     assert!(
         !orders.contains("fetch(") && !orders.contains("POST"),
         "the order reader normalizes an answer and never sends one"
     );
-    for forbidden in [
-        "trade::buy",
-        "trade::sell",
-        "trade::place-order",
-        "trade::cancel-order",
-    ] {
-        assert!(
-            !main.contains(forbidden)
-                && !ui.contains(forbidden)
-                && !market.contains(forbidden)
-                && !orders.contains(forbidden),
-            "forbidden trading action {forbidden}"
-        );
-    }
-    // Retained text state is the four list filters, which narrow what is
-    // already on screen, and the one field that names a security to add.
-    // Nothing composes an order.
+    let trade = fs::read_to_string(app_dir().join("trade.js")).expect("trade.js");
     assert!(
-        main.matches("InputState.new({ placeholder:").count() == 5
+        !trade.contains("fetch(") && !trade.contains("await "),
+        "what may be sent must be decidable without reaching the network"
+    );
+    assert!(
+        trade.contains("export function validateTicket")
+            && trade.contains("export function submitOrderBody")
+            && trade.contains("export function replaceOrderBody")
+            && trade.contains("export function cancelOrderBody"),
+        "the three things that can be done to an order are shaped in one module"
+    );
+    // A submit carries an idempotency key. Without one a retried request after
+    // a lost response places a second order, which is the failure this whole
+    // surface exists to avoid.
+    assert!(
+        trade.contains("client_request_id") && main.contains("randomUUID()"),
+        "a submitted order must carry an idempotency key"
+    );
+    // Retained text state is the four list filters, the field that names a
+    // security to add, and the three an order is composed in.
+    assert!(
+        main.matches("InputState.new({ placeholder:").count() == 8
             && main.contains("Filter watchlist")
             && main.contains("Filter holdings")
             && main.matches("Filter orders").count() == 2
             && main.contains(r#"placeholder: "AAPL.US""#),
-        "the only retained text state may be the list filters and the symbol to add"
+        "the only retained text state may be the list filters, the symbol to add, and the ticket"
     );
     assert!(
         market.contains("export function filterRows"),
@@ -201,10 +197,14 @@ fn the_only_change_this_application_makes_is_to_the_watchlist() {
         main.contains("Table.new(`${id}-table`)") && main.contains(".row_count(rows.length + 1)"),
         "both lists must be virtualized tables that announce their full size"
     );
+    // Still table parts, now the library's: a row and a header row announce
+    // themselves as such, and a cell that stacks two readings is one cell
+    // rather than two. What matters is the semantics reaching the tree, not
+    // which module the constructor came from.
     assert!(
-        ui.contains("TableHead.new(")
-            && ui.contains("TableCell.new(")
-            && ui.contains("TableRow.new("),
+        ui.contains("new TableHeaderRow(")
+            && ui.contains("new TableRow(")
+            && ui.contains("new CellStack("),
         "rows and headers must be table parts rather than styled flex containers"
     );
     assert!(main.contains("const tokens = cx.theme()"));
@@ -253,11 +253,22 @@ fn the_only_change_this_application_makes_is_to_the_watchlist() {
             && main.contains("Popover.new(\"allocation-help\")"),
         "both Popover scenarios must stay wired"
     );
+    // The surface says it is a menu; its rows say they are menu items by being
+    // the library's `MenuItem`, which carries that role. The role reaching the
+    // tree is asserted where a tree exists -- `workspace_ui.test.js` -- rather
+    // than by looking for the string here.
     assert!(
-        ui.contains(".role(\"menu_item\")") && ui.contains(".role(\"menu\")"),
+        ui.contains("new MenuItem(") && ui.contains(".role(\"menu\")"),
         "the popup menu must announce itself as a menu"
     );
-    assert!(ui.contains(".tooltip("), "pointer hints must stay wired");
+    // The hint is now what an icon control is *given* -- `description(hint)` --
+    // and the library turns it into both the tooltip and the accessible name.
+    // Asserting the caller passes one keeps the hint mandatory without pinning
+    // how the library draws it.
+    assert!(
+        ui.contains(".description(hint)"),
+        "pointer hints must stay wired"
+    );
 
     // Authorization opens the page itself. The address is only known once the
     // device code exists, and it is not one anyone reads.
@@ -359,8 +370,11 @@ fn minimum_watchlist_keeps_symbol_name_last_and_change() {
 
     assert!(
         main.contains("const COMPACT_WATCHLIST_WIDTH = 440")
-            && ui.contains(".w(compact ? \"60%\" : \"31%\")")
-            && ui.contains(".w(compact ? \"40%\" : \"19%\")")
+            // The width is a cell's own property now rather than a style call
+            // on it, but the two shares are the same: the instrument keeps the
+            // majority and the reading keeps the rest.
+            && ui.contains("{ width: compact ? \"60%\" : \"31%\" }")
+            && ui.contains("width: compact ? \"40%\" : \"19%\"")
             && ui.contains("quote.symbol")
             && ui.contains("quote.name")
             && ui.contains("quote.last")
@@ -582,15 +596,18 @@ fn details_column_prioritizes_quote_chart_then_market() {
 fn plain_panel_title_has_one_title_and_one_content_region() {
     let ui = fs::read_to_string(app_dir().join("ui.js")).expect("ui.js");
 
+    // A Panel is the library's now, so the regions are named rather than
+    // assembled: a title, an optional note beside it, an optional accessory,
+    // and one content region. The content still arrives with its own border
+    // dropped -- the Panel draws the edge, and two would be two.
     assert!(
         ui.contains(
             "export function workspacePanel(tokens, title, content, accessory = null, options = {})",
-        ) && ui.contains(".child(label(tokens, title, 13).font_weight(700))")
-            && ui.contains(".when(Boolean(note), (element) => element.child(muted(tokens, note).truncate()))")
-            && ui.contains(".when(accessory, (element) => element.child(accessory))")
-            && ui.contains(
-                ".child(grow ? content.border(0).flex_1().min_h(0) : content.border(0).flex_none())",
-            )
+        ) && ui.contains(".title(title)")
+            && ui.contains("if (note) built.note(note);")
+            && ui.contains("if (accessory) built.accessory(accessory);")
+            && ui.contains(".content(content.border(0))")
+            && ui.contains(".grow(grow)")
             && !ui.contains("drag_tab("),
         "plain Panel must contain one title region and one content region"
     );
