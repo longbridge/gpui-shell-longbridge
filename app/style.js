@@ -29,6 +29,10 @@ import { applyOmarchyStyle, style as omarchyStyle } from "omarchy-ui";
 export const TERMINAL_SHELL = `
 [font]
 base-size = 12
+# A column head is 11px here rather than the scale's 10: a market terminal
+# reads its headings as often as its figures, and the step below body is far
+# enough down without going two.
+caption = 11
 
 [spacing]
 xxs = 2

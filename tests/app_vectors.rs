@@ -884,26 +884,25 @@ fn watchlist_row_renders_scannable_market_columns(cx: &mut TestAppContext) {
 
     // And focus must not paint like open. A Popover hands the keyboard back to
     // its trigger when it dismisses, so a focused-but-closed trigger that
-    // filled the way an open one does would leave a closed menu looking open.
+    // said the same thing an open one says would leave a closed menu looking
+    // open.
     //
-    // The Omarchy kit separates them by weight rather than by drawing no fill
-    // at all: focus is the light fill every control takes, selected is the
-    // heavier one. Both resolve to the same hue in a probe, so the alpha is
-    // what this reads -- and the alpha is exactly what carries the difference.
-    let fill = |style: &str| {
-        style
-            .split_once(".bg[Str(\"")
-            .map(|(_, rest)| rest[..rest.find('"').expect("colour ends")].to_owned())
-    };
+    // The two are told apart by which chrome they take: focus draws the ring,
+    // open draws the selection. Asserted as the ring rather than as a colour,
+    // for the reason the selection assertions above give -- a probe has no
+    // palette, so every token here resolves to the same value and comparing
+    // two of them proves nothing.
     let focus = closed
         .split(":focus(")
         .nth(1)
         .expect("closed trigger has a focus style");
-    let focus = &focus[..focus.find(')').expect("focus style ends")];
-    assert_ne!(
-        fill(focus),
-        fill(open),
-        "a focused closed trigger must not paint like an open one: {focus}"
+    assert!(
+        focus.contains(".border_color["),
+        "focus has to draw the ring: {focus}"
+    );
+    assert!(
+        open.contains(":focus("),
+        "an open trigger keeps a focus style of its own:\n{open}"
     );
 }
 
