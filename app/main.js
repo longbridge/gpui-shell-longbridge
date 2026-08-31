@@ -105,6 +105,7 @@ import {
   kbd,
   errorMessage,
   filterInput,
+  intervalTabs,
   valueField,
   HOLDING_ROW_HEIGHT,
   PANE_INSET,
@@ -4554,32 +4555,18 @@ export default class LongbridgeApp extends View {
           ),
         );
     }
-    return Tabs.new("chart-mode-tabs")
-      .axis("horizontal")
-      .accessibility_label("Chart interval")
-      .flex_none()
-      .min_w(0)
-      .child(
-        h_flex()
-          .flex_none()
-          .children(
-            chartModes.map(([id, caption]) => {
-              const selected = mode === id;
-              return Tab.new(`chart-mode-${id}`)
-                .selected(selected)
-                .on_click((_event, cx) => this.setChartMode(id, cx))
-                .flex_none()
-                .h(22)
-                .px(tokens.spacing.xs)
-                .text_size(11)
-                .border_b(2)
-                .border_color(selected ? tokens.primary : tokens.background)
-                .bg(tokens.background)
-                .text_color(selected ? tokens.foreground : tokens.muted_foreground)
-                .child(caption);
-            }),
-          ),
-      );
+    // The library's underline shape. What was here was the same thing written
+    // by hand, and written slightly differently from the workspace's own run
+    // of tabs a few hundred lines up -- which is the reason a component for it
+    // exists.
+    return intervalTabs(
+      tokens,
+      "chart-mode",
+      chartModes.map(([id, caption]) => ({ value: id, label: caption })),
+      mode,
+      (value, cx) => this.setChartMode(value, cx),
+      "Chart interval",
+    );
   }
 
   /** One market-reading scroll: Order Book then Time & Sales. */

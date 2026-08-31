@@ -56,6 +56,7 @@ import {
   Surface,
   TableHeaderRow,
   TableRow,
+  Tabs,
   Toolbar,
   tableHeaderHeight,
 } from "omarchy-ui";
@@ -1490,25 +1491,39 @@ export function orderDetail(tokens, order, actions = {}) {
  * @param {(next: string, cx: import("gpui").Context) => void} onChange
  */
 export function segmented(tokens, id, options, value, onChange, tabIndex = 0) {
-  return h_flex()
-    .id(id)
-    .gap(style().spacing.xxs)
-    .children(
-      options.map((option, index) =>
-        action(
-          tokens,
-          `${id}-${option.value}`,
-          option.label,
-          (_event, cx) => onChange(option.value, cx),
-          { selected: option.value === value },
-        )
-          .flex_1()
-          // Every choice is its own tab stop. A segmented control that took one
-          // stop and then needed arrow keys would need those arrow keys
-          // written, and nothing here writes them.
-          .when(tabIndex > 0, (element) => element.tab_index(tabIndex + index)),
-      ),
-    );
+  const tabs = new Tabs(id)
+    .segmented()
+    .items(options.map((option) => ({ value: option.value, label: option.label })))
+    .value(value)
+    .onChange(onChange);
+  if (tabIndex > 0) tabs.tabIndex(tabIndex);
+  return tabs.build(context(tokens));
+}
+
+/**
+ * A run of intervals, or of anything else a panel is currently showing one of.
+ *
+ * The underline shape: these are places to go rather than a field's worth of
+ * answer, so they sit on the surface they belong to and the current one is
+ * marked beneath. The library reserves that underline on every tab and colours
+ * one, which is what keeps the row from moving by its own width when the
+ * choice changes.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {string} id
+ * @param {readonly { value: string, label: string }[]} options
+ * @param {string} value
+ * @param {(next: string, cx: import("gpui").Context) => void} onChange
+ * @param {string} [label] what this run is choosing, for a screen reader
+ */
+export function intervalTabs(tokens, id, options, value, onChange, label = "") {
+  const tabs = new Tabs(id)
+    .items(options.map((option) => ({ value: option.value, label: option.label })))
+    .value(value)
+    .onChange(onChange)
+    .size("xsmall");
+  if (label) tabs.accessibilityLabel(label);
+  return tabs.build(context(tokens));
 }
 
 /**

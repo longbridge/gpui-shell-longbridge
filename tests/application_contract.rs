@@ -401,12 +401,18 @@ fn responsive_breakpoints_use_the_same_gap_and_min_width_math_as_the_panels() {
 fn minimum_chart_keeps_a_real_plot_below_compact_interval_tabs() {
     let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
 
+    // The interval run is `intervalTabs` now, which is the library's underline
+    // shape. What this file used to assert -- the centring, the type size, the
+    // 2px rule under the current one -- is the component's, and asserted where
+    // the component lives; a run of tabs that reserves its underline on every
+    // tab and colours one is exactly what it was written to guarantee. What is
+    // still this application's is that the Chart Panel has a run of intervals
+    // at all, and a plot with room to be one under it.
+    let ui = fs::read_to_string(app_dir().join("ui.js")).expect("ui.js");
     assert!(
-        main.contains("Tabs.new(\"chart-mode-tabs\")")
-            && main.contains("Tab.new(`chart-mode-${id}`)")
-            && main.contains(".justify_center()")
-            && main.contains(".text_size(11)")
-            && main.contains(".border_b(2)")
+        main.contains("intervalTabs(")
+            && main.contains("\"Chart interval\"")
+            && ui.contains("export function intervalTabs(")
             && main.contains(".id(\"price-chart-wheel\")")
             && main.contains(".min_h(244)")
             && main.contains(".child(this.priceChart)"),

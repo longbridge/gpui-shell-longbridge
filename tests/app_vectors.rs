@@ -1233,7 +1233,9 @@ fn authenticated_workspace_materializes_a_scrollable_watchlist(cx: &mut TestAppC
             && rendered.contains(r#":id[Str("quote-details-panel")]"#)
             && rendered.contains(r#":id[Str("chart-panel")]"#)
             && rendered.contains(r#":id[Str("market-detail-panel")]"#)
-            && rendered.contains("Tabs \"chart-mode-tabs\"")
+            // The interval run is the library's `Tabs` now; the id is the
+            // caller's and the component appends each choice's value to it.
+            && rendered.contains("Tabs \"chart-mode\"")
             && !rendered.contains("dock_area"),
         "the responsive page must materialize four plain Panels in priority order: {rendered}"
     );
