@@ -201,13 +201,10 @@ fn the_writable_surface_is_the_watchlist_and_an_account_s_orders() {
             && trade_stream.contains("TRADE_COMMAND.PUSH_NOTIFICATION"),
         "orders must be learned from the gateway's own topic"
     );
-    // The transport is the shell's module, not a browser global. This runtime
-    // has neither `WebSocket` nor `TextDecoder`, and reaching for either is a
-    // ReferenceError on the connect path rather than a missing feature.
+    // The transport is the shell's module, not a browser global.
     assert!(
-        trade_stream.contains(r#"import { WebSocket } from "websocket""#)
-            && !trade_stream.contains("TextDecoder"),
-        "the push channel may only use what this runtime actually has"
+        trade_stream.contains(r#"import { WebSocket } from "websocket""#),
+        "the push channel's transport is the shell's, not a global"
     );
     assert!(
         main.contains("this.startTradeStream(token, generation, cx)")
@@ -903,5 +900,66 @@ fn release_build_resolves_packaged_application_resources() {
     assert!(
         override_position < development_position,
         "the source checkout may only be the final development fallback"
+    );
+}
+
+/// The shell is not a browser, and reaching for a name it does not have is a
+/// `ReferenceError` rather than a feature that quietly does nothing.
+///
+/// Three of these shipped in one afternoon. `TextDecoder` was caught before it
+/// ran; `WebSocket` unwound the whole connect path and put "WebSocket is not
+/// defined" over a window whose only problem was a missing import; `setTimeout`
+/// turned every reconnect into a reconnect that also failed. Each was found by
+/// running the application and reading a warning, which is one at a time and
+/// only for the paths that happened to be taken.
+///
+/// So the class is named here rather than its members being fixed one by one.
+/// The shell offers each of these under a name of its own -- `websocket` for
+/// the transport, `cx.timer` for delays, `decodeUtf8` in `protocol.js` for
+/// bytes -- and a module that wants one imports it.
+#[test]
+fn the_application_uses_only_names_this_runtime_has() {
+    const ABSENT: [&str; 6] = [
+        "setTimeout",
+        "setInterval",
+        "clearTimeout",
+        "clearInterval",
+        "TextDecoder",
+        "TextEncoder",
+    ];
+    let mut offences = Vec::new();
+    for entry in fs::read_dir(app_dir()).expect("application directory") {
+        let path = entry.expect("application entry").path();
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_owned();
+        // Test probes drive the modules they exercise with stand-ins of their
+        // own, and a stand-in is allowed to be whatever the module will accept.
+        if !name.ends_with(".js") || name.ends_with(".test.js") {
+            continue;
+        }
+        let source = fs::read_to_string(&path).expect("application module");
+        for absent in ABSENT {
+            // A mention in prose is how a module explains why it does not use
+            // one. What must not appear is a call.
+            if source.contains(&format!("{absent}(")) {
+                offences.push(format!("{name} calls {absent}"));
+            }
+        }
+        // `WebSocket` is a module here. Named in prose is how these modules
+        // describe the protocol they speak; what must not appear without the
+        // import is a use of the global that is not there.
+        let uses_transport = source.contains("?? WebSocket")
+            || source.contains("new WebSocket")
+            || source.contains("WebSocket.connect");
+        if uses_transport && !source.contains(r#"from "websocket""#) {
+            offences.push(format!("{name} uses WebSocket without importing it"));
+        }
+    }
+    assert!(
+        offences.is_empty(),
+        "the shell has none of these; import the shell's own: {offences:?}"
     );
 }

@@ -28,6 +28,7 @@ import {
   encodeHeartbeat,
   encodeTradeSubscribeRequest,
 } from "./protocol.js";
+import { context } from "./context.js";
 import { API_LANGUAGE, socketOtp } from "./http.js";
 
 export const TRADE_WS_URL = "wss://openapi-trade.longbridge.com/v2?version=1&codec=1&platform=9";
@@ -103,13 +104,11 @@ export function createTradeStream(options) {
   if (!transport || typeof transport.connect !== "function") {
     throw new TypeError("WebSocket.connect must be available");
   }
+  // The shell's own timers. There is no `setTimeout` here, and a default that
+  // reaches for one turns every reconnect into a reconnect that also fails.
   const timers = options.timers ?? {
-    after: (delay, callback) => setTimeout(callback, delay),
-    every: (delay, callback) => setInterval(callback, delay),
-    cancel: (handle) => {
-      clearTimeout(handle);
-      clearInterval(handle);
-    },
+    after: (delay, callback) => context().timer.after(delay, callback),
+    every: (delay, callback) => context().timer.every(delay, callback),
   };
   const cancel = (handle) => {
     if (handle === null || handle === undefined) return;
