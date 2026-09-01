@@ -41,7 +41,8 @@ export const RTH_ONLY = "RTH_ONLY";
 export const ANY_TIME = "ANY_TIME";
 
 /** The scale Longbridge settles a fractional share at: four decimal places. */
-const FRACTIONAL_SCALE = 10_000;
+const FRACTIONAL_PLACES = 4;
+const FRACTIONAL_SCALE = 10 ** FRACTIONAL_PLACES;
 
 /** The smallest fraction of a share an order may name. */
 export const MIN_FRACTIONAL_SHARES = 1 / FRACTIONAL_SCALE;
@@ -244,6 +245,15 @@ export function validateTicket(form, context = {}) {
   /** Whether the share count may be a fraction of one. */
   let fractional = false;
 
+  // Asked once, for both ways of sizing. Whether a fraction of a share can
+  // match is a fact about the order -- its market and its session -- and not
+  // about how the reader chose to express the size, so a quantity typed in
+  // shares is held to exactly the rule an amount is worked out under.
+  fractional = allowsFractionalShares({
+    symbol,
+    outsideRth: hasExtendedHours(symbol) ? (form?.outsideRth ? ANY_TIME : RTH_ONLY) : null,
+  });
+
   if (byAmount) {
     // A limit order sizes against the price it names; a market order has none
     // to name, so it sizes against the last trade -- which is an estimate, and
@@ -259,13 +269,6 @@ export function validateTicket(form, context = {}) {
       errors.amount = limit ? "Enter a price first." : "No recent price to size against.";
     } else {
       sizedAt = reference;
-      // The session decides this, and the session is chosen on the same
-      // ticket -- so a reader who switches to pre/post sees the size become
-      // whole, which is the truth about where their order can match.
-      fractional = allowsFractionalShares({
-        symbol,
-        outsideRth: hasExtendedHours(symbol) ? (form?.outsideRth ? ANY_TIME : RTH_ONLY) : null,
-      });
       quantity = sharesForAmount(amount, reference, lotSize, fractional);
       if (quantity === 0) {
         errors.amount = fractional
@@ -279,11 +282,36 @@ export function validateTicket(form, context = {}) {
     quantity = typedNumber(form?.quantity);
     if (quantity === null) errors.quantity = "Enter a quantity.";
     else if (quantity <= 0) errors.quantity = "Quantity must be above zero.";
-    // Typed in shares, a quantity is whole. A fraction is something an amount
-    // works out to, not something anyone means to type.
-    else if (!Number.isInteger(quantity)) errors.quantity = "Quantity must be a whole number.";
+    // A fraction is not something only an amount can arrive at. This account
+    // holds orders placed in fractions, and `Modify` fills this field with the
+    // order's own quantity -- so a whole-number rule here refused the reader
+    // their own order back, with a message that read as a fact about the
+    // market and was a fact about this form.
+    //
+    // Where a fraction genuinely cannot match, the rule is the truth and
+    // stays: outside the regular session, and off the US market, there is no
+    // fractional matching to place one into.
+    else if (fractional) {
+      // Four places, which is the scale Longbridge settles a fraction at.
+      // Beyond it the exchange would round the order to something other than
+      // what the reader typed, and saying so first is better than finding out
+      // from the fill.
+      const scaled = quantity * FRACTIONAL_SCALE;
+      // A tolerance, because a decimal typed as text and multiplied by ten
+      // thousand does not land exactly on an integer in binary floating point:
+      // 1.8571 scales to 18570.999999999998, which is the number being typed
+      // and not a fifth decimal place.
+      if (Math.abs(scaled - Math.round(scaled)) > 1e-6) {
+        errors.quantity = `Quantity is settled to ${FRACTIONAL_PLACES} decimal places.`;
+      }
+    } else if (!Number.isInteger(quantity)) {
+      errors.quantity = hasExtendedHours(symbol)
+        ? "Fractional shares only trade in the regular session."
+        : "Quantity must be a whole number.";
+    }
     // A board lot of one is every quantity, so it is not a rule worth stating.
-    else if (lotSize !== null && lotSize > 1 && quantity % lotSize !== 0) {
+    // Not asked of a fraction: a market that trades in lots has no fractions.
+    else if (!fractional && lotSize !== null && lotSize > 1 && quantity % lotSize !== 0) {
       errors.quantity = `${lotWord} is ${lotSize}.`;
     }
   }
