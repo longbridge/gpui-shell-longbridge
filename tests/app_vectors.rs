@@ -55,6 +55,18 @@ fn copy_tree(source: &Path, destination: &Path) {
     fs::create_dir_all(destination).expect("create application fixture directory");
     for entry in fs::read_dir(source).expect("read application fixture source") {
         let entry = entry.expect("application fixture entry");
+        // Resolved dependencies are the host's to materialize, not this
+        // fixture's to carry. The shell links a script dependency into
+        // `app/node_modules` when it loads one, so as soon as the application
+        // has been run once there is a link to a directory sitting in the tree
+        // these fixtures copy -- which `fs::copy` refuses, being neither a
+        // directory to recurse into nor a regular file. Copying what it points
+        // at instead puts a real directory where the host expects to place its
+        // own link, so the fixture is left without one and the host fills it
+        // in exactly as it does for the application itself.
+        if entry.file_name() == "node_modules" {
+            continue;
+        }
         let target = destination.join(entry.file_name());
         if entry
             .file_type()
