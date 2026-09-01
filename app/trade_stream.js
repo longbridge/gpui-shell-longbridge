@@ -35,7 +35,17 @@ import { API_LANGUAGE, socketOtp } from "./http.js";
 export const TRADE_WS_URL = "wss://openapi-trade.longbridge.com/v2?version=1&codec=1&platform=9";
 
 const DEFAULT_TIMEOUT_MILLIS = 10_000;
-const DEFAULT_HEARTBEAT_MILLIS = 30_000;
+// Ten seconds, not the thirty the gateway's own request timeout suggests.
+// This socket sends nothing between orders, and the gateway closes a
+// connection that has sent it nothing: measured against the live host, an idle
+// one is reset after ten seconds before authentication and about thirty after
+// it. Its own pings arrive once a minute, so the transport's automatic pongs
+// are far too sparse to hold it open. At thirty seconds the first heartbeat
+// came due a fraction of a second after the deadline had already passed -- the
+// subscribe round trip is all it takes to lose that race -- so the channel
+// reconnected every thirty seconds for the life of the session and never
+// managed to send one.
+const DEFAULT_HEARTBEAT_MILLIS = 10_000;
 const DEFAULT_RETRY_INITIAL_MILLIS = 1_000;
 const DEFAULT_RETRY_MAX_MILLIS = 30_000;
 

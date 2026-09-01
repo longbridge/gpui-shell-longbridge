@@ -266,6 +266,29 @@ async function runVectors() {
   );
   check(stream.isConnected(), "and says so when asked");
 
+  // The heartbeat is the only thing holding this socket open, so it has to
+  // land well inside the gateway's patience. Measured against the live host:
+  // an idle connection is reset after ten seconds before authentication and
+  // about thirty after it, and the gateway's own pings arrive once a minute --
+  // far too rarely for the transport's automatic pongs to cover the gap. At a
+  // thirty-second interval the first heartbeat was due a fraction of a second
+  // after the gateway had already given up, so the channel reconnected on a
+  // thirty-second cycle forever and never sent one at all.
+  const beat = timers.intervals.at(-1);
+  check(beat && !beat.cancelled, "a connected stream schedules a heartbeat");
+  check(
+    beat.delay <= 15_000,
+    `the first heartbeat is due well inside the gateway's deadline: ${beat.delay}ms`,
+  );
+  const beforeBeat = transport.sockets[0].writes.length;
+  beat.callback();
+  await settle();
+  const beaten = transport.sockets[0].writes.slice(beforeBeat);
+  check(
+    beaten.length === 1 && beaten[0].command === TRADE_COMMAND.HEARTBEAT,
+    `and sends one when it fires: ${beaten.map((packet) => packet.command).join(",")}`,
+  );
+
   // The order arrives because the gateway sent it, not because it was asked
   // for. This is the whole point of the channel.
   transport.sockets[0].deliver(
