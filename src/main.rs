@@ -85,6 +85,52 @@ fn main() {
 
             let runtime = ShellRuntime::new(cx).expect("failed to start gpui-shell runtime");
             if std::env::var_os("LONGBRIDGE_PROFILE").is_some() {
+                // What the shell's own counters cannot see.
+                //
+                // `script_render_time` and `materialize_time` below measure the
+                // runtime's share of a frame; neither is the frame. A window
+                // that draws in 8 ms holds 120 FPS and one that draws in 9 ms
+                // does not, and the difference between those two lives mostly
+                // in GPUI's layout and paint over the description rather than
+                // in the runtime that produced it. So the frame itself is
+                // reported here, against the 8.33 ms a 120 FPS budget allows.
+                //
+                // `invalidations` is the other half of the reading: it counts
+                // how many notifies were coalesced into one drawn frame, so a
+                // number well above one says the window is being asked to
+                // redraw faster than it can, which no amount of frame budget
+                // fixes.
+                gpui::set_trace_enabled(true);
+                cx.spawn(async move |cx| {
+                    let mut collector = gpui::FrameTimingCollector::new();
+                    loop {
+                        cx.background_executor().timer(Duration::from_secs(1)).await;
+                        let mut draws: Vec<f64> = Vec::new();
+                        let mut invalidations: u64 = 0;
+                        for event in collector.collect_unseen() {
+                            if let gpui::FrameEvent::Draw(timing) = event {
+                                draws.push(timing.draw_duration().as_secs_f64() * 1000.0);
+                                invalidations += timing.invalidations;
+                            }
+                        }
+                        if draws.is_empty() {
+                            eprintln!("frame-profile frames=0 (nothing drawn this second)");
+                            continue;
+                        }
+                        draws.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                        let n = draws.len();
+                        let mean = draws.iter().sum::<f64>() / n as f64;
+                        let p95 = draws[((n as f64 * 0.95) as usize).min(n - 1)];
+                        let over = draws.iter().filter(|d| **d > 8.33).count();
+                        eprintln!(
+                            "frame-profile frames={n} mean_draw={mean:.2}ms median_draw={:.2}ms p95_draw={p95:.2}ms max_draw={:.2}ms over_8.33ms={over} inv_per_frame={:.2}",
+                            draws[n / 2],
+                            draws[n - 1],
+                            invalidations as f64 / n as f64,
+                        );
+                    }
+                })
+                .detach();
                 let measured = Rc::clone(&runtime);
                 cx.spawn(async move |cx| {
                     let mut previous = measured.read_metrics();
