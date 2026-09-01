@@ -95,6 +95,7 @@ export default class OrdersUiProbe extends LongbridgeApp {
     this.clock = null;
     this.ordersState = {
       status: "ready",
+      loaded: true,
       today: normalizeOrders({ data: { orders: TODAY } }),
       history: normalizeOrders({ data: { orders: HISTORY } }),
       error: "",

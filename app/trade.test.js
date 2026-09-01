@@ -43,8 +43,32 @@ function runVectors() {
     validateTicket(ticket({ quantity: "-5" })).errors.quantity,
     "a negative quantity is not one",
   );
-  check(validateTicket(ticket({ quantity: "1.5" })).errors.quantity, "shares are whole");
   check(validateTicket(ticket({ quantity: "abc" })).errors.quantity, "a word is not a quantity");
+
+  // Fractional quantities, typed. Longbridge settles a US order to four
+  // decimal places during the regular session, and this account holds orders
+  // that were placed that way -- so refusing a fraction refused the reader
+  // their own order back, which is what `Modify` fills the field with.
+  check(validateTicket(ticket({ quantity: "1.8571" })).ok, "a fraction of a share may be typed");
+  check(
+    validateTicket(ticket({ quantity: "1.8571" })).normalized.quantity === 1.8571,
+    "and reaches the wire as the fraction it is",
+  );
+  check(
+    validateTicket(ticket({ quantity: "1.23456" })).errors.quantity,
+    "but not past the four places Longbridge settles at",
+  );
+  // Where a fraction cannot match, the whole-number rule is the truth about
+  // the order rather than a house style: there is no fractional matching
+  // outside the regular session, and none at all off the US market.
+  check(
+    validateTicket(ticket({ quantity: "1.5", outsideRth: true })).errors.quantity,
+    "a fraction cannot match pre- or post-market",
+  );
+  check(
+    validateTicket(ticket({ symbol: "700.HK", quantity: "1.5" })).errors.quantity,
+    "nor on a market that has no fractional shares at all",
+  );
 
   // Price, and the type that has none.
   check(validateTicket(ticket({ price: "" })).errors.price, "a limit order needs its price");

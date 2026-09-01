@@ -14,7 +14,8 @@
         "border": "#cecdc3", "input": "#cecdc3", "ring": "#1a4f8c"
       },
       "spacing": { "xxs": 2, "xs": 4, "sm": 8, "md": 12, "lg": 14, "xl": 18, "xxl": 24 },
-      "radius": { "none": 0, "sm": 2, "md": 2, "lg": 2, "xl": 2, "full": 9999 }
+      "radius": { "none": 0, "sm": 2, "md": 2, "lg": 2, "xl": 2, "full": 9999 },
+      "typography": { "md": { "size": 12, "line_height": 16 } }
     }
   },
   "dark": {
@@ -32,7 +33,8 @@
         "border": "#414868", "input": "#414868", "ring": "#7aa2f7"
       },
       "spacing": { "xxs": 2, "xs": 4, "sm": 8, "md": 12, "lg": 14, "xl": 18, "xxl": 24 },
-      "radius": { "none": 0, "sm": 2, "md": 2, "lg": 2, "xl": 2, "full": 9999 }
+      "radius": { "none": 0, "sm": 2, "md": 2, "lg": 2, "xl": 2, "full": 9999 },
+      "typography": { "md": { "size": 12, "line_height": 16 } }
     }
   }
 }

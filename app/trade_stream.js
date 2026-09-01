@@ -55,8 +55,20 @@ function requireCallback(value, name) {
   return value;
 }
 
-/** The private topic's event name for a change to one of this account's orders. */
-export const ORDER_CHANGED_EVENT = "order_changed_lb";
+/**
+ * The private topic's event names for a change to one of this account's orders.
+ *
+ * Two spellings, because the gateway has two. The OpenAPI SDK knows only
+ * `order_changed_lb`; ../longbridge-gpui, which talks to the same trade
+ * backend, accepts `order_changed` beside it. Reading only one of them fails
+ * silently and in the worst possible way -- the channel connects, subscribes,
+ * reports itself healthy, and drops every order on the floor, which from the
+ * outside is indistinguishable from an account in which nothing is happening.
+ */
+export const ORDER_CHANGED_EVENTS = Object.freeze(["order_changed_lb", "order_changed"]);
+
+/** @deprecated Kept as the primary spelling; prefer `ORDER_CHANGED_EVENTS`. */
+export const ORDER_CHANGED_EVENT = ORDER_CHANGED_EVENTS[0];
 
 /**
  * The order inside a push notification, still in the gateway's own field names.
@@ -89,7 +101,7 @@ export function orderFromNotification(notification) {
     return null;
   }
   if (!payload || typeof payload !== "object") return null;
-  if (payload.event !== ORDER_CHANGED_EVENT) return null;
+  if (!ORDER_CHANGED_EVENTS.includes(payload.event)) return null;
   const order = payload.data;
   if (!order || typeof order !== "object") return null;
   return typeof order.order_id === "string" && order.order_id !== "" ? order : null;

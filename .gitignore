@@ -1,3 +1,4 @@
 /target/
 /app/gpui.d.ts
 /docs/superpowers/
+/app/node_modules/

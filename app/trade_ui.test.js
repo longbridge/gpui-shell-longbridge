@@ -62,6 +62,7 @@ export default class TradeUiProbe extends LongbridgeApp {
     this.clock = null;
     this.ordersState = {
       status: "ready",
+      loaded: true,
       today: normalizeOrders({ data: { orders: [WORKING_ORDER] } }),
       history: [],
       error: "",
