@@ -3336,9 +3336,10 @@ export default class LongbridgeApp extends View {
             v_flex()
               .flex_1()
               .min_h(0)
-              .px(PANE_INSET)
-              .pb(PANE_INSET)
-              .pt(0)
+              // One inset on all four sides. The title bar is the window's top
+              // edge, so the gap under it is this window's top gap -- drawn at
+              // the same width as the three the panes keep from the frame.
+              .p(PANE_INSET)
               .gap(tokens.spacing.sm)
               .child(
                 // The performance overlay is anchored in *this* box rather than

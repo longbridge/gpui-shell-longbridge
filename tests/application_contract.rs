@@ -518,10 +518,12 @@ fn workspace_outer_gap_is_not_double_padded() {
         .expect("application render method");
 
     assert!(
-        render.contains(".px(PANE_INSET)")
-            && render.contains(".pb(PANE_INSET)")
-            && render.contains(".pt(0)"),
-        "the shell keeps 8px side/bottom gaps while the first panel sits 4px below the TitleBar"
+        render.contains(".p(PANE_INSET)")
+            && !render.contains(".pt(0)")
+            && !render.contains(".px(PANE_INSET)")
+            && !render.contains(".pb(PANE_INSET)"),
+        "the shell keeps one PANE_INSET gap on all four sides, the TitleBar edge included, \
+         and never pads a side twice"
     );
 }
 
@@ -711,11 +713,11 @@ fn responsive_panels_own_one_consistent_omarchy_gap_and_the_title_bar_has_no_rul
         "the application TitleBar must not add a rule above the first Panel gap"
     );
     assert!(
-        ui.contains("export const PANE_INSET = 4")
+        ui.contains("export const PANE_INSET = 8")
             && main.contains(".gap(tokens.spacing.sm)")
-            && main.contains(".px(PANE_INSET)")
-            && main.contains(".pt(0)"),
-        "all four plain Panels must use the same 8px peer gap and compact shell inset"
+            && main.contains(".p(PANE_INSET)"),
+        "all four plain Panels must use the same 8px peer gap, and the shell must hold \
+         the window's four edges at that same 8px"
     );
 }
 
@@ -1056,5 +1058,47 @@ fn the_application_uses_only_names_this_runtime_has() {
     assert!(
         offences.is_empty(),
         "the shell has none of these; import the shell's own: {offences:?}"
+    );
+}
+
+/// The desktop's `shell.toml` layers over the terminal's scale; it does not
+/// replace it.
+///
+/// A stock Omarchy `shell.toml` ships with every `[spacing]` key commented
+/// out, so choosing between the two sources rather than composing them handed
+/// the window Omarchy UI's general-desktop defaults and moved every gap in the
+/// interface at once -- `sm` 8 -> 4 and `md` 12 -> 6 on one side,
+/// `row-padding-x` 8 -> 12 and `panel-padding` 12 -> 18 on the other. Parsing
+/// is last-key-wins, so the terminal's scale has to come first and the
+/// desktop's source after it.
+#[test]
+fn the_desktop_shell_layers_over_the_terminal_scale() {
+    let style = fs::read_to_string(app_dir().join("style.js")).expect("style.js");
+
+    assert!(
+        style.contains("applyOmarchyStyle(`${TERMINAL_SHELL}\\n${shellSource}`"),
+        "applyTerminalStyle must compose the terminal scale with the desktop's source"
+    );
+    assert!(
+        !style.contains("shellSource || TERMINAL_SHELL"),
+        "the desktop's file must not replace the terminal scale wholesale"
+    );
+}
+
+/// The one text input a toolbar carries sits on the same control ramp as the
+/// buttons beside it. At `medium` it stood taller than them and set the height
+/// of the whole row.
+#[test]
+fn the_filter_field_is_on_the_toolbar_control_ramp() {
+    let ui = fs::read_to_string(app_dir().join("ui.js")).expect("ui.js");
+    let filter = ui
+        .split("export function filterInput(")
+        .nth(1)
+        .and_then(|source| source.split("\n}").next())
+        .expect("filterInput function");
+
+    assert!(
+        filter.contains(".size(\"small\")"),
+        "filterInput must be small, like the iconAction and menuTrigger it shares a row with"
     );
 }
