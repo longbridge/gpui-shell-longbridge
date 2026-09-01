@@ -38,6 +38,26 @@ const listed = (...orders) =>
     ],
   });
 
+/**
+ * The list as it looks on screen, under a read in whatever state.
+ *
+ * `loaded` is what makes it a list -- a read has succeeded at some point --
+ * and `status` is only what the *current* read is doing. The two are separate
+ * here because they are separate in the application: the push channel asks the
+ * first question, and asking the second instead is what used to silence it.
+ *
+ * @param {LongbridgeOrdersState["status"]} status
+ * @param {string} error
+ * @returns {LongbridgeOrdersState}
+ */
+const onScreen = (status = "ready", error = "") => ({
+  status,
+  loaded: true,
+  today: listed(),
+  history: [],
+  error,
+});
+
 export default class OrderPushProbe extends LongbridgeApp {
   init(_props, _cx) {
     this.initOrdersState();
@@ -110,7 +130,7 @@ export default class OrderPushProbe extends LongbridgeApp {
 
     // With a list on screen, the push goes straight into it.
     this.initOrdersState();
-    this.ordersState = { status: "ready", today: listed(), history: [], error: "" };
+    this.ordersState = onScreen();
     this.receiveOrderChange(pushedOrder(), cx);
     this.check(
       this.ordersState.today.map((order) => order.orderId).join(",") === "900,1",
@@ -128,6 +148,78 @@ export default class OrderPushProbe extends LongbridgeApp {
       "while news about it reaches the row it is about",
     );
     this.check(this.ordersState.today.length === 2, "without adding a second row for it");
+
+    // A read in flight must not hide the news the gateway is sending.
+    //
+    // This is the case the channel exists for: an order is placed, the page
+    // asks for the list again, and the gateway pushes the new order while that
+    // read is still out. Gating the list on "no read in flight" withheld the
+    // push for the whole of it -- which is every time an order is placed, so
+    // the realtime channel never once drove the screen in the one scene it was
+    // built for.
+    this.initOrdersState();
+    this.ordersState = onScreen("loading");
+    this.receiveOrderChange(pushedOrder(), cx);
+    this.check(
+      this.ordersState.today.map((order) => order.orderId).join(",") === "900,1",
+      `a push reaches the list while a read is in flight: ${this.ordersState.today
+        .map((order) => order.orderId)
+        .join(",")}`,
+    );
+
+    // ...but a push before the list has ever been read still has nothing to
+    // merge into, and must not become a one-row list that looks complete.
+    this.initOrdersState();
+    this.receiveOrderChange(pushedOrder(), cx);
+    this.check(
+      this.ordersState.today.length === 0,
+      "a push before the first read still does not invent a list",
+    );
+
+    // A read that fails leaves the list that was on screen, and the gateway
+    // goes on driving it: an order channel does not stop being right because
+    // an HTTP read went wrong.
+    this.initOrdersState();
+    this.ordersState = onScreen("error", "read failed");
+    this.receiveOrderChange(pushedOrder(), cx);
+    this.check(
+      this.ordersState.today.some((order) => order.orderId === "900"),
+      "a push reaches the list after a read that failed",
+    );
+
+    // The read that follows a write must not be owned by the ticket.
+    //
+    // The order ticket is a dialog, and a dialog is its own view: a task
+    // spawned from one and awaited across `close_dialog` never resumes. The
+    // read is issued, the panel says "Loading orders" to explain itself, and
+    // the answer never arrives -- so the list sits empty for the life of the
+    // session and the gateway's push for the order that was just placed is
+    // dropped with it, because a list that never loaded has nothing to merge
+    // into. Switching pages was the only way out.
+    this.initOrdersState();
+    /** @type {string[]} */
+    const asked = [];
+    /** A context stands for its own lifetime here; only which one is used matters. */
+    const named = (/** @type {string} */ name) => /** @type {any} */ ({ name });
+    this.sessionContext = named("session");
+    this.loadOrders = (/** @type {any} */ context) => asked.push(`load:${context?.name}`);
+    this.scheduleOrdersRefresh = (/** @type {any} */ delay, /** @type {any} */ context) =>
+      asked.push(`schedule:${delay}:${context?.name}`);
+    this.refreshOrdersAfterAction(named("ticket"));
+    this.check(
+      asked.join(" ") === `load:session schedule:${LongbridgeApp.ORDER_ACTION_FALLBACK_MS}:session`,
+      `a write hands its read to the session, not to the closing ticket: ${asked.join(" ")}`,
+    );
+
+    // Without a session there is nothing to hand it to, and the ticket's own
+    // context is better than dropping the read entirely.
+    this.sessionContext = null;
+    asked.length = 0;
+    this.refreshOrdersAfterAction(named("ticket"));
+    this.check(
+      asked[0] === "load:ticket",
+      `and falls back to the caller's when there is no session: ${asked.join(" ")}`,
+    );
 
     // A push channel that cannot be opened is a channel, not a session. It is
     // built on the connect path, ahead of the watchlist's own stream, so a

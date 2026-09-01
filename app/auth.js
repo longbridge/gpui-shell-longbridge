@@ -289,8 +289,32 @@ function dataCenterFor(refreshToken) {
   return refreshToken.startsWith("us_") ? "us" : "ap";
 }
 
+/**
+ * The rotation in flight, if one is.
+ *
+ * Longbridge rotates the refresh token on every use: the answer carries a new
+ * one and retires the one that asked. So two callers that discover an expired
+ * access token together and each ask on their own retire each other's token,
+ * and whichever lands second is signing in with a credential that no longer
+ * exists. Callers used to avoid that by never reading in parallel, which cost
+ * every page the sum of its requests rather than the longest of them. The
+ * rotation is deduplicated here instead, so parallel reads are simply safe.
+ *
+ * @type {Promise<Tokens> | null}
+ */
+let rotating = null;
+
 /** @param {Tokens | null} existing */
 export async function refreshAccessToken(existing = loadTokens()) {
+  if (rotating) return rotating;
+  rotating = rotateAccessToken(existing).finally(() => {
+    rotating = null;
+  });
+  return rotating;
+}
+
+/** @param {Tokens | null} existing */
+async function rotateAccessToken(existing) {
   if (!existing) throw new Error("Longbridge sign-in is required");
   const json = await postForm(
     `${OAUTH_BASE_URL}/token`,

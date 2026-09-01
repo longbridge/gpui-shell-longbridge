@@ -641,6 +641,13 @@ export default class LongbridgeApp extends View {
     this.streamError = "";
     this.stream = null;
     this.streamGeneration = 0;
+    /**
+     * The connected session's context, for work that outlives the view that
+     * asked for it. Set by `connect`, and null until one exists.
+     *
+     * @type {import("gpui").Context | null}
+     */
+    this.sessionContext = null;
     /** The trade gateway's push channel, which reports this account's orders. */
     this.tradeStream = null;
     this.connectedToken = null;
@@ -1442,6 +1449,13 @@ export default class LongbridgeApp extends View {
   /** @param {string} token @param {import("gpui").AsyncContext} cx */
   async connect(token, cx) {
     this.connectedToken = token;
+    // The session's own context, kept because some work outlives the view that
+    // asks for it. A dialog is its own view: a task spawned from an order
+    // ticket dies with the ticket, so anything the ticket starts and does not
+    // finish before closing has to be owned by something that is still there.
+    // This is the same context every quote push already notifies through, held
+    // across every await since the session connected.
+    this.sessionContext = cx;
     const generation = ++this.streamGeneration;
     // Stopping the old stream rejects its pending candlestick query. Make that
     // request stale before awaiting stop, so its catch cannot publish into the
@@ -1710,8 +1724,16 @@ export default class LongbridgeApp extends View {
    */
   initOrdersState() {
     this.ordersGeneration = (this.ordersGeneration ?? 0) + 1;
-    /** @type {LongbridgeOrdersState} */
-    this.ordersState = { status: "idle", today: [], history: [], error: "" };
+    /**
+     * @type {LongbridgeOrdersState}
+     *
+     * `loaded` is whether a read has ever succeeded, which is a different
+     * question from `status` and the one the push channel asks. `status` says
+     * what the *current* read is doing, and it is `loading` for as long as one
+     * is out -- so a channel gated on it went quiet for the whole of every
+     * refresh, which is exactly when an order has just been placed.
+     */
+    this.ordersState = { status: "idle", loaded: false, today: [], history: [], error: "" };
     /** The order whose sheet the right-hand panel is showing, if any. */
     this.selectedOrderId = null;
     this.selectedOrderRowId = null;
@@ -1728,6 +1750,16 @@ export default class LongbridgeApp extends View {
      * @type {Map<string, { order: LongbridgeOrderRow, at: number }>}
      */
     this.pushedOrders = new Map();
+    /**
+     * Which scheduled re-read is still wanted.
+     *
+     * A timer that has been asked for cannot be taken back, so the ask is
+     * numbered and the callback checks its number: raising this is what
+     * cancels one. See `scheduleOrdersRefresh`.
+     *
+     * @type {number}
+     */
+    this.ordersRefreshToken = 0;
   }
 
   /** The order the detail panel is showing, or null once a reload drops it. */
@@ -1802,17 +1834,23 @@ export default class LongbridgeApp extends View {
           this.receiveOrderChange(order, cx);
       },
       onStatus: (status, detail) => {
-        // Not shown, and logged in full.
+        // Not shown, and only the faults are logged.
         //
         // Not shown because `streamError` is the market data connection, which
         // is what the window's status line is about; an order channel that is
         // reconnecting says nothing there, because prices have not stopped.
         //
-        // In full because this channel has no other way to be observed. It
-        // draws nothing, and its symptom when it is wrong -- orders that do
-        // not appear -- is indistinguishable from a quiet account. Five lines
-        // per connection is a cheap price for being able to say which step it
-        // did not get past.
+        // Only the faults because the rest is a channel working. Every step of
+        // every connection used to be logged, on the grounds that a channel
+        // which draws nothing has no other way to be observed and that its
+        // symptom when wrong -- orders that do not appear -- looks exactly like
+        // a quiet account. That was worth five lines per connection while the
+        // channel was unproven. It is not worth them now: a handshake that
+        // reaches `connected`, and an order that arrives, say nothing a reader
+        // of this log needs, and saying it every time buries the two lines that
+        // do. What is left is a channel that could not stay up and a callback
+        // that threw -- neither of which happens when this is working.
+        if (status !== "reconnecting" && status !== "callback_error") return;
         const detailText = Object.entries(detail ?? {})
           .map(([key, value]) => `${key}=${value}`)
           .join(" ");
@@ -1854,7 +1892,19 @@ export default class LongbridgeApp extends View {
     // Before the list has ever been read there is nothing to merge into: a
     // first push would otherwise become a one-row list that looks complete
     // and is not.
-    if (this.ordersState.status !== "ready") return;
+    //
+    // Deliberately not `status === "ready"`. A read in flight leaves `status`
+    // at `loading`, and a read that failed leaves it at `error`; neither means
+    // the list on screen has stopped being a list. Gating on the read rather
+    // than on the list is what kept the gateway's news off the screen for the
+    // whole of every refresh -- including the refresh that follows placing an
+    // order, which is the one moment this channel exists for.
+    if (!this.ordersState.loaded) return;
+    // The gateway got there first, so the read armed by the write has nothing
+    // left to find. Dropped whether or not the row actually changed: a repeat
+    // of a state this list already has is still the channel proving it is
+    // working, which is the only thing the fallback was insuring against.
+    this.cancelOrdersRefresh();
     const today = mergeOrder(this.ordersState.today, order);
     if (today === this.ordersState.today) return;
     this.ordersState = { ...this.ordersState, today };
@@ -1882,6 +1932,88 @@ export default class LongbridgeApp extends View {
    */
   loadOrders(cx) {
     cx.spawn(async (cx) => this.reloadOrders(cx));
+  }
+
+  /**
+   * How long after placing, changing or withdrawing an order the list gives up
+   * on being told and asks instead.
+   *
+   * The gateway is the fast path and normally reports the order within a
+   * moment of the write returning. This is the slow one, for the times it does
+   * not: a channel that is reconnecting, or a notification that was never
+   * sent. Three seconds is what ../longbridge-gpui waits, and it is chosen the
+   * same way -- long enough that the push almost always wins the race and the
+   * read never happens, short enough that a reader who was told their order
+   * was accepted does not sit looking at a list without it.
+   */
+  static get ORDER_ACTION_FALLBACK_MS() {
+    return 3_000;
+  }
+
+  /**
+   * Asks for the list again in a while, unless something says not to.
+   *
+   * The push channel is what usually says not to: an order that arrives on it
+   * has already reached the screen, and the read this would have done would
+   * only have confirmed it. So this is armed by a write and disarmed by the
+   * news -- see `receiveOrderChange` -- rather than being a poll that runs
+   * whether or not anything happened.
+   *
+   * @param {number} delayMillis @param {import("gpui").Context} cx
+   */
+  scheduleOrdersRefresh(delayMillis, cx) {
+    const token = (this.ordersRefreshToken ?? 0) + 1;
+    this.ordersRefreshToken = token;
+    cx.timer.after(delayMillis, (cx) => {
+      if (this.ordersRefreshToken !== token) return;
+      this.ordersRefreshToken = 0;
+      // Not on a page that is not showing them. The page asks on the way in,
+      // so a reader who has moved on gets a current list when they come back
+      // rather than one read while they were elsewhere.
+      if (this.page !== "orders") return;
+      this.loadOrders(cx);
+    });
+  }
+
+  /** Drops a scheduled re-read, because the news arrived on its own. */
+  cancelOrdersRefresh() {
+    this.ordersRefreshToken = (this.ordersRefreshToken ?? 0) + 1;
+  }
+
+  /**
+   * Reads the order lists after an order was placed, changed or withdrawn.
+   *
+   * Through the session's context, and deliberately not through the ticket's.
+   *
+   * A dialog is its own view -- `presentTicket` hands `open_dialog` a function
+   * the shell calls when *it* renders -- so the context a ticket button is
+   * given belongs to the ticket. A task spawned from it and then *awaited
+   * across* `close_dialog` is a task waiting on a view that is being taken
+   * down: the read is issued, the panel is put into `loading` to say so, and
+   * the continuation that would have published the answer never runs. The
+   * list then sits at "Loading orders" for the life of the session, holding no
+   * rows, and the gateway's push for the order that was just placed is dropped
+   * with it because a list that has never loaded has nothing to merge into.
+   * Switching pages was the only way out, because that read is asked for by
+   * the workspace and the workspace is still there.
+   *
+   * `addSymbol` is the same shape and does not have this problem, for the one
+   * reason worth copying: every await it does happens *before* it closes its
+   * dialog. This does the same by owning the work elsewhere rather than by
+   * holding the ticket open for a read nobody is reading.
+   *
+   * Two reads, not one. The first is now, for the rest of the page. The second
+   * is the fallback three seconds out, because Longbridge accepts an order
+   * before its own list reports one -- and the gateway, which reports it
+   * immediately, disarms that fallback when it does.
+   *
+   * @param {import("gpui").Context} [fallbackContext]
+   */
+  refreshOrdersAfterAction(fallbackContext) {
+    const cx = this.sessionContext ?? fallbackContext;
+    if (!cx) return;
+    this.loadOrders(cx);
+    this.scheduleOrdersRefresh(LongbridgeApp.ORDER_ACTION_FALLBACK_MS, cx);
   }
 
   /**
@@ -1925,13 +2057,14 @@ export default class LongbridgeApp extends View {
   /**
    * Reads both order lists, in whatever task is already running.
    *
-   * Separate from `loadOrders` because a caller that is *already* inside a
-   * `cx.spawn` -- the one that just placed or withdrew an order -- must await
-   * this rather than start a second task inside the first. A nested spawn is
-   * not guaranteed to outlive the task that opened it, and one that does not
-   * leaves the panel saying "Loading orders" forever: the request never
-   * finishes, so the state never leaves `loading` and the open sheet goes on
-   * showing the order as it was before it was withdrawn.
+   * Separate from `loadOrders` so a caller already inside a `cx.spawn` can
+   * await it rather than start a second task inside the first, which is not
+   * guaranteed to outlive the one that opened it.
+   *
+   * The ticket is not such a caller, and awaiting this from one was the bug:
+   * see `refreshOrdersAfterAction`. Whichever way it is reached, a read whose
+   * task does not survive leaves the panel saying "Loading orders" forever --
+   * the continuation never runs, so the state never leaves `loading`.
    *
    * The generation stays here rather than at the call sites, so both paths get
    * it: a read that is overtaken by a newer one does not put its older answer
@@ -1954,6 +2087,7 @@ export default class LongbridgeApp extends View {
       if (generation !== this.ordersGeneration) return;
       this.ordersState = {
         status: "ready",
+        loaded: true,
         today: this.applyPushedOrders(today),
         history,
         error: "",
@@ -1970,12 +2104,18 @@ export default class LongbridgeApp extends View {
   }
 
   async refreshOrders() {
-    // Sequential for the same reason the portfolio reads are: two requests
-    // that discover an expired access token together would rotate the refresh
-    // token twice.
-    const today = normalizeOrders(await get("/v1/trade/order/today"));
-    const history = normalizeOrders(await get("/v1/trade/order/history", historyRange()));
-    return { today, history };
+    // In parallel. These are two independent reads of two endpoints, and run
+    // one after the other the page waited for their sum -- about three
+    // quarters of a second against a live account -- when the slower of the
+    // two is all it owes. They used to be sequential because two requests that
+    // discovered an expired access token together would each rotate the
+    // refresh token and retire each other's; `refreshAccessToken` now
+    // deduplicates that rotation, so the reason is gone.
+    const [today, history] = await Promise.all([
+      get("/v1/trade/order/today"),
+      get("/v1/trade/order/history", historyRange()),
+    ]);
+    return { today: normalizeOrders(today), history: normalizeOrders(history) };
   }
 
   /**
@@ -2738,23 +2878,22 @@ export default class LongbridgeApp extends View {
           level: "success",
           id: "trade-order",
         });
-        // Through `reloadOrders` rather than by assigning the state here.
-        // That one carries a generation, and this one did not: a read already
-        // in flight -- the page switch above starts one whenever Orders was
-        // not already showing -- would answer afterwards with a list fetched
-        // before the order existed and put it back, so the new order appeared
-        // and then vanished. It also shows the list as loading while it is,
-        // and reports a failed read on the page that could not be read, which
-        // is where a failed read belongs rather than on a ticket that
-        // succeeded. Awaited in this task rather than started in a new one --
-        // see `reloadOrders`.
+        // Through a read that carries a generation, rather than by assigning
+        // the state here: a read already in flight would otherwise answer
+        // afterwards with a list fetched before the order existed and put it
+        // back, so the new order appeared and then vanished. It also shows the
+        // list as loading while it is, and reports a failed read on the page
+        // that could not be read rather than on a ticket that succeeded.
         //
-        // Once, and not until the list agrees. It usually does not: the read
-        // comes back without the order that was just accepted. What closes
-        // that gap now is the gateway, which pushes the order as soon as it
-        // exists -- see `receiveOrderChange` -- so this read is for the rest
-        // of the page rather than for the order that was just placed.
-        await this.reloadOrders(cx);
+        // Handed to the session and not awaited here. This task belongs to the
+        // ticket, and the ticket's view has just been closed above -- see
+        // `refreshOrdersAfterAction` for what awaiting past that did.
+        //
+        // The read is for the rest of the page rather than for the order that
+        // was just placed: Longbridge accepts an order before its list reports
+        // one, and what closes that gap is the gateway pushing it as soon as
+        // it exists -- see `receiveOrderChange`.
+        this.refreshOrdersAfterAction(cx);
       } catch (failure) {
         this.ticket = {
           ...this.ticket,
@@ -2843,6 +2982,7 @@ export default class LongbridgeApp extends View {
     this.stream = null;
     this.stopTradeStream();
     this.streamGeneration += 1;
+    this.sessionContext = null;
     this.connectedToken = null;
     this.authorization = null;
     this.account = null;

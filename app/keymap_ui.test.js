@@ -86,6 +86,7 @@ export default class KeymapUiProbe extends LongbridgeApp {
     this.initOrdersState();
     this.ordersState = {
       status: "ready",
+      loaded: true,
       today: normalizeOrders({
         data: {
           orders: [

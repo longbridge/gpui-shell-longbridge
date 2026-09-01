@@ -176,18 +176,35 @@ fn the_writable_surface_is_the_watchlist_and_an_account_s_orders() {
         trade.contains("client_request_id") && main.contains("randomUUID()"),
         "a submitted order must carry an idempotency key"
     );
-    // The read that follows a write is awaited in the task that did the
-    // writing. Starting a second task inside the first is not guaranteed to
-    // outlive it, and one that does not leaves the panel on "Loading orders"
-    // forever and the open sheet showing an order as it was before it changed.
+    // The read that follows a write is owned by the session, not by the ticket.
+    //
+    // This assertion used to say the opposite -- that the read must be awaited
+    // in the writing task, because a task started inside another is not
+    // guaranteed to outlive it. That is true, and it is not the whole rule:
+    // the writing task here is spawned from the order ticket, and the ticket
+    // is a dialog with a view of its own that the same task then closes. So
+    // awaiting anything after `close_dialog` waits on a view being taken down,
+    // and the continuation never runs -- the read is issued, the panel says
+    // "Loading orders", and it says it for the rest of the session, holding no
+    // rows. The gateway's push for the order that was just placed is dropped
+    // along with it, because a list that never loaded has nothing to merge
+    // into, so a placed order simply did not appear until the reader switched
+    // pages and the workspace asked again.
+    //
+    // What the rule protects is therefore the lifetime, not the awaiting:
+    // whatever runs the read has to still be there when the answer comes.
     let confirm = main
         .split("  confirmTicket(cx) {")
         .nth(1)
         .and_then(|source| source.split("\n  /**").next())
         .expect("confirmTicket method");
     assert!(
-        confirm.contains("await this.reloadOrders(cx)") && !confirm.contains("this.loadOrders("),
-        "the read after a write must be awaited in the task that wrote"
+        confirm.contains("this.refreshOrdersAfterAction(cx)") && !confirm.contains("await this.r"),
+        "the read after a write must be owned by something that outlives the ticket"
+    );
+    assert!(
+        main.contains("const cx = this.sessionContext ?? fallbackContext;"),
+        "and the session's context is what it is handed to"
     );
     // Longbridge accepts an order before its list reports one, so the read
     // after a write does not contain it. What closes that gap is the trade
@@ -917,6 +934,84 @@ fn release_build_resolves_packaged_application_resources() {
 /// The shell offers each of these under a name of its own -- `websocket` for
 /// the transport, `cx.timer` for delays, `decodeUtf8` in `protocol.js` for
 /// bytes -- and a module that wants one imports it.
+/// Nothing is awaited after the dialog it was spawned from is closed.
+///
+/// A dialog is its own view: `open_dialog` is handed a function the shell
+/// calls when *it* renders, so the context a dialog's button is given belongs
+/// to the dialog. A task spawned from one and awaited across `close_dialog`
+/// is waiting on a view that is being taken down, and its continuation never
+/// runs. That is not visible as a failure -- the request is issued and the
+/// panel is put into whatever "loading" it shows to say so, and then simply
+/// stays there for the life of the session.
+///
+/// `addSymbol` is the shape that works: every await it does happens before it
+/// closes its dialog. `confirmTicket` was the shape that did not -- it closed
+/// the ticket and then awaited the order read, which is why the order list sat
+/// empty behind a placed order until the reader switched pages. This is what
+/// stops either of them drifting back.
+#[test]
+fn no_dialog_task_awaits_across_the_dialog_it_closes() {
+    let mut offences = Vec::new();
+    for entry in fs::read_dir(app_dir()).expect("application directory") {
+        let path = entry.expect("application entry").path();
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_owned();
+        if !name.ends_with(".js") || name.ends_with(".test.js") {
+            continue;
+        }
+        let source = fs::read_to_string(&path).expect("application module");
+        let lines: Vec<&str> = source.lines().collect();
+        for (index, line) in lines.iter().enumerate() {
+            if !line.contains("window.close_dialog()") {
+                continue;
+            }
+            // Follow the rest of the block the close sits in, by brace depth
+            // rather than by a line count: the continuation of a handler is
+            // routinely a multi-line call -- a toast, an object literal -- and
+            // stopping at the first `});` would stop inside one. Depth going
+            // negative is the enclosing block ending, which is where the task
+            // ends and the question stops mattering.
+            let mut depth: i32 = 0;
+            for following in lines.iter().skip(index + 1) {
+                let code = following.trim_start();
+                // Prose is how a module explains what it deliberately does not
+                // do, and a comment cannot await anything.
+                if !(code.starts_with("//") || code.starts_with('*')) {
+                    if code.contains("await ") {
+                        offences.push(format!(
+                            "{name}:{} awaits after the dialog closed at line {}",
+                            offset_of(&lines, following),
+                            index + 1
+                        ));
+                        break;
+                    }
+                    depth += following.matches('{').count() as i32;
+                    depth -= following.matches('}').count() as i32;
+                }
+                if depth < 0 {
+                    break;
+                }
+            }
+        }
+    }
+    assert!(
+        offences.is_empty(),
+        "a task that closes its dialog must not await afterwards: {offences:#?}"
+    );
+}
+
+/// The 1-based line number of a borrowed line within its file.
+fn offset_of(lines: &[&str], needle: &&str) -> usize {
+    lines
+        .iter()
+        .position(|line| std::ptr::eq(*line, *needle))
+        .map(|at| at + 1)
+        .unwrap_or_default()
+}
+
 #[test]
 fn the_application_uses_only_names_this_runtime_has() {
     const ABSENT: [&str; 6] = [

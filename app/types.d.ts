@@ -79,6 +79,8 @@ interface LongbridgeOrderRow {
 
 interface LongbridgeOrdersState {
   status: "idle" | "loading" | "ready" | "error";
+  /** Whether a read has ever succeeded, which is what makes the list a list. */
+  loaded: boolean;
   today: readonly LongbridgeOrderRow[];
   history: readonly LongbridgeOrderRow[];
   error: string;

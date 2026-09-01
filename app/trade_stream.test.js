@@ -187,6 +187,11 @@ async function runVectors() {
     "an order change is read out of its envelope",
   );
   check(
+    orderFromNotification(payload({ event: "order_changed", data: { order_id: "701b" } }))
+      ?.order_id === "701b",
+    "under either of the two names the gateway gives the same event",
+  );
+  check(
     orderFromNotification(payload({ event: "gridtrading_order", data: { order_id: "702" } })) ===
       null,
     "a grid master order shares the topic and is not one of these",
