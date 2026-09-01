@@ -23,6 +23,7 @@ const CONTRASTING_DARK_THEME = {
       border: "#31405f",
       input: "#31405f",
       ring: "#6aa8ff",
+      selection: "#2a3550",
     },
     spacing: { xxs: 2, xs: 4, sm: 8, md: 12, lg: 14, xl: 18, xxl: 24 },
     radius: { none: 0, sm: 2, md: 0, lg: 0, xl: 0, full: 9999 },

@@ -57,7 +57,16 @@ fn host_reads_only_the_materialized_omarchy_palette() {
             .join("main.rs"),
     )
     .expect("host main.rs");
-    assert!(host.contains(".local/state/omarchy/current/theme/colors.toml"));
+    // The path is assembled once and joined twice now -- `colors.toml` for the
+    // palette, `shell.toml` for the density, type scale and rounding a theme
+    // also carries -- so the whole string no longer appears anywhere. What the
+    // host must still do is root both at the materialized theme directory and
+    // read nothing else.
+    assert!(
+        host.contains(".local/state/omarchy/current/theme")
+            && host.contains("colors.toml")
+            && host.contains("shell.toml")
+    );
     assert!(host.contains("HostModule::new(\"omarchy-theme\")"));
     assert!(
         host.contains("gpui-shell/plugins"),
@@ -79,7 +88,7 @@ fn debug_builds_watch_application_sources() {
 }
 
 #[test]
-fn the_only_change_this_application_makes_is_to_the_watchlist() {
+fn the_writable_surface_is_the_watchlist_and_an_account_s_orders() {
     let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
     let ui = fs::read_to_string(app_dir().join("ui.js")).expect("ui.js");
     let market = fs::read_to_string(app_dir().join("market.js")).expect("market.js");
@@ -120,75 +129,105 @@ fn the_only_change_this_application_makes_is_to_the_watchlist() {
         main.contains("priceChart") && main.contains("allocationChart"),
         "read-only market and allocation charts must remain wired"
     );
-    // The application changes exactly one thing about an account: which
-    // securities it watches. That is one path, one method, and the HTTP
-    // boundary is where it is enforced rather than remembered -- a second
-    // writable path would have to be added here before it could be added
-    // there.
+    // The application changes two things about an account: which securities it
+    // watches, and its orders. What makes that a boundary rather than a habit
+    // is that both are a *list* -- path and method together -- and the list is
+    // in one place. A third path, or a fourth method on one of these two, has
+    // to be added here before it can be added there.
+    // The whole map, not two lines of it: a third entry has to change this
+    // assertion, which is the point of writing the boundary down.
     assert!(
-        http.contains(r#"const EDITABLE_PATHS = new Set(["/v1/watchlist/groups"]);"#)
-            && http.contains("assertEditablePath(path);")
-            && http.matches(r#"method: "#).count() == 1
-            && http.contains(r#"method: "PUT","#),
-        "the only write this boundary can make is to the watchlist's own groups"
+        http.contains(
+            r#"const WRITABLE = new Map([
+  ["/v1/watchlist/groups", new Set(["PUT"])],
+  [TRADE_ORDER_PATH, new Set(["POST", "PUT", "DELETE"])],
+]);"#
+        ),
+        "the writable surface is a list of two paths and the methods each allows"
     );
-    // Everything else stays a reading. An order is something an account
-    // already placed; nothing here submits, amends or withdraws one.
-    for forbidden in [
-        "Place order",
-        "Cancel order",
-        "/v1/trade/order/submit",
-        "/v1/trade/order/replace",
-        "/v1/trade/order/withdraw",
-    ] {
-        assert!(
-            !main.contains(forbidden)
-                && !ui.contains(forbidden)
-                && !market.contains(forbidden)
-                && !orders.contains(forbidden),
-            "forbidden trading surface {forbidden}"
-        );
-    }
-    // The two side captions exist in exactly one place, `orders.js`, and only
-    // as the reading of an order the account already placed. Nothing that
-    // draws a control may name them: a caption in `ui.js` or `main.js` would
-    // be a button that trades, which this application does not have.
-    for forbidden in ["Buy", "Sell"] {
-        assert!(
-            !main.contains(&format!("\"{forbidden}\""))
-                && !ui.contains(&format!("\"{forbidden}\""))
-                && !market.contains(&format!("\"{forbidden}\"")),
-            "forbidden trading control label {forbidden}"
-        );
-    }
+    assert!(
+        http.contains("assertWritable(method, path);")
+            && http.matches("assertWritable(").count() == 2,
+        "every write goes through the one guard, and the guard takes the method"
+    );
+    // An order is composed here and nowhere else. `orders.js` reads one back;
+    // `trade.js` decides what may be sent, and does it without a socket, which
+    // is what makes that decision checkable.
     assert!(
         !orders.contains("fetch(") && !orders.contains("POST"),
         "the order reader normalizes an answer and never sends one"
     );
-    for forbidden in [
-        "trade::buy",
-        "trade::sell",
-        "trade::place-order",
-        "trade::cancel-order",
-    ] {
-        assert!(
-            !main.contains(forbidden)
-                && !ui.contains(forbidden)
-                && !market.contains(forbidden)
-                && !orders.contains(forbidden),
-            "forbidden trading action {forbidden}"
-        );
-    }
-    // Retained text state is the four list filters, which narrow what is
-    // already on screen, and the one field that names a security to add.
-    // Nothing composes an order.
+    let trade = fs::read_to_string(app_dir().join("trade.js")).expect("trade.js");
     assert!(
-        main.matches("InputState.new({ placeholder:").count() == 5
+        !trade.contains("fetch(") && !trade.contains("await "),
+        "what may be sent must be decidable without reaching the network"
+    );
+    assert!(
+        trade.contains("export function validateTicket")
+            && trade.contains("export function submitOrderBody")
+            && trade.contains("export function replaceOrderBody")
+            && trade.contains("export function cancelOrderBody"),
+        "the three things that can be done to an order are shaped in one module"
+    );
+    // A submit carries an idempotency key. Without one a retried request after
+    // a lost response places a second order, which is the failure this whole
+    // surface exists to avoid.
+    assert!(
+        trade.contains("client_request_id") && main.contains("randomUUID()"),
+        "a submitted order must carry an idempotency key"
+    );
+    // The read that follows a write is awaited in the task that did the
+    // writing. Starting a second task inside the first is not guaranteed to
+    // outlive it, and one that does not leaves the panel on "Loading orders"
+    // forever and the open sheet showing an order as it was before it changed.
+    let confirm = main
+        .split("  confirmTicket(cx) {")
+        .nth(1)
+        .and_then(|source| source.split("\n  /**").next())
+        .expect("confirmTicket method");
+    assert!(
+        confirm.contains("await this.reloadOrders(cx)") && !confirm.contains("this.loadOrders("),
+        "the read after a write must be awaited in the task that wrote"
+    );
+    // Longbridge accepts an order before its list reports one, so the read
+    // after a write does not contain it. What closes that gap is the trade
+    // gateway's push channel rather than reading again and again: the order
+    // arrives because the gateway says it exists. The two are then reconciled,
+    // because the read that is behind must not put the list back as it was.
+    let trade_stream =
+        fs::read_to_string(app_dir().join("trade_stream.js")).expect("trade_stream.js");
+    assert!(
+        trade_stream.contains("encodeTradeSubscribeRequest([TRADE_TOPIC_PRIVATE])")
+            && trade_stream.contains("TRADE_COMMAND.PUSH_NOTIFICATION"),
+        "orders must be learned from the gateway's own topic"
+    );
+    // The transport is the shell's module, not a browser global.
+    assert!(
+        trade_stream.contains(r#"import { WebSocket } from "websocket""#),
+        "the push channel's transport is the shell's, not a global"
+    );
+    assert!(
+        main.contains("this.startTradeStream(token, generation, cx)")
+            && main.contains("receiveOrderChange(pushed, cx)")
+            && main.contains("applyPushedOrders(today)"),
+        "a pushed order must reach the list, and survive a read that is behind it"
+    );
+    // The channel is a second socket to a second host, and the manifest has to
+    // say so or it cannot open at all.
+    let manifest = fs::read_to_string(app_dir().join("gpui-shell.json")).expect("manifest");
+    assert!(
+        manifest.contains("openapi-trade.longbridge.com"),
+        "the trade gateway is its own host and must be declared"
+    );
+    // Retained text state is the four list filters, the field that names a
+    // security to add, and the three an order is composed in.
+    assert!(
+        main.matches("InputState.new({ placeholder:").count() == 8
             && main.contains("Filter watchlist")
             && main.contains("Filter holdings")
             && main.matches("Filter orders").count() == 2
             && main.contains(r#"placeholder: "AAPL.US""#),
-        "the only retained text state may be the list filters and the symbol to add"
+        "the only retained text state may be the list filters, the symbol to add, and the ticket"
     );
     assert!(
         market.contains("export function filterRows"),
@@ -201,10 +240,14 @@ fn the_only_change_this_application_makes_is_to_the_watchlist() {
         main.contains("Table.new(`${id}-table`)") && main.contains(".row_count(rows.length + 1)"),
         "both lists must be virtualized tables that announce their full size"
     );
+    // Still table parts, now the library's: a row and a header row announce
+    // themselves as such, and a cell that stacks two readings is one cell
+    // rather than two. What matters is the semantics reaching the tree, not
+    // which module the constructor came from.
     assert!(
-        ui.contains("TableHead.new(")
-            && ui.contains("TableCell.new(")
-            && ui.contains("TableRow.new("),
+        ui.contains("new TableHeaderRow(")
+            && ui.contains("new TableRow(")
+            && ui.contains("new CellStack("),
         "rows and headers must be table parts rather than styled flex containers"
     );
     assert!(main.contains("const tokens = cx.theme()"));
@@ -253,11 +296,22 @@ fn the_only_change_this_application_makes_is_to_the_watchlist() {
             && main.contains("Popover.new(\"allocation-help\")"),
         "both Popover scenarios must stay wired"
     );
+    // The surface says it is a menu; its rows say they are menu items by being
+    // the library's `MenuItem`, which carries that role. The role reaching the
+    // tree is asserted where a tree exists -- `workspace_ui.test.js` -- rather
+    // than by looking for the string here.
     assert!(
-        ui.contains(".role(\"menu_item\")") && ui.contains(".role(\"menu\")"),
+        ui.contains("new MenuItem(") && ui.contains(".role(\"menu\")"),
         "the popup menu must announce itself as a menu"
     );
-    assert!(ui.contains(".tooltip("), "pointer hints must stay wired");
+    // The hint is now what an icon control is *given* -- `description(hint)` --
+    // and the library turns it into both the tooltip and the accessible name.
+    // Asserting the caller passes one keeps the hint mandatory without pinning
+    // how the library draws it.
+    assert!(
+        ui.contains(".description(hint)"),
+        "pointer hints must stay wired"
+    );
 
     // Authorization opens the page itself. The address is only known once the
     // device code exists, and it is not one anyone reads.
@@ -359,8 +413,11 @@ fn minimum_watchlist_keeps_symbol_name_last_and_change() {
 
     assert!(
         main.contains("const COMPACT_WATCHLIST_WIDTH = 440")
-            && ui.contains(".w(compact ? \"60%\" : \"31%\")")
-            && ui.contains(".w(compact ? \"40%\" : \"19%\")")
+            // The width is a cell's own property now rather than a style call
+            // on it, but the two shares are the same: the instrument keeps the
+            // majority and the reading keeps the rest.
+            && ui.contains("{ width: compact ? \"60%\" : \"31%\" }")
+            && ui.contains("width: compact ? \"40%\" : \"19%\"")
             && ui.contains("quote.symbol")
             && ui.contains("quote.name")
             && ui.contains("quote.last")
@@ -387,12 +444,18 @@ fn responsive_breakpoints_use_the_same_gap_and_min_width_math_as_the_panels() {
 fn minimum_chart_keeps_a_real_plot_below_compact_interval_tabs() {
     let main = fs::read_to_string(app_dir().join("main.js")).expect("main.js");
 
+    // The interval run is `intervalTabs` now, which is the library's underline
+    // shape. What this file used to assert -- the centring, the type size, the
+    // 2px rule under the current one -- is the component's, and asserted where
+    // the component lives; a run of tabs that reserves its underline on every
+    // tab and colours one is exactly what it was written to guarantee. What is
+    // still this application's is that the Chart Panel has a run of intervals
+    // at all, and a plot with room to be one under it.
+    let ui = fs::read_to_string(app_dir().join("ui.js")).expect("ui.js");
     assert!(
-        main.contains("Tabs.new(\"chart-mode-tabs\")")
-            && main.contains("Tab.new(`chart-mode-${id}`)")
-            && main.contains(".justify_center()")
-            && main.contains(".text_size(11)")
-            && main.contains(".border_b(2)")
+        main.contains("intervalTabs(")
+            && main.contains("\"Chart interval\"")
+            && ui.contains("export function intervalTabs(")
             && main.contains(".id(\"price-chart-wheel\")")
             && main.contains(".min_h(244)")
             && main.contains(".child(this.priceChart)"),
@@ -455,10 +518,27 @@ fn retained_chart_props_do_not_duplicate_the_large_series() {
         .expect("chartProps method");
 
     assert!(
-        !chart_props.contains("series:")
-            && !main.contains("previous?.series === next.series")
-            && chart_props.contains("compactIntradaySeriesForView"),
+        !chart_props.contains("series:") && !main.contains("previous?.series === next.series"),
         "the retained chart must receive one mode-specific series, not a duplicate five-day graph"
+    );
+
+    // Deriving it is the expensive thing this view does, so it happens once
+    // per set of candles rather than on every publish check. The candles are
+    // the key *and* the answer is cached: recomputing produced a new array
+    // every time, so the identity check below could never be true and every
+    // check published.
+    let derive = main
+        .split("  chartSeriesFor(symbol, mode, candles) {")
+        .nth(1)
+        .and_then(|source| source.split("\n  /**").next())
+        .expect("chartSeriesFor method");
+    assert!(
+        derive.contains("compactIntradaySeriesForView")
+            && derive.contains("cached.candles === candles")
+            && derive.contains("return cached.series")
+            && chart_props.contains("this.chartSeriesFor(symbol, mode, candles)")
+            && main.contains("previous?.chartSeries === next.chartSeries"),
+        "the plotted series must be derived once per set of candles and answered by identity"
     );
 }
 
@@ -582,15 +662,18 @@ fn details_column_prioritizes_quote_chart_then_market() {
 fn plain_panel_title_has_one_title_and_one_content_region() {
     let ui = fs::read_to_string(app_dir().join("ui.js")).expect("ui.js");
 
+    // A Panel is the library's now, so the regions are named rather than
+    // assembled: a title, an optional note beside it, an optional accessory,
+    // and one content region. The content still arrives with its own border
+    // dropped -- the Panel draws the edge, and two would be two.
     assert!(
         ui.contains(
             "export function workspacePanel(tokens, title, content, accessory = null, options = {})",
-        ) && ui.contains(".child(label(tokens, title, 13).font_weight(700))")
-            && ui.contains(".when(Boolean(note), (element) => element.child(muted(tokens, note).truncate()))")
-            && ui.contains(".when(accessory, (element) => element.child(accessory))")
-            && ui.contains(
-                ".child(grow ? content.border(0).flex_1().min_h(0) : content.border(0).flex_none())",
-            )
+        ) && ui.contains(".title(title)")
+            && ui.contains("if (note) built.note(note);")
+            && ui.contains("if (accessory) built.accessory(accessory);")
+            && ui.contains(".content(content.border(0))")
+            && ui.contains(".grow(grow)")
             && !ui.contains("drag_tab("),
         "plain Panel must contain one title region and one content region"
     );
@@ -817,5 +900,66 @@ fn release_build_resolves_packaged_application_resources() {
     assert!(
         override_position < development_position,
         "the source checkout may only be the final development fallback"
+    );
+}
+
+/// The shell is not a browser, and reaching for a name it does not have is a
+/// `ReferenceError` rather than a feature that quietly does nothing.
+///
+/// Three of these shipped in one afternoon. `TextDecoder` was caught before it
+/// ran; `WebSocket` unwound the whole connect path and put "WebSocket is not
+/// defined" over a window whose only problem was a missing import; `setTimeout`
+/// turned every reconnect into a reconnect that also failed. Each was found by
+/// running the application and reading a warning, which is one at a time and
+/// only for the paths that happened to be taken.
+///
+/// So the class is named here rather than its members being fixed one by one.
+/// The shell offers each of these under a name of its own -- `websocket` for
+/// the transport, `cx.timer` for delays, `decodeUtf8` in `protocol.js` for
+/// bytes -- and a module that wants one imports it.
+#[test]
+fn the_application_uses_only_names_this_runtime_has() {
+    const ABSENT: [&str; 6] = [
+        "setTimeout",
+        "setInterval",
+        "clearTimeout",
+        "clearInterval",
+        "TextDecoder",
+        "TextEncoder",
+    ];
+    let mut offences = Vec::new();
+    for entry in fs::read_dir(app_dir()).expect("application directory") {
+        let path = entry.expect("application entry").path();
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_owned();
+        // Test probes drive the modules they exercise with stand-ins of their
+        // own, and a stand-in is allowed to be whatever the module will accept.
+        if !name.ends_with(".js") || name.ends_with(".test.js") {
+            continue;
+        }
+        let source = fs::read_to_string(&path).expect("application module");
+        for absent in ABSENT {
+            // A mention in prose is how a module explains why it does not use
+            // one. What must not appear is a call.
+            if source.contains(&format!("{absent}(")) {
+                offences.push(format!("{name} calls {absent}"));
+            }
+        }
+        // `WebSocket` is a module here. Named in prose is how these modules
+        // describe the protocol they speak; what must not appear without the
+        // import is a use of the global that is not there.
+        let uses_transport = source.contains("?? WebSocket")
+            || source.contains("new WebSocket")
+            || source.contains("WebSocket.connect");
+        if uses_transport && !source.contains(r#"from "websocket""#) {
+            offences.push(format!("{name} uses WebSocket without importing it"));
+        }
+    }
+    assert!(
+        offences.is_empty(),
+        "the shell has none of these; import the shell's own: {offences:?}"
     );
 }

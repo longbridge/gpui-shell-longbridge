@@ -19,7 +19,7 @@ export const CHART_MODES = Object.freeze(
 );
 
 function modeFor(mode) {
-  return typeof mode === "string" ? CHART_MODES[mode] ?? null : null;
+  return typeof mode === "string" ? (CHART_MODES[mode] ?? null) : null;
 }
 
 function numeric(value) {
@@ -56,7 +56,8 @@ function geometryFor(candle) {
 }
 
 function normalizeCandle(candle) {
-  if (!candle || typeof candle !== "object" || timestampSeconds(candle.timestamp) === null) return null;
+  if (!candle || typeof candle !== "object" || timestampSeconds(candle.timestamp) === null)
+    return null;
   const geometry = geometryFor(candle);
   if (geometry === null) return null;
   return Object.freeze({
@@ -65,17 +66,33 @@ function normalizeCandle(candle) {
   });
 }
 
+/**
+ * The candles a mode keeps, oldest first.
+ *
+ * Written as one pass and a sort rather than `map().filter().sort().map()`.
+ * The chain built three intermediate arrays the size of the input and called
+ * `timestampSeconds` twice per comparison -- O(n log n) conversions of a value
+ * that does not change -- and this runs synchronously over a whole day's
+ * candles inside one job. QuickJS cuts a job off when it exceeds its interrupt
+ * budget, which surfaces as `interrupted` in a promise continuation a long way
+ * from here.
+ *
+ * The timestamp is resolved once per candle and the sort compares two numbers.
+ * The original index is the tiebreak, so candles sharing a timestamp keep the
+ * order the API sent them in.
+ */
 function normalizeCandles(candles, predicate) {
   if (!Array.isArray(candles)) return [];
-  return candles
-    .map((candle, index) => ({ candle: normalizeCandle(candle), index }))
-    .filter(({ candle }) => candle !== null && predicate(candle))
-    .sort(
-      (left, right) =>
-        timestampSeconds(left.candle.timestamp) - timestampSeconds(right.candle.timestamp) ||
-        left.index - right.index,
-    )
-    .map(({ candle }) => candle);
+  const kept = [];
+  for (let index = 0; index < candles.length; index += 1) {
+    const candle = normalizeCandle(candles[index]);
+    if (candle === null || !predicate(candle)) continue;
+    kept.push({ candle, index, at: timestampSeconds(candle.timestamp) ?? 0 });
+  }
+  kept.sort((left, right) => left.at - right.at || left.index - right.index);
+  const ordered = new Array(kept.length);
+  for (let index = 0; index < kept.length; index += 1) ordered[index] = kept[index].candle;
+  return ordered;
 }
 
 /** A cache identity that changes with every chart request input. */
@@ -199,7 +216,15 @@ export function mergeLiveChartQuote(symbol, mode, candles, quote) {
   if (quoteTimestamp === null || numeric(quote.lastDone) === null) return candles;
 
   const last = candles.at(-1);
-  if (!last) return [appendCandle(quote, selected.period === "1D" ? quoteTimestamp : bucket(quoteTimestamp, PERIOD_SECONDS[selected.period]))];
+  if (!last)
+    return [
+      appendCandle(
+        quote,
+        selected.period === "1D"
+          ? quoteTimestamp
+          : bucket(quoteTimestamp, PERIOD_SECONDS[selected.period]),
+      ),
+    ];
 
   if (selected.period === "1D") {
     const activeDay = marketDay(quote);

@@ -9,6 +9,7 @@
         "secondary": "#e6e4d9", "secondary_foreground": "#100f0f",
         "muted": "#e6e4d9", "muted_foreground": "#575653",
         "accent": "#dad8ce", "accent_foreground": "#100f0f",
+        "selection": "#cdcabb",
         "destructive": "#942822", "destructive_foreground": "#fffcf0",
         "border": "#cecdc3", "input": "#cecdc3", "ring": "#1a4f8c"
       },
@@ -26,6 +27,7 @@
         "secondary": "#24283b", "secondary_foreground": "#c0caf5",
         "muted": "#24283b", "muted_foreground": "#8a93b8",
         "accent": "#292e42", "accent_foreground": "#c0caf5",
+        "selection": "#333952",
         "destructive": "#f7768e", "destructive_foreground": "#13141c",
         "border": "#414868", "input": "#414868", "ring": "#7aa2f7"
       },

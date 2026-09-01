@@ -89,6 +89,42 @@ fn load_test_view(
     (root, view)
 }
 
+/// The modifier this application binds its commands to.
+///
+/// The keymap picks it from `process.platform`: `cmd` on macOS, `ctrl`
+/// everywhere else. A test that hard-codes one of them passes on the platform
+/// it was written on and, on the other, presses a chord nothing is bound to --
+/// which looks like a broken keymap and is a broken test.
+const PRIMARY_MODIFIER: &str = if cfg!(target_os = "macos") {
+    "cmd"
+} else {
+    "ctrl"
+};
+
+/// The same modifier as `chordLabel` writes it for a reader.
+const PRIMARY_MODIFIER_LABEL: &str = if cfg!(target_os = "macos") {
+    "Cmd"
+} else {
+    "Ctrl"
+};
+
+/// The same modifier as a held key rather than as part of a chord. GPUI names
+/// the macOS one `platform`, and the workspace reads whichever its own
+/// platform means.
+fn primary_modifiers() -> gpui::Modifiers {
+    if cfg!(target_os = "macos") {
+        gpui::Modifiers {
+            platform: true,
+            ..Default::default()
+        }
+    } else {
+        gpui::Modifiers {
+            control: true,
+            ..Default::default()
+        }
+    }
+}
+
 #[gpui::test]
 fn omarchy_application_follows_system_appearance(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
@@ -97,6 +133,17 @@ fn omarchy_application_follows_system_appearance(cx: &mut TestAppContext) {
     let main_path = fixture.root.join("main.js");
     let main = fs::read_to_string(&main_path)
         .expect("copied main.js")
+        // What this test is about is an Omarchy desktop, and the application
+        // asks `process.platform` three times before it will read one: the two
+        // theme readers and the sync itself all return early off it. Pinning
+        // the import is one replacement covering all three -- otherwise the
+        // whole path short-circuits on any host that is not Linux and the test
+        // passes its first assertion, fails its second, and exercises none of
+        // the behaviour it names.
+        .replace(
+            "import { exit, platform } from \"process\";",
+            "import { exit } from \"process\";\nconst platform = \"linux\";",
+        )
         .replace(
             "this.syncSystemTheme(cx);",
             "this.statusBarVisible = true;\n      this.syncSystemTheme(cx);",
@@ -234,6 +281,62 @@ fn quote_stream_vectors_run_against_this_application(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
     let fixture = ApplicationFixture::new("quote_stream.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let (_root, view) = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+
+    context.run_until_parked();
+    let draw_view = view.clone();
+    context.draw(
+        gpui::Point::default(),
+        gpui::size(gpui::px(400.), gpui::px(300.)),
+        move |_, _| draw_view.into_any_element(),
+    );
+    let rendered = context.update(|_, cx| {
+        view.read(cx)
+            .snapshot()
+            .map(gpui_shell::RenderSnapshot::debug_tree)
+            .unwrap_or_default()
+    });
+    assert!(rendered.contains("text \"ok\""), "{rendered}");
+}
+
+/// An order the gateway pushed must survive the read that has not caught up.
+///
+/// Longbridge accepts an order before this account's list reports one, so the
+/// first read after a write comes back without it. A list rebuilt from that
+/// read alone drops the order that was just placed -- it appears, and then it
+/// vanishes.
+#[gpui::test]
+fn a_pushed_order_outlives_the_read_that_is_behind_it(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("order_push.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let (_root, view) = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+
+    context.run_until_parked();
+    let draw_view = view.clone();
+    context.draw(
+        gpui::Point::default(),
+        gpui::size(gpui::px(600.), gpui::px(400.)),
+        move |_, _| draw_view.into_any_element(),
+    );
+    let rendered = context.update(|_, cx| {
+        view.read(cx)
+            .snapshot()
+            .map(gpui_shell::RenderSnapshot::debug_tree)
+            .unwrap_or_default()
+    });
+    assert!(rendered.contains("text \"ok\""), "{rendered}");
+}
+
+#[gpui::test]
+fn trade_stream_vectors_run_against_this_application(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("trade_stream.test.js");
     let window = cx.add_window(|_, _| Empty);
     let mut context = VisualTestContext::from_window(*window.deref(), cx);
     let (_root, view) = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
@@ -446,6 +549,16 @@ fn orders_page_stacks_today_over_history_as_one_filtered_reading(cx: &mut TestAp
             .unwrap_or_default()
     });
 
+    // The open sheet carries what can still be done to that order, so a reader
+    // with an order in front of them does not have to go back and right-click
+    // its row. This one is filled, so there is nothing left to do to it and
+    // the sheet offers nothing -- a control drawn and disabled would be a row
+    // of grey saying what the status already says.
+    assert!(
+        !rendered.contains("Modify") && !rendered.contains("Withdraw"),
+        "a finished order must be offered no actions:\n{rendered}"
+    );
+
     // Two panels, Today first: what is working now is the shorter list and the
     // one read first, and the record underneath it is the one worth scrolling.
     assert!(
@@ -579,8 +692,7 @@ fn orders_page_stacks_today_over_history_as_one_filtered_reading(cx: &mut TestAp
         rendered.contains(r#"Button "order-detail-close""#)
             && rendered.contains(r#"Button "order-detail-quote""#)
             && rendered.contains(r#"svg "assets/x.svg" .size[Number(11.0)]"#)
-            && rendered
-                .contains(r#"svg "assets/chart-line.svg" .size[Number(11.0)]"#)
+            && rendered.contains(r#"svg "assets/chart-line.svg" .size[Number(11.0)]"#)
             && rendered.contains(r#".flex_none .size[Number(24.0)]"#),
         "the sheet carries its own way out, and the way through to the quote:\n{rendered}"
     );
@@ -716,6 +828,293 @@ fn order_vectors_run_against_this_application(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
     let fixture = ApplicationFixture::new("orders.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let _loaded = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+}
+
+/// A dialog the shell dismissed by itself must be openable again.
+///
+/// `DialogOptions` has no close callback, so `escape_dismissable` and
+/// `backdrop_dismissable` leave the application's own "is it open?" field
+/// saying yes about a surface that is gone. Every `open...` guard reads that
+/// field, so the ticket could otherwise be opened exactly once per run.
+#[gpui::test]
+fn a_dialog_dismissed_by_the_shell_can_be_opened_again(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("dialog_reopen.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let (_root, view) = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+    context.run_until_parked();
+    let draw_view = view.clone();
+    context.draw(
+        gpui::Point::default(),
+        gpui::size(gpui::px(1000.), gpui::px(760.)),
+        move |_, _| draw_view.into_any_element(),
+    );
+    let rendered = context.update(|_, cx| {
+        view.read(cx)
+            .snapshot()
+            .map(gpui_shell::RenderSnapshot::debug_tree)
+            .unwrap_or_default()
+    });
+    assert!(
+        rendered.contains("dialogs reopen after the shell dismisses them"),
+        "{rendered}"
+    );
+}
+
+/// The ticket can be filled in without a pointer.
+///
+/// This application is driven from the keyboard and the ticket is reached by
+/// one, so a form that can only be completed by clicking is a form half of it
+/// cannot use.
+#[gpui::test]
+fn the_order_ticket_can_be_filled_in_from_the_keyboard(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("ticket_keyboard.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let (_root, view) = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+    context.run_until_parked();
+    let draw_view = view.clone();
+    context.draw(
+        gpui::Point::default(),
+        gpui::size(gpui::px(1000.), gpui::px(760.)),
+        move |_, _| draw_view.into_any_element(),
+    );
+    let rendered = context.update(|_, cx| {
+        view.read(cx)
+            .snapshot()
+            .map(gpui_shell::RenderSnapshot::debug_tree)
+            .unwrap_or_default()
+    });
+    assert!(
+        rendered.contains("the ticket is fillable from the keyboard"),
+        "{rendered}"
+    );
+    // Every control the ticket is filled in with is walked in the order it is
+    // read in, and that order is the order it is built in.
+    //
+    // Nothing here names an index. A base `Tab` owns that part of its own
+    // focus and refuses one written onto it, so the segmented runs could not
+    // be numbered even if the rest were -- and an explicit index is walked
+    // after everything that has none, so numbering the fields around them
+    // would have walked the fields last and the choices first.
+    let mut at = 0usize;
+    // Labels and controls together, so this says what is read as well as what
+    // is focused -- including that the sizing switch sits in the caption row
+    // of the field it changes, and so is reached before that field rather
+    // than after it.
+    for marker in [
+        "Type",
+        "ticket-type-LO",
+        "Price",
+        "USD",
+        "Quantity",
+        "Use amount",
+        "shares",
+        "Valid",
+        "ticket-tif-Day",
+        "Sessions",
+        "ticket-rth-rth",
+        "Cancel",
+        "Review",
+    ] {
+        let found = rendered[at..].find(marker).unwrap_or_else(|| {
+            panic!("the ticket must offer {marker}, after what precedes it:\n{rendered}")
+        });
+        at += found + marker.len();
+    }
+    let stops: Vec<usize> = rendered
+        .match_indices(":tab_index[Number(")
+        .map(|(at, _)| {
+            rendered[at..]
+                .split_once('(')
+                .and_then(|(_, rest)| rest.split_once('.'))
+                .and_then(|(digits, _)| digits.parse().ok())
+                .unwrap_or(0)
+        })
+        .filter(|index| *index > 0)
+        .collect();
+    // Whatever the library does inside one run of choices is its own business;
+    // what must not appear is an index this application chose, which is any
+    // number bigger than a run is long.
+    assert!(
+        stops.iter().all(|index| *index <= 2),
+        "the ticket must not name tab indices of its own: {stops:?}\n{rendered}"
+    );
+}
+
+#[gpui::test]
+fn the_order_ticket_states_what_it_will_send(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("trade_ui.test.js");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let (_root, view) = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
+    context.run_until_parked();
+    let draw_view = view.clone();
+    context.draw(
+        gpui::Point::default(),
+        gpui::size(gpui::px(1000.), gpui::px(760.)),
+        move |_, _| draw_view.into_any_element(),
+    );
+    let rendered = context.update(|_, cx| {
+        view.read(cx)
+            .snapshot()
+            .map(gpui_shell::RenderSnapshot::debug_tree)
+            .unwrap_or_default()
+    });
+
+    // The form names every field that decides what is sent, and groups them by
+    // the question they answer: what is being traded, and how long the order
+    // stands. Six evenly spaced rows would say those are six equal decisions.
+    assert!(
+        rendered.contains(r#":id[Str("order-ticket-dialog")]"#)
+            && rendered.contains("Type")
+            && rendered.contains("Price")
+            && rendered.contains("Quantity")
+            && rendered.contains("Valid"),
+        "the ticket must state its fields:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("ORDER") && rendered.contains("DURATION"),
+        "the ticket's fields must be grouped by the question they answer:\n{rendered}"
+    );
+    assert!(
+        rendered.find("ORDER") < rendered.find("DURATION"),
+        "what is traded comes before how long it stands:\n{rendered}"
+    );
+    // The unit belongs to the value, so it is inside the field rather than
+    // hung beside it -- `TextField.suffix`, drawn over the field's own right
+    // edge with the padding to keep the digits clear of it.
+    assert!(
+        rendered.contains("text \"USD\"") && rendered.contains("text \"shares\""),
+        "a field whose value is in something must carry that unit:\n{rendered}"
+    );
+    // A US instrument can be traded outside regular hours, so the choice is
+    // offered rather than decided silently.
+    assert!(
+        rendered.contains("Sessions") && rendered.contains("Pre/post"),
+        "a US ticket must offer its sessions:\n{rendered}"
+    );
+    // Selling states the position it may not exceed.
+    assert!(
+        rendered.contains("25 available to sell"),
+        "a sale must state what is available:\n{rendered}"
+    );
+
+    // The confirmation restates the order, including what it is expected to
+    // cost -- grouped in thousands, which `Intl` does not do in this runtime.
+    assert!(
+        rendered.contains(r#":id[Str("order-confirm-summary")]"#)
+            && rendered.contains("1,885.00 USD"),
+        "the confirmation must state the estimate:\n{rendered}"
+    );
+    // A market order has no price and no estimate, and says so rather than
+    // showing a zero it does not promise.
+    assert!(
+        rendered.contains("Market price") && rendered.contains("text \"--\""),
+        "a market order must not claim an estimate:\n{rendered}"
+    );
+    // Selling more than is held is refused in the form, before anything is
+    // sent -- the ticket stays on its fields rather than reaching a
+    // confirmation.
+    assert!(
+        rendered.contains("This account holds 25."),
+        "an oversized sale must be refused locally:\n{rendered}"
+    );
+    // Sizing by amount. 1500 USD at 214.07 is 7 shares -- rounded down, since
+    // a share is whole -- and the ticket previews that while the amount is
+    // still editable rather than only at the confirmation.
+    // One control naming the mode it switches to, beside a field whose label
+    // already says which mode is in force -- not two buttons competing for a
+    // selected state in a caption row.
+    assert!(
+        rendered.contains("Use shares") && rendered.contains("Amount"),
+        "a purchase must offer to be sized by amount:\n{rendered}"
+    );
+    // 1500 USD at 214.07 in the regular session, where fractional shares
+    // match: the division to four places rather than the seven whole shares
+    // that would leave the budget an odd hair short.
+    assert!(
+        rendered.contains("Buys 7.0071 shares"),
+        "the form must preview what the amount buys:\n{rendered}"
+    );
+    // The confirmation shows the sum asked for beside what it actually buys.
+    // They differ by the remainder, and showing only the budget would claim
+    // the whole of it was spent.
+    assert!(
+        rendered.contains("1,500.00 USD") && rendered.contains("1,500.00 USD"),
+        "the confirmation must show the budget and its cost:\n{rendered}"
+    );
+    // A market order sized by amount has no price of its own, so it names what
+    // it divided by -- a share count nobody can check is an assertion.
+    assert!(
+        rendered.contains("Sized at") && rendered.contains("214.07 USD last"),
+        "a market order sized by amount must name its basis:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("Not enough for one share."),
+        "an amount below one share must be refused locally:\n{rendered}"
+    );
+
+    // A Hong Kong ticket states its board lot up front, and refuses a part lot
+    // locally -- the exchange would refuse it anyway, a round trip later.
+    assert!(
+        rendered.contains("In multiples of 100"),
+        "a board lot must be stated before it is typed against:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("Board lot is 100."),
+        "a part lot must be refused locally:\n{rendered}"
+    );
+
+    // Withdrawing confirms which order, and offers no fields.
+    assert!(
+        rendered.contains("This order will be withdrawn.")
+            && rendered.contains("Order 884955210001"),
+        "a withdrawal must name its order:\n{rendered}"
+    );
+
+    // Buying and selling are told apart by colour, not only by the word, in
+    // every menu that offers them. The probe's theme draws every colour as
+    // #000000, so what is asserted is that a tone was applied at all -- the
+    // two menu items carry an explicit text colour where a plain item, `Copy
+    // symbol`, does not.
+    for menu in ["Buy", "Sell"] {
+        assert!(
+            rendered.contains(menu),
+            "the menus must offer {menu}:\n{rendered}"
+        );
+    }
+    // A holding is not necessarily on a watchlist, so its menu does not offer
+    // to take it off one.
+    // Counting the drawn caption rather than every occurrence of the word: an
+    // Omarchy UI menu item also carries it as an accessibility label, and an
+    // assertion that counts both breaks whenever the library adds a mention.
+    assert_eq!(
+        rendered.matches(r#"text "Remove""#).count(),
+        1,
+        "only the watchlist menu removes from a watchlist:\n{rendered}"
+    );
+    // An order's menu acts on the order, not on the instrument.
+    assert!(
+        rendered.contains("Modify order\u{2026}") && rendered.contains("Withdraw order"),
+        "an order menu must offer to change and withdraw it:\n{rendered}"
+    );
+}
+
+#[gpui::test]
+fn trade_vectors_run_against_this_application(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let runtime = cx.update(ShellRuntime::new).expect("runtime");
+    let fixture = ApplicationFixture::new("trade.test.js");
     let window = cx.add_window(|_, _| Empty);
     let mut context = VisualTestContext::from_window(*window.deref(), cx);
     let _loaded = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
@@ -936,7 +1335,9 @@ fn authenticated_workspace_materializes_a_scrollable_watchlist(cx: &mut TestAppC
             && rendered.contains(r#":id[Str("quote-details-panel")]"#)
             && rendered.contains(r#":id[Str("chart-panel")]"#)
             && rendered.contains(r#":id[Str("market-detail-panel")]"#)
-            && rendered.contains("Tabs \"chart-mode-tabs\"")
+            // The interval run is the library's `Tabs` now; the id is the
+            // caller's and the component appends each choice's value to it.
+            && rendered.contains("Tabs \"chart-mode\"")
             && !rendered.contains("dock_area"),
         "the responsive page must materialize four plain Panels in priority order: {rendered}"
     );
@@ -1474,7 +1875,16 @@ fn portfolio_renders_pnl_summary_and_position_columns(cx: &mut TestAppContext) {
     });
     for expected in [
         "Portfolio summary",
+        // What the account holds, beside what of it is the holder's. The
+        // endpoint reports only the second -- `net_assets` is net of what was
+        // borrowed -- and on a margin account the two are different questions:
+        // the probe's holding is worth 1,880 against 5,000 of cash, and its
+        // `net_assets` says 25,000. The total is added up here, so it must be
+        // the sum of the positions and the cash and not the endpoint's figure.
+        "Total assets",
+        "6880.00 USD",
         "Net assets",
+        "25000.00 USD",
         "Today's P/L",
         "Total P/L",
         "Asset allocation",
@@ -1994,7 +2404,7 @@ fn a_bound_chord_reaches_the_action_that_switches_page(cx: &mut TestAppContext) 
         "the application must inherit the platform font without an override:\n{before}"
     );
 
-    context.simulate_keystrokes("ctrl-k");
+    context.simulate_keystrokes(&format!("{PRIMARY_MODIFIER}-k"));
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));
     let shortcuts = tree(&mut context);
@@ -2003,7 +2413,7 @@ fn a_bound_chord_reaches_the_action_that_switches_page(cx: &mut TestAppContext) 
             && shortcuts.contains(r#":key_context[Str("ShortcutHelp")]"#)
             && shortcuts.contains(":track_focus[")
             && shortcuts.contains("Keyboard shortcuts")
-            && shortcuts.contains("Ctrl + K")
+            && shortcuts.contains(&format!("{PRIMARY_MODIFIER_LABEL} + K"))
             && shortcuts.contains("Arrow Up / K")
             && shortcuts.contains("Home / G G")
             && !shortcuts.contains("Shift + F10"),
@@ -2018,7 +2428,7 @@ fn a_bound_chord_reaches_the_action_that_switches_page(cx: &mut TestAppContext) 
         "escape must close keyboard help"
     );
 
-    context.simulate_keystrokes("ctrl-2");
+    context.simulate_keystrokes(&format!("{PRIMARY_MODIFIER}-2"));
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));
     let after = tree(&mut context);
@@ -2030,7 +2440,10 @@ fn a_bound_chord_reaches_the_action_that_switches_page(cx: &mut TestAppContext) 
     // a key press, so the footer's readout stays empty for it. An unbound one
     // reaches `on_key_down`, and arrives already unparsed as the whole chord —
     // spelled `cmd` on every platform, this one included.
-    assert!(!after.contains("text \"ctrl-2\""), "{after}");
+    assert!(
+        !after.contains(&format!("text \"{PRIMARY_MODIFIER}-2\"")),
+        "{after}"
+    );
 
     context.simulate_keystrokes("end enter");
     context.run_until_parked();
@@ -2041,7 +2454,7 @@ fn a_bound_chord_reaches_the_action_that_switches_page(cx: &mut TestAppContext) 
         "Holdings must support last-row selection and keyboard activation:\n{holding_opened}"
     );
 
-    context.simulate_keystrokes("ctrl-3");
+    context.simulate_keystrokes(&format!("{PRIMARY_MODIFIER}-3"));
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));
     let orders = tree(&mut context);
@@ -2092,7 +2505,7 @@ fn a_bound_chord_reaches_the_action_that_switches_page(cx: &mut TestAppContext) 
         "an unbound chord must reach on_key_down:\n{typed}"
     );
 
-    context.simulate_keystrokes("ctrl-1");
+    context.simulate_keystrokes(&format!("{PRIMARY_MODIFIER}-1"));
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));
     let back = tree(&mut context);
@@ -2180,10 +2593,7 @@ fn modifier_hold_reveals_workspace_tab_shortcuts_until_release(cx: &mut TestAppC
     let before = tree(&mut context);
     assert!(!before.contains("page-watchlist-shortcut"), "{before}");
 
-    context.simulate_modifiers_change(gpui::Modifiers {
-        control: true,
-        ..Default::default()
-    });
+    context.simulate_modifiers_change(primary_modifiers());
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));
     let held = tree(&mut context);
@@ -2191,7 +2601,7 @@ fn modifier_hold_reveals_workspace_tab_shortcuts_until_release(cx: &mut TestAppC
         assert!(
             held.contains(&format!("page-{page}-shortcut"))
                 && held.contains(&format!("text \"{number}\"")),
-            "holding Ctrl must reveal {number} on {page}:\n{held}"
+            "holding the platform modifier must reveal {number} on {page}:\n{held}"
         );
     }
 

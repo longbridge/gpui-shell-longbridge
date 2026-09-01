@@ -91,6 +91,44 @@ export function allocationInUsd(holdings, quotes, rates = new Map([["USD", 1]]))
   };
 }
 
+/**
+ * What the account is worth, beside what of it is actually the holder's.
+ *
+ * `/v1/asset/account` reports `net_assets`, and `net_assets` is what is left
+ * once what was borrowed to hold the positions is taken off. On a margin
+ * account those are two different numbers, and they can differ by an order of
+ * magnitude -- positions of eighty-nine thousand against three thousand of
+ * equity -- so showing the second one where a reader looks for the first is
+ * not a rounding error, it is a different question answered.
+ *
+ * The endpoint does not report the first one. So it is added up here, from
+ * the same priced positions the allocation ring is drawn from, plus the cash
+ * beside them.
+ *
+ * `partial` when a position could not be priced, because then the total is an
+ * understatement that looks like a number rather than like a gap. What it is
+ * missing is already named on the allocation card, which counts the unpriced.
+ *
+ * @param {{ total: number, unpriced: readonly unknown[] }} allocation
+ * @param {unknown} cash the account's total cash, in the same currency
+ */
+export function accountTotals(allocation, cash) {
+  const positions = number(allocation.total);
+  const held = number(cash);
+  return {
+    currency: "USD",
+    positions,
+    cash: held,
+    total: positions + held,
+    partial: allocation.unpriced.length > 0,
+  };
+}
+
+/** A monetary amount as this application writes one: two places, no sign. */
+export function amount(value) {
+  return number(value).toFixed(2);
+}
+
 export function portfolioPresentation(holdings, quotes, rates = new Map([["USD", 1]])) {
   const quotesBySymbol = indexQuotes(quotes);
   const summary = { currency: "USD", todayPnlValue: 0, totalPnlValue: 0 };

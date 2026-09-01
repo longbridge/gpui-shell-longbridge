@@ -1,5 +1,6 @@
 import { View } from "gpui";
 import {
+  accountTotals,
   allocationInUsd,
   allocationSliceAt,
   foldAllocationSlices,
@@ -209,5 +210,25 @@ const ringCases = [
   ],
 ];
 for (const [held, message] of ringCases) if (!held) throw new Error(message);
+
+// What the account holds is the sum of its positions and its cash, and the
+// account endpoint does not report it: `net_assets` is net of what was
+// borrowed to hold those positions. On the account this was found on, the two
+// were 89,027 and 3,169 -- an order of magnitude apart -- so the endpoint's
+// number in the place a reader looks for the total is a different question
+// answered, not a small error.
+const totals = accountTotals(allocation, "1.52");
+if (totals.currency !== "USD" || Math.abs(totals.total - 5281.52) > 0.001)
+  throw new Error("total assets are the positions plus the cash beside them");
+if (Math.abs(totals.positions - 5280) > 0.001 || Math.abs(totals.cash - 1.52) > 0.001)
+  throw new Error("and each half stays available on its own");
+// The fixture holds a Singapore position with no quote, so this total is short
+// by whatever that is worth. A short total written as a plain number reads as
+// a fact, so it says it is short.
+if (!totals.partial) throw new Error("a total missing a position must say so");
+if (accountTotals({ total: 10, unpriced: [] }, "5").partial)
+  throw new Error("and must not say so when it is missing nothing");
+if (accountTotals({ total: 10, unpriced: [] }, "--").total !== 10)
+  throw new Error("cash the endpoint did not report is not a number to add");
 
 export default class PortfolioVectorProbe extends View {}

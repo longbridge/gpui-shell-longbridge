@@ -207,6 +207,60 @@ export function normalizeOrders(payload) {
 }
 
 /**
+ * One order as the push channel spells it.
+ *
+ * The trade gateway and the order endpoints describe the same order in
+ * different words: what the list calls `quantity` and `price`, the push calls
+ * `submitted_quantity` and `submitted_price`. Renamed here rather than in
+ * `normalizeOrder`, so the row shape stays defined by one vocabulary and the
+ * translation is visible in one place.
+ *
+ * Fields the push does not carry -- `last_done`, and the market's own name for
+ * the instrument on some venues -- are simply absent, and normalize to the same
+ * `--` an endpoint's empty string does.
+ *
+ * @param {Record<string, unknown>} pushed
+ */
+export function normalizePushedOrder(pushed) {
+  return normalizeOrder({
+    ...pushed,
+    quantity: pushed.quantity ?? pushed.submitted_quantity,
+    price: pushed.price ?? pushed.submitted_price,
+  });
+}
+
+/**
+ * The list with one order's news applied: replaced where it is, inserted where
+ * it is not.
+ *
+ * Insertion keeps the list's own ordering -- newest submission first -- rather
+ * than putting the news at the top, because a replaced order keeps the
+ * submission time it has always had and would otherwise jump the queue every
+ * time it filled a little further.
+ *
+ * The list is returned unchanged when nothing about the order differs, so a
+ * repeated push -- the gateway sends one per state change, and some states
+ * repeat -- does not cost a repaint.
+ *
+ * @param {readonly LongbridgeOrderRow[]} orders
+ * @param {LongbridgeOrderRow} order
+ */
+export function mergeOrder(orders, order) {
+  const index = orders.findIndex((candidate) => candidate.orderId === order.orderId);
+  if (index >= 0) {
+    const existing = orders[index];
+    if (Object.keys(order).every((key) => existing[key] === order[key])) return orders;
+    const merged = orders.slice();
+    merged[index] = order;
+    return Object.freeze(merged);
+  }
+  const at = orders.findIndex((candidate) => candidate.submittedAt < order.submittedAt);
+  const merged = orders.slice();
+  merged.splice(at >= 0 ? at : merged.length, 0, order);
+  return Object.freeze(merged);
+}
+
+/**
  * The window the History request asks for, as the endpoint spells it: whole
  * unix seconds, start before end.
  *

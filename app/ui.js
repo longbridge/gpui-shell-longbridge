@@ -39,7 +39,7 @@ import {
   DefinitionList,
   EmptyState,
   ExternalLink,
-  FilterField,
+  TextField,
   GlyphButton,
   IconButton,
   Keycap,
@@ -56,6 +56,7 @@ import {
   Surface,
   TableHeaderRow,
   TableRow,
+  Tabs,
   Toolbar,
   tableHeaderHeight,
 } from "omarchy-ui";
@@ -144,18 +145,20 @@ export const panel = (tokens) => new Surface().build(context(tokens));
 export function action(tokens, id, caption, onClick, options = {}) {
   const { variant = "default", disabled = false, selected = false, quiet = false } = options;
   const ghost = variant === "ghost" || quiet;
-  return new Button(id)
-    .label(caption)
-    .accent(variant === "primary")
-    .danger(variant === "destructive")
-    // Every variant draws a border except the quiet one, which is the whole of
-    // what makes it quiet: a control that grows a border on hover is a control
-    // that resizes on hover, and its neighbours move with it.
-    .bordered(!ghost)
-    .selected(selected)
-    .disabled(disabled)
-    .onClick(onClick)
-    .build(context(tokens));
+  return (
+    new Button(id)
+      .label(caption)
+      .accent(variant === "primary")
+      .danger(variant === "destructive")
+      // Every variant draws a border except the quiet one, which is the whole of
+      // what makes it quiet: a control that grows a border on hover is a control
+      // that resizes on hover, and its neighbours move with it.
+      .bordered(!ghost)
+      .selected(selected)
+      .disabled(disabled)
+      .onClick(onClick)
+      .build(context(tokens))
+  );
 }
 
 /**
@@ -217,13 +220,7 @@ export function connectionPill(tokens, value) {
   const status = statusColors(tokens);
   return new Badge("connection-state")
     .label(
-      active
-        ? "Live"
-        : waiting
-          ? "Connecting"
-          : value === "error"
-            ? "Needs attention"
-            : "Offline",
+      active ? "Live" : waiting ? "Connecting" : value === "error" ? "Needs attention" : "Offline",
     )
     .dot()
     .quiet(waiting)
@@ -322,16 +319,26 @@ export function watchlistHeader(tokens, compact = false) {
  * @param {string} id
  * @param {string} caption
  * @param {(event: import("gpui").ClickEvent, cx: import("gpui").Context) => void} onClick
- * @param {{ detail?: string, destructive?: boolean, disabled?: boolean }} [options]
+ * `tone` is for a row whose colour is a *reading* rather than an interface
+ * role -- buying and selling take the same two colours a rising and a falling
+ * number take. `danger` stays the library's own word for the one role that is
+ * one, so the two cannot be confused at a call site.
+ *
+ * @param {{ detail?: string, destructive?: boolean, disabled?: boolean, tone?: import("gpui").Color }} [options]
  */
 export function menuItem(tokens, id, caption, onClick, options = {}) {
-  const { detail = "", destructive = false, disabled = false } = options;
+  const { detail = "", destructive = false, disabled = false, tone = null } = options;
   const item = new MenuItem(id)
     .label(caption)
     .danger(destructive)
     .disabled(disabled)
     .onClick(onClick);
   if (detail) item.detail(detail);
+  // `tone` belongs on the component: `MenuItem` resolves one foreground and
+  // hands it to the label, the icon and the detail individually, so a colour
+  // applied to the built element reaches the row and none of its text -- a
+  // coloured row of theme-coloured words, which is what Buy and Sell were.
+  if (tone) item.tone(tone);
   return item.build(context(tokens));
 }
 
@@ -370,7 +377,28 @@ export function popoverSurface(tokens, id, options = {}) {
  * @param {number} [width]
  */
 export function filterInput(tokens, state, width = 180) {
-  return new FilterField().state(state).width(width).build(context(tokens));
+  return new TextField().state(state).width(width).build(context(tokens));
+}
+
+/**
+ * A field whose value is in something: a price in a currency, a size in
+ * shares.
+ *
+ * The unit goes to the field rather than beside it, because it belongs to the
+ * value. Beside it, a reader has to work out whether the word is part of this
+ * control or the label of the next one, and the answer moves with the width of
+ * the column they are in.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {import("gpui-base").InputState} state
+ * @param {{ unit?: string, width?: number }} [options]
+ */
+export function valueField(tokens, state, options = {}) {
+  const { unit = "", width } = options;
+  const field = new TextField().state(state);
+  if (unit) field.suffix(unit);
+  if (width !== undefined) field.width(width);
+  return field.build(context(tokens));
 }
 
 /**
@@ -790,9 +818,7 @@ export function quoteDetail(tokens, quote, now = Date.now(), pulseOpacity = 1, d
             .flex_1()
             .min_w(0)
             .gap(style().spacing.xxs)
-            .child(
-              new Label(String(quote.name)).size("heading").strong().truncate().build(cx),
-            )
+            .child(new Label(String(quote.name)).size("heading").strong().truncate().build(cx))
             .child(
               muted(tokens, `${quote.market} · ${quote.symbol} · ${quote.currency}`).truncate(),
             ),
@@ -806,9 +832,7 @@ export function quoteDetail(tokens, quote, now = Date.now(), pulseOpacity = 1, d
             .opacity(quote.receivedAt ? pulseOpacity : 0.72)
             .transition("opacity", MOTION)
             .child(numeric(tokens, quote.last, "display"))
-            .child(
-              numeric(tokens, `${quote.change} · ${quote.changePercent}`).text_color(tone),
-            ),
+            .child(numeric(tokens, `${quote.change} · ${quote.changePercent}`).text_color(tone)),
         ),
     )
     .child(rule(tokens))
@@ -951,7 +975,10 @@ export function allocationChart(tokens, group, pointer = {}) {
                 .gap(style().spacing.xs)
                 .flex_1()
                 .child(
-                  div().w(7).h(7).bg(allocationColor(tokens, slice, index)),
+                  div()
+                    .w(7)
+                    .h(7)
+                    .bg(allocationColor(tokens, slice, index)),
                 )
                 .child(label(tokens, slice.name)),
             )
@@ -1056,11 +1083,19 @@ export function detailGrid(tokens, entries, id = "detail-grid") {
 }
 
 /**
+ * An account's readings, the largest first.
+ *
+ * Total assets leads because it is the number a reader looks for, and because
+ * it is the one that is *not* on the account endpoint -- `net_assets` is net
+ * of what was borrowed, and on a margin account the two differ by the debt.
+ * Both are shown: one says what is held, the other what of it is the holder's.
+ *
  * @param {import("gpui-base").Theme} tokens
  * @param {{ netAssets: string, totalCash: string, buyingPower: string, currency: string }} account
  * @param {{ currency: string, todayPnl: string, todayPnlValue: number, totalPnl: string, totalPnlValue: number }[]} summaries
+ * @param {{ total: number, currency: string, partial: boolean } | null} totals
  */
-export function portfolioSummary(tokens, account, summaries) {
+export function portfolioSummary(tokens, account, summaries, totals = null) {
   const cx = context(tokens);
   // Wide tiles: an account's readings are money with a currency after them,
   // which is two or three times the width of a price.
@@ -1079,6 +1114,20 @@ export function portfolioSummary(tokens, account, summaries) {
       ];
 
   return new MetricGrid("portfolio-summary")
+    .children(
+      totals
+        ? [
+            metric(
+              // A total missing a position is an understatement, and an
+              // understatement written as a plain number reads as a fact. The
+              // title is where that is said, because a Metric has nowhere else
+              // to say it; the allocation card below counts what is missing.
+              totals.partial ? "Total assets (partial)" : "Total assets",
+              `${totals.total.toFixed(2)} ${totals.currency}`,
+            ),
+          ]
+        : [],
+    )
     .child(metric("Net assets", `${account.netAssets} ${account.currency}`))
     .children(
       pnl.map((summary) =>
@@ -1155,10 +1204,7 @@ export function holdingRow(tokens, holding, selected = false, rowIndex = 0) {
         .child(muted(tokens, holding.costPrice))
         .build(cx),
     )
-    .cell(
-      { width: "20%", align: "end" },
-      numeric(tokens, holding.todayPnl).text_color(todayTone),
-    )
+    .cell({ width: "20%", align: "end" }, numeric(tokens, holding.todayPnl).text_color(todayTone))
     .cell(
       { align: "end" },
       new CellStack()
@@ -1212,11 +1258,23 @@ export function orderStatusTone(tokens, kind) {
   return tokens.muted_foreground;
 }
 
-/** @param {import("gpui-base").Theme} tokens @param {LongbridgeOrderRow} order */
-function orderSideTone(tokens, order) {
+/**
+ * The colour a direction is drawn in.
+ *
+ * Buying and selling are readings, not interface roles, so they take the same
+ * two colours a rising and a falling number take rather than the accent and
+ * the destructive token -- selling is not destruction. One function so a row,
+ * a menu item, a button and a ticket heading cannot drift apart on it.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {string} side `buy` or `sell`, in any case.
+ * @returns {import("gpui").Color}
+ */
+export function tradeSideTone(tokens, side) {
   const status = statusColors(tokens);
-  if (order.sideKind === "buy") return status.up;
-  if (order.sideKind === "sell") return status.down;
+  const kind = String(side ?? "").toLowerCase();
+  if (kind === "buy") return status.up;
+  if (kind === "sell") return status.down;
   return tokens.foreground;
 }
 
@@ -1235,7 +1293,7 @@ function orderSideTone(tokens, order) {
  */
 export function orderRow(tokens, order, rowIndex = 0, selected = false) {
   const cx = context(tokens);
-  const sideTone = orderSideTone(tokens, order);
+  const sideTone = tradeSideTone(tokens, order.sideKind);
   const seconds = order.submittedAt > 0 ? Math.trunc(order.submittedAt / 1_000) : null;
   const time = seconds === null ? "--" : formatMarketTime(order.symbol, seconds, true);
   const day = seconds === null ? "" : formatMarketDate(order.symbol, seconds);
@@ -1305,10 +1363,15 @@ export function orderRow(tokens, order, rowIndex = 0, selected = false) {
  *
  * @param {import("gpui-base").Theme} tokens
  * @param {LongbridgeOrderRow} order
+ * @param {{ onReplace?: Function | null, onCancel?: Function | null, canReplace?: boolean, canCancel?: boolean }} [actions]
  */
-export function orderDetail(tokens, order) {
+export function orderDetail(tokens, order, actions = {}) {
+  // Each action is offered or it is not; there is no third state. A control
+  // drawn and disabled is a row of grey saying nothing a reader can act on,
+  // and the status above it already says why it cannot.
+  const { onReplace = null, onCancel = null } = actions;
   const cx = context(tokens);
-  const sideTone = orderSideTone(tokens, order);
+  const sideTone = tradeSideTone(tokens, order.sideKind);
   const stamp = (value) => {
     if (!value) return "";
     const seconds = Math.trunc(value / 1_000);
@@ -1327,72 +1390,320 @@ export function orderDetail(tokens, order) {
       );
   const amount = (value) =>
     value === "--" || value === "" ? "" : order.currency ? `${value} ${order.currency}` : value;
-  return v_flex()
-    .id(`order-detail-${order.orderId}`)
-    .w_full()
-    .gap(style().spacing.md)
-    .px(style().spacing.md)
-    .py(style().spacing.md)
-    .child(
-      v_flex()
-        .gap(style().spacing.xxs)
-        .child(new Label(String(order.symbol)).size("title").strong().truncate().build(cx))
-        .child(muted(tokens, order.name).truncate())
-        .child(
-          h_flex()
-            .items_center()
-            .gap(style().spacing.xs)
-            .child(
-              label(tokens, order.statusLabel).text_color(
-                orderStatusTone(tokens, order.statusKind),
-              ),
-            )
-            .child(muted(tokens, "·"))
-            .child(label(tokens, order.sideLabel).text_color(sideTone))
-            .child(muted(tokens, order.type)),
-        ),
-    )
-    .child(rule(tokens))
-    .child(
-      section(`order-detail-${order.orderId}-order`, "Order", [
-        { title: "Time in force", value: order.timeInForce },
-        { title: "Currency", value: order.currency },
-        { title: "Outside RTH", value: order.outsideRth },
-        { title: "Channel", value: order.tag },
-      ]),
-    )
-    .child(
-      section(`order-detail-${order.orderId}-execution`, "Execution", [
-        { title: "Quantity", value: order.quantity },
-        { title: "Filled", value: order.executedQuantity },
-        { title: "Price", value: amount(order.price) },
-        { title: "Filled price", value: amount(order.executedPrice) },
-        { title: "Last done", value: amount(order.lastDone) },
-        { title: "Trigger price", value: amount(order.triggerPrice) },
-      ]),
-    )
-    .child(
-      section(`order-detail-${order.orderId}-timing`, "Timing", [
-        { title: "Submitted", value: stamp(order.submittedAt) },
-        { title: "Updated", value: stamp(order.updatedAt) },
-      ]),
-    )
-    .child(rule(tokens))
-    .child(
-      v_flex()
-        .gap(style().spacing.xxs)
-        .child(muted(tokens, "Order ID"))
-        .child(numeric(tokens, order.orderId).truncate()),
-    )
-    .when(Boolean(order.remark), (element) =>
-      element.child(
+  return (
+    v_flex()
+      .id(`order-detail-${order.orderId}`)
+      .w_full()
+      .gap(style().spacing.md)
+      .px(style().spacing.md)
+      .py(style().spacing.md)
+      .child(
         v_flex()
           .gap(style().spacing.xxs)
-          .child(muted(tokens, "Remark"))
-          .child(label(tokens, order.remark)),
-      ),
+          .child(new Label(String(order.symbol)).size("title").strong().truncate().build(cx))
+          .child(muted(tokens, order.name).truncate())
+          .child(
+            h_flex()
+              .items_center()
+              .gap(style().spacing.xs)
+              .child(
+                label(tokens, order.statusLabel).text_color(
+                  orderStatusTone(tokens, order.statusKind),
+                ),
+              )
+              .child(muted(tokens, "·"))
+              .child(label(tokens, order.sideLabel).text_color(sideTone))
+              .child(muted(tokens, order.type)),
+          ),
+      )
+      // What can still be done to this order, beside what it is, rather than
+      // only behind a right-click on the row that opened this sheet -- the sheet
+      // exists precisely so that row does not have to be found again. Both are
+      // drawn whatever the status and disabled where the status says they would
+      // only be refused, which is the choice the row menu makes and for the same
+      // reason: controls that come and go have to be re-read every time.
+      .when(Boolean(onReplace || onCancel), (element) =>
+        element.child(
+          h_flex()
+            .gap(style().spacing.sm)
+            .when(Boolean(onReplace), (row) =>
+              row.child(
+                // The ellipsis is the desktop's promise that a command needs
+                // more from you before it does anything: Modify opens a ticket
+                // to fill in. Withdraw does not have one -- what follows it is
+                // a confirmation, not a form.
+                action(
+                  tokens,
+                  `order-detail-replace-${order.orderId}`,
+                  "Modify…",
+                  onReplace,
+                ).flex_1(),
+              ),
+            )
+            .when(Boolean(onCancel), (row) =>
+              row.child(
+                // Outlined, like Modify beside it: the two are peers, and a
+                // borderless one reads as the lesser of them. Destructive
+                // carries the colour, and in this kit that is a red label and
+                // a red edge rather than a solid block -- which would be the
+                // loudest thing on a panel opened to read an order.
+                action(tokens, `order-detail-cancel-${order.orderId}`, "Withdraw", onCancel, {
+                  variant: "destructive",
+                }).flex_1(),
+              ),
+            ),
+        ),
+      )
+      .child(rule(tokens))
+      .child(
+        section(`order-detail-${order.orderId}-order`, "Order", [
+          { title: "Time in force", value: order.timeInForce },
+          { title: "Currency", value: order.currency },
+          { title: "Outside RTH", value: order.outsideRth },
+          { title: "Channel", value: order.tag },
+        ]),
+      )
+      .child(
+        section(`order-detail-${order.orderId}-execution`, "Execution", [
+          { title: "Quantity", value: order.quantity },
+          { title: "Filled", value: order.executedQuantity },
+          { title: "Price", value: amount(order.price) },
+          { title: "Filled price", value: amount(order.executedPrice) },
+          { title: "Last done", value: amount(order.lastDone) },
+          { title: "Trigger price", value: amount(order.triggerPrice) },
+        ]),
+      )
+      .child(
+        section(`order-detail-${order.orderId}-timing`, "Timing", [
+          { title: "Submitted", value: stamp(order.submittedAt) },
+          { title: "Updated", value: stamp(order.updatedAt) },
+        ]),
+      )
+      .child(rule(tokens))
+      .child(
+        v_flex()
+          .gap(style().spacing.xxs)
+          .child(muted(tokens, "Order ID"))
+          .child(numeric(tokens, order.orderId).truncate()),
+      )
+      .when(Boolean(order.remark), (element) =>
+        element.child(
+          v_flex()
+            .gap(style().spacing.xxs)
+            .child(muted(tokens, "Remark"))
+            .child(label(tokens, order.remark)),
+        ),
+      )
+      .when(Boolean(order.message), (element) => element.child(muted(tokens, order.message)))
+  );
+}
+
+/**
+ * A row of mutually exclusive choices, drawn as one control.
+ *
+ * Two or three options do not need a `Select`: a dropdown hides half the
+ * answer behind a click, and laid out flat the choices are readable at rest
+ * and each one is already a focusable button. Selection is carried by fill and
+ * position rather than by text colour alone.
+ *
+ * Its place in the tab order is not passed in, because a base `Tab` owns that
+ * part of its own focus and refuses a `tab_index` written onto it. A run of
+ * choices is walked where it was built, which is where it is read -- and that
+ * is why nothing else on the ticket names an index either: an explicit index
+ * is walked after everything that has none, so one control naming its place
+ * would reorder every control that does not.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {string} id
+ * @param {readonly { value: string, label: string }[]} options
+ * @param {string} value
+ * @param {(next: string, cx: import("gpui").Context) => void} onChange
+ */
+export function segmented(tokens, id, options, value, onChange) {
+  return new Tabs(id)
+    .segmented()
+    .items(options.map((option) => ({ value: option.value, label: option.label })))
+    .value(value)
+    .onChange(onChange)
+    .build(context(tokens));
+}
+
+/**
+ * A run of intervals, or of anything else a panel is currently showing one of.
+ *
+ * The underline shape: these are places to go rather than a field's worth of
+ * answer, so they sit on the surface they belong to and the current one is
+ * marked beneath. The library reserves that underline on every tab and colours
+ * one, which is what keeps the row from moving by its own width when the
+ * choice changes.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {string} id
+ * @param {readonly { value: string, label: string }[]} options
+ * @param {string} value
+ * @param {(next: string, cx: import("gpui").Context) => void} onChange
+ * @param {string} [label] what this run is choosing, for a screen reader
+ */
+export function intervalTabs(tokens, id, options, value, onChange, label = "") {
+  const tabs = new Tabs(id)
+    .items(options.map((option) => ({ value: option.value, label: option.label })))
+    .value(value)
+    .onChange(onChange)
+    .size("xsmall");
+  if (label) tabs.accessibilityLabel(label);
+  return tabs.build(context(tokens));
+}
+
+/**
+ * One field of an order ticket: its label, its control, and what the control
+ * needs said about it.
+ *
+ * One column, so the eye travels down rather than back and forth between a
+ * caption on one edge and a value on the other. The gap inside a field is the
+ * one for parts of a single control, and it has to stay smaller than the gap
+ * between fields for the grouping to read at all.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {string} caption
+ * @param {import("gpui").Element} control
+ * @param {{ error?: string, hint?: string, accessory?: import("gpui").Element | null }} [options]
+ */
+export function ticketField(tokens, caption, control, options = {}) {
+  const { error = "", hint = "", accessory = null } = options;
+  return (
+    v_flex()
+      .gap(style().spacing.xs)
+      .child(
+        h_flex()
+          .items_baseline()
+          .justify_between()
+          .gap(style().spacing.sm)
+          .child(muted(tokens, caption))
+          // The right of the caption row is where a field's own control goes --
+          // the sizing switch above the amount, and nothing anywhere else.
+          .when(Boolean(accessory), (element) => element.child(accessory)),
+      )
+      // The control, whatever it is. A field whose value is in something
+      // carries that unit itself -- see `valueField` -- rather than having it
+      // hung beside it here.
+      .child(control)
+      // An error replaces the hint rather than stacking under it: both are about
+      // the same field, and the correction is what matters while it applies.
+      .when(Boolean(error), (element) =>
+        element.child(
+          new Label(String(error))
+            .size("caption")
+            .build(context(tokens))
+            .text_color(tokens.destructive),
+        ),
+      )
+      .when(Boolean(hint) && !error, (element) => element.child(muted(tokens, hint, "caption")))
+  );
+}
+
+/**
+ * A titled group of ticket fields, separated from the one before it by a rule.
+ *
+ * Grouping by task rather than by nesting a card: an order ticket asks two
+ * different questions -- what is being traded, and how long the order stands
+ * -- and evenly spaced rows say those are equal decisions. A heading and a
+ * hairline cost less than a container and say more.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {string} title
+ * @param {boolean} [first] Whether this is the first group, which draws no rule.
+ */
+export function ticketGroup(tokens, title, first = false) {
+  return v_flex()
+    .gap(style().spacing.sm)
+    .when(!first, (element) => element.child(rule(tokens)))
+    .child(smallCaps(tokens, title));
+}
+
+/**
+ * A ticket's heading: what is about to be done, to what.
+ *
+ * The direction is the loudest thing on the surface and it is coloured,
+ * because the one mistake this dialog exists to prevent is buying when you
+ * meant to sell.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {string} side @param {string} symbol @param {string} name
+ */
+export function ticketHeading(tokens, side, symbol, name) {
+  const cx = context(tokens);
+  return h_flex()
+    .items_baseline()
+    .gap(style().spacing.sm)
+    .child(
+      new Label(String(side).toUpperCase())
+        .size("title")
+        .strong()
+        .build(cx)
+        .text_color(tradeSideTone(tokens, side)),
     )
-    .when(Boolean(order.message), (element) => element.child(muted(tokens, order.message)));
+    .child(new Label(String(symbol)).size("title").strong().build(cx))
+    .when(Boolean(name), (element) => element.child(muted(tokens, name)));
+}
+
+/**
+ * The confirmation screen: the order as a sentence, and nothing to type.
+ *
+ * Read-only on purpose. A confirmation with editable fields is a second
+ * ticket, and what it confirms is then whatever was in the boxes at the moment
+ * the button was pressed rather than what was read.
+ *
+ * @param {import("gpui-base").Theme} tokens
+ * @param {ReturnType<typeof import("./trade.js").ticketSummary>} summary
+ */
+export function orderConfirmSummary(tokens, summary) {
+  const cx = context(tokens);
+  const line = (caption, value) =>
+    h_flex()
+      .items_center()
+      .justify_between()
+      .gap(style().spacing.md)
+      .child(muted(tokens, caption))
+      .child(new Label(String(value)).strong().build(cx));
+  return (
+    v_flex()
+      .id("order-confirm-summary")
+      .gap(style().spacing.xs)
+      .p(style().spacing.sm)
+      .rounded(tokens.radius.sm)
+      .bg(tokens.background)
+      .child(
+        h_flex()
+          .items_baseline()
+          .gap(style().spacing.xs)
+          .child(
+            new Label(summary.side.toUpperCase())
+              .strong()
+              .build(cx)
+              .text_color(tradeSideTone(tokens, summary.side)),
+          )
+          .child(new Label(String(summary.quantity)).strong().build(cx))
+          .child(new Label(String(summary.symbol)).strong().build(cx))
+          .when(Boolean(summary.name), (element) => element.child(muted(tokens, summary.name))),
+      )
+      .child(rule(tokens))
+      .child(line("Type", summary.type))
+      .child(line("Price", summary.price))
+      // What an amount was divided by to reach the share count above. Only a
+      // market order shows it: a limit order was sized against the price on the
+      // line before, and repeating it would be the same number twice.
+      .when(Boolean(summary.sizedAt), (element) => element.child(line("Sized at", summary.sizedAt)))
+      .child(line("Valid", summary.timeInForce))
+      .when(Boolean(summary.sessions), (element) =>
+        element.child(line("Sessions", summary.sessions)),
+      )
+      .child(rule(tokens))
+      // The sum the reader typed, above what it actually buys. Shares are whole
+      // and lots are whole, so the two differ by the remainder -- showing only
+      // the budget would claim all of it was spent.
+      .when(Boolean(summary.budget), (element) => element.child(line("Amount", summary.budget)))
+      .child(line(summary.amountLabel, summary.amount))
+  );
 }
 
 /**

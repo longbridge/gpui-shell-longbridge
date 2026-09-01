@@ -1,7 +1,9 @@
 import { View } from "gpui";
 import {
   historyRange,
+  mergeOrder,
   normalizeOrders,
+  normalizePushedOrder,
   orderSideLabel,
   orderStatusKind,
   orderStatusLabel,
@@ -117,6 +119,60 @@ function runVectors() {
     normalizeOrders([{ order_id: "1", symbol: "AAPL.US", submitted_at: "1" }]).length === 1,
     "a bare list of orders is read as one",
   );
+
+  // The push channel describes the same order in different words. What the
+  // list calls quantity and price, it calls submitted_quantity and
+  // submitted_price -- and a row built from the push has to be the same row.
+  const pushed = normalizePushedOrder({
+    order_id: "900",
+    symbol: "700.HK",
+    stock_name: "Tencent",
+    side: "Buy",
+    status: "NewStatus",
+    order_type: "LO",
+    submitted_quantity: "200",
+    submitted_price: "310.400",
+    executed_quantity: "0",
+    submitted_at: "1700000000",
+    updated_at: "1700000060",
+  });
+  check(
+    pushed.quantity === "200" && pushed.price === "310.400",
+    "a pushed order is read into the same row an endpoint's would be",
+  );
+  check(pushed.statusLabel === "New" && pushed.sideKind === "buy", "and reads the same way");
+  check(
+    normalizePushedOrder({ order_id: "901", quantity: "5", submitted_quantity: "9" }).quantity ===
+      "5",
+    "a push that spells it both ways is taken at the endpoint's word",
+  );
+
+  // Merging is what a push does to the list it arrives at: replace the row it
+  // is about, or take a place in the order the list is already in.
+  const listed = normalizeOrders({
+    orders: [
+      { order_id: "1", symbol: "AAPL.US", submitted_at: "300", status: "NewStatus" },
+      { order_id: "2", symbol: "TSLA.US", submitted_at: "100", status: "NewStatus" },
+    ],
+  });
+  const [filledFirst] = normalizeOrders({
+    orders: [{ order_id: "1", symbol: "AAPL.US", submitted_at: "300", status: "FilledStatus" }],
+  });
+  const replaced = mergeOrder(listed, filledFirst);
+  check(replaced.length === 2, "an order already in the list does not arrive twice");
+  check(replaced[0].statusKind === "filled", "and the list carries its news");
+  check(mergeOrder(listed, listed[0]) === listed, "a push that changes nothing changes nothing");
+  const [middle] = normalizeOrders({
+    orders: [{ order_id: "3", symbol: "MSFT.US", submitted_at: "200", status: "NewStatus" }],
+  });
+  const inserted = mergeOrder(listed, middle);
+  check(
+    inserted.map((order) => order.orderId).join(",") === "1,3,2",
+    `an order new to the list takes its place by submission time: ${inserted
+      .map((order) => order.orderId)
+      .join(",")}`,
+  );
+  check(Object.isFrozen(inserted), "and the list it produces is immutable");
 
   const range = historyRange(1_700_000_000_000, 2);
   check(
