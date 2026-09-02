@@ -2631,7 +2631,7 @@ dependencies = [
 [[package]]
 name = "gpui-base"
 version = "0.5.2"
-source = "git+https://github.com/longbridge/gpui-component?branch=shell%2Fitem-secondary-click-2#30a264fb131b20cbbdbc6446d05da03266d5fc0b"
+source = "git+https://github.com/longbridge/gpui-component#5bc60f2d9cd17a11ee7803ed34ff5c9788f10dff"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -2667,7 +2667,7 @@ dependencies = [
 [[package]]
 name = "gpui-fps"
 version = "0.1.0"
-source = "git+https://github.com/longbridge/gpui-component?branch=shell%2Fitem-secondary-click-2#30a264fb131b20cbbdbc6446d05da03266d5fc0b"
+source = "git+https://github.com/longbridge/gpui-component#5bc60f2d9cd17a11ee7803ed34ff5c9788f10dff"
 dependencies = [
  "gpui",
  "instant",
@@ -2681,7 +2681,7 @@ dependencies = [
 [[package]]
 name = "gpui-shell"
 version = "0.1.0"
-source = "git+https://github.com/longbridge/gpui-component?branch=shell%2Fitem-secondary-click-2#30a264fb131b20cbbdbc6446d05da03266d5fc0b"
+source = "git+https://github.com/longbridge/gpui-component#5bc60f2d9cd17a11ee7803ed34ff5c9788f10dff"
 dependencies = [
  "anyhow",
  "async-channel",
