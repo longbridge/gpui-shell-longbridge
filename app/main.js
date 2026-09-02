@@ -1230,6 +1230,13 @@ export default class LongbridgeApp extends View {
     /** @type {{ symbol: string, x: number, y: number, source: "watchlist" | "holdings" | "orders", orderId?: string } | null} */
     this.rowMenu = null;
     /**
+     * The row a secondary press just landed on, between the list reporting it
+     * and the pane under the list placing the menu. See `noteRowPress`.
+     *
+     * @type {{ source: "watchlist" | "holdings" | "orders", key: string } | null}
+     */
+    this.pressedRow = null;
+    /**
      * The order ticket.
      *
      * `stage` is what makes the confirmation a confirmation: the form's values
@@ -4214,21 +4221,54 @@ export default class LongbridgeApp extends View {
   }
 
   /**
-   * The menu a right press opens, at the pointer.
+   * A secondary press on a row, as the list reports it.
    *
-   * It acts on the selected instrument rather than on whatever the pointer
-   * happens to be over: a virtual list rebuilds its rows every frame it
-   * scrolls, so a row carries no handler of its own and there is nothing to
-   * ask which one was pressed. The menu names the instrument it will act on,
-   * which is what keeps that honest.
+   * The list hears the press before the pane under it does -- both listen for
+   * the same button, and a press bubbles from the row outwards -- so this only
+   * notes which row it was. Where to put the menu is the pane's question: the
+   * menu is drawn inside the pane at the pane's own coordinates, which the
+   * row's event does not carry, and the pane's `on_mouse_down` reads the note
+   * in the same dispatch. A note nothing reads -- a press that landed on no
+   * row -- is cleared by the next one.
+   *
+   * @param {"watchlist" | "holdings" | "orders"} source
+   * @param {string} key
+   */
+  noteRowPress(source, key) {
+    this.pressedRow = { source, key };
+  }
+
+  /**
+   * The row the press being dispatched landed on, if it landed on one of
+   * `source`'s rows, and clears the note either way.
+   *
+   * @param {"watchlist" | "holdings" | "orders"} source
+   */
+  takeRowPress(source) {
+    const pressed = this.pressedRow;
+    this.pressedRow = null;
+    return pressed?.source === source ? pressed.key : null;
+  }
+
+  /**
+   * Opens the row menu at the pointer, for the row that was pressed.
+   *
+   * Pressed rather than selected: a menu that acted on the selected row while
+   * the pointer sat on another was a menu the reader could not trust without
+   * reading its heading first. The row is the one the list reported through
+   * `noteRowPress` a moment ago; a press that landed between rows opens
+   * nothing. The selection does not move -- the two states are drawn apart,
+   * see `rowState` in `ui.js` -- so opening a menu on a row is not the same
+   * as looking at it.
    *
    * @param {import("gpui").MouseButtonEvent} event @param {import("gpui").Context} cx
    */
   openRowMenu(event, cx) {
-    if (!this.selectedSymbol) return;
+    const symbol = this.takeRowPress("watchlist");
+    if (!symbol) return;
     const local = event.local_position ?? { x: 0, y: 0 };
     this.rowMenu = {
-      symbol: this.selectedSymbol,
+      symbol,
       x: Math.max(0, local.x),
       y: Math.max(0, local.y),
       source: "watchlist",
@@ -4249,7 +4289,7 @@ export default class LongbridgeApp extends View {
    * @param {import("gpui").Context} cx
    */
   openHoldingMenu(event, cx) {
-    const symbol = this.selectedHoldingSymbol;
+    const symbol = this.takeRowPress("holdings");
     if (!symbol) return;
     const local = event.local_position ?? { x: 0, y: 0 };
     this.rowMenu = {
@@ -4272,7 +4312,7 @@ export default class LongbridgeApp extends View {
    * @param {import("gpui").Context} cx
    */
   openOrderMenu(event, cx) {
-    const orderId = this.selectedOrderRowId;
+    const orderId = this.takeRowPress("orders");
     const order = [...this.ordersState.today, ...this.ordersState.history].find(
       (entry) => entry.orderId === orderId,
     );
@@ -4455,6 +4495,7 @@ export default class LongbridgeApp extends View {
                 index,
                 this.lastTick,
                 compact,
+                this.rowMenu?.source === "watchlist" && this.rowMenu.symbol === quote.symbol,
               ),
             (symbol, cx) => {
               this.selectedWatchlistSymbol = symbol;
@@ -4468,6 +4509,8 @@ export default class LongbridgeApp extends View {
                   "Add a security with the + beside the filter, or in Longbridge.",
                 ),
             2,
+            undefined,
+            (symbol) => this.noteRowPress("watchlist", symbol),
           )
             .flex_1()
             .min_h(0),
@@ -4497,7 +4540,10 @@ export default class LongbridgeApp extends View {
    * @param {import("gpui").Element} empty
    * @param {number} [columnCount]
    * @param {(row: any, index: number) => string} [rowKey] The identity a row is
-   *   reported by, which is what `onSelect` is handed.
+   *   reported by, which is what `onSelect` and `onSecondaryPress` are handed.
+   * @param {((key: string) => void) | null} [onSecondaryPress] A right press
+   *   on a row, reported before the pane under the list hears the same press;
+   *   see `noteRowPress`.
    */
   instrumentTable(
     tokens,
@@ -4511,6 +4557,7 @@ export default class LongbridgeApp extends View {
     empty,
     columnCount = 5,
     rowKey = (row, index) => String(row?.symbol ?? index),
+    onSecondaryPress = null,
   ) {
     const body = TableBody.new(`${id}-body`)
       .relative()
@@ -4537,7 +4584,10 @@ export default class LongbridgeApp extends View {
         )
           .track_scroll(this.collectionScrollHandles[id])
           .size_full()
-          .when(Boolean(onSelect), (list) => list.on_item_click(onSelect)),
+          .when(Boolean(onSelect), (list) => list.on_item_click(onSelect))
+          .when(Boolean(onSecondaryPress), (list) =>
+            list.on_item_secondary_click((key) => onSecondaryPress(key)),
+          ),
       )
       .child(Scrollbar.vertical(`${id}-rows`).absolute().inset_0());
 
@@ -4837,7 +4887,6 @@ export default class LongbridgeApp extends View {
       .border_t(0)
       .flex_none()
       .min_w(0)
-      .bg(tokens.background)
       .child(
         quote
           ? v_flex()
@@ -4868,7 +4917,6 @@ export default class LongbridgeApp extends View {
       .flex_1()
       .min_w(0)
       .min_h(0)
-      .bg(tokens.background)
       .child(v_flex().child(this.chartSection(tokens)));
   }
 
@@ -4946,7 +4994,6 @@ export default class LongbridgeApp extends View {
       .flex_1()
       .min_w(0)
       .min_h(0)
-      .bg(tokens.background)
       .child(
         quote
           ? v_flex().child(
@@ -5210,7 +5257,13 @@ export default class LongbridgeApp extends View {
               HOLDING_ROW_HEIGHT,
               holdingsHeader(tokens),
               (holding, index) =>
-                holdingRow(tokens, holding, holding.symbol === this.selectedHoldingSymbol, index),
+                holdingRow(
+                  tokens,
+                  holding,
+                  holding.symbol === this.selectedHoldingSymbol,
+                  index,
+                  this.rowMenu?.source === "holdings" && this.rowMenu.symbol === holding.symbol,
+                ),
               (symbol, cx) => {
                 this.selectedHoldingSymbol = symbol;
                 this.redraw(cx);
@@ -5467,11 +5520,13 @@ export default class LongbridgeApp extends View {
                 order,
                 index,
                 order.orderId === (this.selectedOrderRowId ?? this.selectedOrderId),
+                this.rowMenu?.source === "orders" && this.rowMenu.orderId === order.orderId,
               ),
             (orderId, cx) => this.selectOrder(orderId, cx),
             this.ordersEmpty(tokens, empty),
             6,
             (order, index) => String(order?.orderId ?? index),
+            (orderId) => this.noteRowPress("orders", orderId),
           )
             .flex_1()
             .min_h(0),

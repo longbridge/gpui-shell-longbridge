@@ -1266,6 +1266,26 @@ fn watchlist_row_renders_scannable_market_columns(cx: &mut TestAppContext) {
     assert!(!closed.contains(":selected[Bool(true)]"), "{closed}");
     assert!(open.contains(":selected[Bool(true)]"), "{open}");
 
+    // The row a menu is open for wears a ring; the selected row a fill and no
+    // ring, so the two read apart when they are different rows.
+    let menu_row = rendered
+        .split(r#"TableRow "quote-MSFT.US""#)
+        .nth(1)
+        .and_then(|rest| rest.split("TableRow ").next())
+        .expect("the probe draws the row a menu is open for");
+    assert!(
+        menu_row.contains(".absolute") && menu_row.contains(".border[Number(1"),
+        "the menu's row carries a ring:\n{menu_row}"
+    );
+    let selected_row = rendered
+        .split(r#"TableRow "quote-AAPL.US""#)
+        .nth(1)
+        .and_then(|rest| rest.split("TableRow ").next())
+        .expect("the probe draws the selected row");
+    assert!(
+        !selected_row.contains(".absolute"),
+        "the selected row carries no ring:\n{selected_row}"
+    );
     let compact = rendered
         .split_once(r#"Table "probe-watchlist-compact""#)
         .map(|(_, compact)| compact)
@@ -2901,7 +2921,7 @@ fn escape_puts_away_what_the_workspace_opened_and_then_carries_on(cx: &mut TestA
 }
 
 #[gpui::test]
-fn a_right_press_in_the_watchlist_opens_a_menu_for_the_selected_instrument(
+fn a_right_press_on_a_watchlist_row_opens_a_menu_for_that_row_and_leaves_the_selection(
     cx: &mut TestAppContext,
 ) {
     cx.update(gpui_shell::init);
@@ -2921,19 +2941,6 @@ fn a_right_press_in_the_watchlist_opens_a_menu_for_the_selected_instrument(
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));
 
-    // A press, not a click: `on_click` reports neither which button nor how
-    // many presses ago, and a watchlist row cannot carry a handler of its own
-    // because the virtual list rebuilds its rows every frame it scrolls.
-    context.simulate_event(gpui::MouseDownEvent {
-        button: gpui::MouseButton::Right,
-        position: gpui::point(gpui::px(200.), gpui::px(200.)),
-        modifiers: gpui::Modifiers::default(),
-        click_count: 1,
-        first_mouse: false,
-    });
-    context.run_until_parked();
-    context.update(|window, cx| window.draw(cx).clear(cx));
-
     let view = window
         .root(&mut context)
         .expect("workspace root")
@@ -2945,28 +2952,71 @@ fn a_right_press_in_the_watchlist_opens_a_menu_for_the_selected_instrument(
                 .downcast::<gpui_shell::ScriptView>()
                 .expect("workspace content is a script view")
         });
-    let rendered = context.update(|_, cx| {
-        view.read(cx)
-            .snapshot()
-            .map(gpui_shell::RenderSnapshot::debug_tree)
-            .unwrap_or_default()
-    });
+    let render = |context: &mut VisualTestContext| {
+        context.update(|_, cx| {
+            view.read(cx)
+                .snapshot()
+                .map(gpui_shell::RenderSnapshot::debug_tree)
+                .unwrap_or_default()
+        })
+    };
+    // A press, not a click: a context menu opens on the press, and the list
+    // reports which row it landed on through `on_item_secondary_click`.
+    let press = |context: &mut VisualTestContext, y: f32| {
+        context.simulate_mouse_move(
+            gpui::point(gpui::px(200.), gpui::px(y)),
+            gpui::MouseButton::Right,
+            gpui::Modifiers::default(),
+        );
+        context.simulate_mouse_down(
+            gpui::point(gpui::px(200.), gpui::px(y)),
+            gpui::MouseButton::Right,
+            gpui::Modifiers::default(),
+        );
+        context.run_until_parked();
+        context.update(|window, cx| window.draw(cx).clear(cx));
+    };
 
-    // The menu is drawn where the press was, inside the pane whose coordinates
-    // the press reported, and it names the instrument it will act on -- which
-    // is the selected one, because a virtual list's rows carry no handler that
-    // could say which of them was pressed.
+    // AAPL is selected; MSFT is the other row. Walk down the pane until a
+    // press lands on MSFT -- the rows' exact y depends on the chrome above
+    // them, which is not what this test is about.
+    let mut found = None;
+    let mut y = 90.;
+    while y < 600. && found.is_none() {
+        press(&mut context, y);
+        let rendered = render(&mut context);
+        if rendered.contains(r#"Button "row-menu-copy""#) && rendered.contains("text \"MSFT.US\"") {
+            found = Some(rendered);
+        }
+        y += 11.;
+    }
+    let rendered = found.expect("a right press on the MSFT row must open a menu naming MSFT");
+
+    // The menu is for the row that was pressed, and offers what the Watchlist
+    // offers.
     assert!(
         rendered.contains(r#"Button "row-menu-copy""#)
             && rendered.contains(r#"Button "row-menu-drop""#)
             && rendered.contains("Copy symbol")
-            && rendered.contains("text \"Remove\"")
-            && rendered.contains("text \"AAPL.US\""),
-        "a right press must open a menu for the selected instrument:\n{rendered}"
+            && rendered.contains("text \"Remove\""),
+        "a right press must open the Watchlist menu for the pressed row:\n{rendered}"
     );
     assert!(
         rendered.contains(".absolute .left[Number(") && rendered.contains(":on_mouse_down_out(fn)"),
         "the menu is placed at the pointer and closes on a press outside it:\n{rendered}"
+    );
+    // Opening a menu on a row is not the same as looking at it: the details
+    // still show AAPL, and the two rows are drawn apart -- the selected one as
+    // a fill, the pressed one as a ring.
+    let heading = rendered
+        .split_once(r#":id[Str("quote-detail-heading")]"#)
+        .map(|(_, rest)| rest)
+        .and_then(|rest| rest.split_once(r#":id[Str("quote-detail-stats")]"#))
+        .map(|(heading, _)| heading)
+        .expect("the quote details keep their heading");
+    assert!(
+        heading.contains("Apple Inc.") && !heading.contains("Microsoft"),
+        "the selection must not move to the pressed row:\n{heading}"
     );
 }
 

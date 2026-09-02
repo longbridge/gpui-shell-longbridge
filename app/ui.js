@@ -30,6 +30,7 @@ import {
   AccordionGroup,
   AccordionSection,
   Alert,
+  alpha,
   Avatar,
   AvatarButton,
   Badge,
@@ -39,7 +40,6 @@ import {
   DefinitionList,
   EmptyState,
   ExternalLink,
-  TextField,
   GlyphButton,
   IconButton,
   Keycap,
@@ -54,11 +54,12 @@ import {
   Separator,
   Step,
   Surface,
+  tableHeaderHeight,
   TableHeaderRow,
   TableRow,
   Tabs,
+  TextField,
   Toolbar,
-  tableHeaderHeight,
 } from "omarchy-ui";
 import {
   amplitude,
@@ -451,6 +452,66 @@ export function menuTrigger(tokens, id, hint, open = false) {
 export const QUOTE_ROW_HEIGHT = 44;
 
 /**
+ * The two row fills, as fractions of the theme's `muted` over the surface.
+ * The selection sits at half strength -- the full token was a heavy band on a
+ * table read for hours -- and the pointer one step below that, so the row
+ * under the pointer never outweighs the row the panels are showing.
+ */
+const ROW_SELECTED_ALPHA = 0.5;
+const ROW_HOVER_ALPHA = 0.25;
+
+/**
+ * The two states a row can be in besides the pointer's own.
+ *
+ * `selected` is the row the detail panels are showing, and it is a fill. The
+ * kit lights a selected row with `accent` and hovers it with `muted`, and on
+ * a table that is read for hours both read as a heavy band across the list
+ * rather than as a place-keeper. So the row is built unselected and two
+ * lighter fills are written over it here -- `muted` at half strength for the
+ * selection, a quarter for the pointer -- and the pressed state is the kit's
+ * own.
+ *
+ * `menuTarget` is the row a menu is open for, and it is an outline. A menu opens
+ * on whatever row was pressed, which need not be the selected one, and while
+ * it is open the reader has to be able to tell the two apart: the fill says
+ * "this is what the panels show", the ring says "this is what the menu will
+ * act on". An outline rather than a second fill because the two can coincide,
+ * and a ring over a fill still reads as both. Drawn as an overlay rather than
+ * as the row's own border so the row's box does not change by a pixel when a
+ * menu opens over it.
+ *
+ * @template {import("gpui").Element} T
+ * @param {import("gpui-base").Theme} tokens
+ * @param {T} row
+ * @param {{ selected?: boolean, menuTarget?: boolean }} state
+ * @returns {T}
+ */
+function rowState(tokens, row, state) {
+  const selected = Boolean(state.selected);
+  const selectedFill = alpha(tokens.muted, ROW_SELECTED_ALPHA);
+  return row
+    // Both fills are the same hue at two strengths, so the two states read
+    // as one scale rather than two colours. A selected row under the pointer
+    // keeps the selected fill.
+    .hover((appearance) =>
+      appearance.bg(selected ? selectedFill : alpha(tokens.muted, ROW_HOVER_ALPHA)),
+    )
+    .when(selected, (element) => element.bg(selectedFill))
+    .when(Boolean(state.menuTarget), (element) =>
+      element
+        .relative()
+        .child(
+          div()
+            .absolute()
+            .inset_0()
+            .border(1)
+            .border_color(tokens.ring)
+            .rounded(tokens.radius.sm),
+        ),
+    );
+}
+
+/**
  * A watchlist row, as a table row rather than a button that looks like one.
  *
  * It registers no click handler of its own: rows are rebuilt every frame the
@@ -468,13 +529,22 @@ export const QUOTE_ROW_HEIGHT = 44;
  * @param {boolean} selected
  * @param {number} rowIndex
  * @param {number} [now]
+ * @param {boolean} [compact]
+ * @param {boolean} [menuTarget] A menu is open for this row.
  */
-export function quoteRow(tokens, quote, selected, rowIndex = 0, now = Date.now(), compact = false) {
+export function quoteRow(
+  tokens,
+  quote,
+  selected,
+  rowIndex = 0,
+  now = Date.now(),
+  compact = false,
+  menuTarget = false,
+) {
   const cx = context(tokens);
   const tone = changeTone(tokens, quote.change);
   const row = new TableRow(`quote-${quote.symbol}`, rowIndex)
     .height(QUOTE_ROW_HEIGHT)
-    .selected(selected)
     .dimmed(!quote.receivedAt);
 
   row.cell(
@@ -519,7 +589,7 @@ export function quoteRow(tokens, quote, selected, rowIndex = 0, now = Date.now()
     row.cell({ align: "end" }, muted(tokens, tradeStatusLabel(quote)));
   }
 
-  return row.build(cx).transition("opacity", MOTION);
+  return rowState(tokens, row.build(cx), { selected, menuTarget }).transition("opacity", MOTION);
 }
 
 function detailStatus(tokens, state, empty) {
@@ -1185,14 +1255,14 @@ export const HOLDING_ROW_HEIGHT = 42;
  * @param {LongbridgeHoldingRow} holding
  * @param {boolean} selected
  * @param {number} rowIndex
+ * @param {boolean} [menuTarget] A menu is open for this row.
  */
-export function holdingRow(tokens, holding, selected = false, rowIndex = 0) {
+export function holdingRow(tokens, holding, selected = false, rowIndex = 0, menuTarget = false) {
   const cx = context(tokens);
   const todayTone = valueTone(tokens, holding.todayPnlValue);
   const totalTone = valueTone(tokens, holding.totalPnlValue);
-  return new TableRow(`holding-${holding.symbol}`, rowIndex)
+  const row = new TableRow(`holding-${holding.symbol}`, rowIndex)
     .height(HOLDING_ROW_HEIGHT)
-    .selected(selected)
     .cell(
       { width: "26%" },
       new CellStack()
@@ -1219,6 +1289,7 @@ export function holdingRow(tokens, holding, selected = false, rowIndex = 0) {
         .build(cx),
     )
     .build(cx);
+  return rowState(tokens, row, { selected, menuTarget });
 }
 
 const ORDER_COLUMNS = [
@@ -1295,16 +1366,16 @@ export function tradeSideTone(tokens, side) {
  * @param {LongbridgeOrderRow} order
  * @param {number} rowIndex
  * @param {boolean} [selected] Whether the detail panel is showing this order.
+ * @param {boolean} [menuTarget] A menu is open for this row.
  */
-export function orderRow(tokens, order, rowIndex = 0, selected = false) {
+export function orderRow(tokens, order, rowIndex = 0, selected = false, menuTarget = false) {
   const cx = context(tokens);
   const sideTone = tradeSideTone(tokens, order.sideKind);
   const seconds = order.submittedAt > 0 ? Math.trunc(order.submittedAt / 1_000) : null;
   const time = seconds === null ? "--" : formatMarketTime(order.symbol, seconds, true);
   const day = seconds === null ? "" : formatMarketDate(order.symbol, seconds);
-  return new TableRow(`order-${order.orderId}`, rowIndex)
+  const row = new TableRow(`order-${order.orderId}`, rowIndex)
     .height(ORDER_ROW_HEIGHT)
-    .selected(selected)
     .cell(
       { width: "25%" },
       new CellStack()
@@ -1355,6 +1426,7 @@ export function orderRow(tokens, order, rowIndex = 0, selected = false) {
         .build(cx),
     )
     .build(cx);
+  return rowState(tokens, row, { selected, menuTarget });
 }
 
 /**
