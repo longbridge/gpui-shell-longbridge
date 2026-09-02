@@ -377,7 +377,12 @@ export function popoverSurface(tokens, id, options = {}) {
  * @param {number} [width]
  */
 export function filterInput(tokens, state, width = 180) {
-  return new TextField().state(state).width(width).build(context(tokens));
+  // `small`, because every other control in the toolbars this sits in --
+  // `iconAction`, `menuTrigger` -- is small. At the default `medium` the field
+  // stood four pixels taller than the buttons beside it and set the height of
+  // the whole row, so a strip of quiet chrome asked for more of the pane than
+  // the table under it.
+  return new TextField().state(state).size("small").width(width).build(context(tokens));
 }
 
 /**
@@ -1953,10 +1958,16 @@ export function kbd(tokens, keystroke, state = {}) {
 }
 
 /**
- * The page inset. Combined with the same small gap between Panels, it keeps
- * the title bar, window edge and all four Panel outlines on one spacing grid.
+ * The page inset: the gap between the window's four edges and the Panels
+ * inside them, top included -- the title bar is the window's top edge, so the
+ * room under it is this gap and not a separate decision.
+ *
+ * It is `spacing.sm`, the same gap the Panels keep from each other, so the
+ * window edge and every seam between panes sit on one grid. Written as a
+ * number rather than read from the scale because it is also arithmetic:
+ * `dockWidth` subtracts it from the viewport to size the docks.
  */
-export const PANE_INSET = 4;
+export const PANE_INSET = 8;
 export const WATCHLIST_MIN_WIDTH = 400;
 
 /**

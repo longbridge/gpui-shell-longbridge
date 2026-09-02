@@ -58,14 +58,27 @@ control-padding-x = 8
 const TERMINAL_CORNER_RADIUS = 2;
 
 /**
- * Install the scale. Called once on import with the fallback, and again by the
- * application whenever the desktop's theme changes underneath it.
+ * Install the scale. Called once on import with the terminal's own rhythm, and
+ * again by the application whenever the desktop's theme changes underneath it.
+ *
+ * The desktop's file layers *over* the terminal scale rather than replacing it.
+ * An `||` here read as "the desktop knows better", but a stock `shell.toml`
+ * ships with every `[spacing]` key commented out, so what it actually did was
+ * throw the terminal's rhythm away and land on Omarchy UI's general-desktop
+ * defaults: half the gaps this interface is drawn on (`sm` 8 -> 4, `md`
+ * 12 -> 6, `lg` 14 -> 8) and half again too much room inside a row and a panel
+ * (`row-padding-x` 8 -> 12, `panel-padding` 12 -> 18). Every spacing in the
+ * window moved, in both directions at once.
+ *
+ * Parsing is last-key-wins, so appending the desktop's source keeps whatever
+ * the user actually set -- which is the point of reading their theme at all --
+ * while the terminal's density survives every key they left alone.
  *
  * @param {string} [shellSource] the desktop's `shell.toml`, when there is one
  * @param {{ cornerRadius?: number, fontFamily?: string }} [host]
  */
 export function applyTerminalStyle(shellSource = "", host = {}) {
-  return applyOmarchyStyle(shellSource || TERMINAL_SHELL, {
+  return applyOmarchyStyle(`${TERMINAL_SHELL}\n${shellSource}`, {
     cornerRadius: host.cornerRadius ?? TERMINAL_CORNER_RADIUS,
     fontFamily: host.fontFamily,
     // The kit reserves the leading edge for the host's own window buttons, and
