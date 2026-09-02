@@ -5,8 +5,8 @@ edition = "2024"
 publish = false
 
 [dependencies]
-gpui-shell = { git = "https://github.com/longbridge/gpui-component" }
-gpui-base = { git = "https://github.com/longbridge/gpui-component" }
+gpui-shell = { git = "https://github.com/longbridge/gpui-component", branch = "shell/item-secondary-click-2" }
+gpui-base = { git = "https://github.com/longbridge/gpui-component", branch = "shell/item-secondary-click-2" }
 gpui = { git = "https://github.com/zed-industries/zed", features = ["profiler"] }
 gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
