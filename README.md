@@ -5,7 +5,7 @@ Longbridge Lite is a market-reading Longbridge desktop client made especially fo
 uses the system font, and adopts Omarchy-native spacing and keyboard
 conventions. It is also an architecture example showing how a JavaScript
 application can run as a native GPUI desktop program through
-[GPUI Shell](https://longbridge.github.io/gpui-component/shell/).
+[GPUI Shell](https://gpui-kit/shell/).
 
 The active palette is read from Omarchy's materialized theme state at
 `~/.local/state/omarchy/current/theme/colors.toml`, and the spacing, type and
