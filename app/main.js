@@ -3360,7 +3360,7 @@ export default class LongbridgeApp extends View {
                   .min_h(0)
                   .child(this.hasStoredTokens ? this.workspace(tokens) : this.loginGate(tokens))
                   .when(this.fpsVisible, (element) =>
-                    element.child(fps_monitor().anchor("bottom_left").continuous(true)),
+                    element.child(fps_monitor().anchor("bottom_left")),
                   ),
               )
               .when(this.statusBarVisible, (element) => element.child(this.footer(tokens))),
