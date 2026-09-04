@@ -7,6 +7,7 @@ publish = false
 [dependencies]
 gpui-shell = { git = "https://github.com/longbridge/gpui-kit" }
 gpui-kit = { git = "https://github.com/longbridge/gpui-kit", default-features = false }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]

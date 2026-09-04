@@ -39,6 +39,18 @@ fn main() {
     }
     let assets = AppAssets::new(app_root.clone());
 
+    // gpui-kit and gpui-shell reach TLS through different rustls crypto
+    // providers -- gpui-kit's `reqwest_client` takes rustls' default features,
+    // which select `aws-lc-rs`, while the runtime's own HTTP and WebSocket
+    // clients select `ring`. Both end up compiled in, and rustls will not
+    // guess between two of them: the first `ClientConfig::builder()` a
+    // background socket reaches panics instead. Naming one here settles it for
+    // the process, and `ring` is the one the sockets this application actually
+    // opens were built against.
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("failed to select the process TLS provider");
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()

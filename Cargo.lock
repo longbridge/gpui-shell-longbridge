@@ -2567,7 +2567,7 @@ dependencies = [
 [[package]]
 name = "gpui-base"
 version = "0.6.0"
-source = "git+https://github.com/longbridge/gpui-kit#b6f098db819c40b5cb13b513f7bacc14b0afd9dc"
+source = "git+https://github.com/longbridge/gpui-kit#a5993463feff60f8aa3baec215730395eafe5567"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -2603,7 +2603,7 @@ dependencies = [
 [[package]]
 name = "gpui-fps"
 version = "0.6.0"
-source = "git+https://github.com/longbridge/gpui-kit#b6f098db819c40b5cb13b513f7bacc14b0afd9dc"
+source = "git+https://github.com/longbridge/gpui-kit#a5993463feff60f8aa3baec215730395eafe5567"
 dependencies = [
  "gpui-pre",
  "libc",
@@ -2617,7 +2617,7 @@ dependencies = [
 [[package]]
 name = "gpui-kit"
 version = "0.6.0"
-source = "git+https://github.com/longbridge/gpui-kit#b6f098db819c40b5cb13b513f7bacc14b0afd9dc"
+source = "git+https://github.com/longbridge/gpui-kit#a5993463feff60f8aa3baec215730395eafe5567"
 dependencies = [
  "gpui-base",
  "gpui-pre",
@@ -3180,7 +3180,7 @@ checksum = "41f3ea75672348f37d94472e579f5979ee19b744d0fa5aaadc2fe129ccafa80b"
 [[package]]
 name = "gpui-shell"
 version = "0.6.0"
-source = "git+https://github.com/longbridge/gpui-kit#b6f098db819c40b5cb13b513f7bacc14b0afd9dc"
+source = "git+https://github.com/longbridge/gpui-kit#a5993463feff60f8aa3baec215730395eafe5567"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -4340,6 +4340,7 @@ version = "0.5.1"
 dependencies = [
  "gpui-kit",
  "gpui-shell",
+ "rustls",
  "tracing-subscriber",
 ]
 
