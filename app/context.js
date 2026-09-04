@@ -14,10 +14,10 @@
 // draws, or that belongs to a view, takes its `cx` as an argument like
 // everything else.
 
-/** @type {import("gpui").AsyncContext | null} */
+/** @type {import("gpui-kit").AsyncContext | null} */
 let held = null;
 
-/** @param {import("gpui").AsyncContext} cx */
+/** @param {import("gpui-kit").AsyncContext} cx */
 export function holdContext(cx) {
   held = cx;
 }

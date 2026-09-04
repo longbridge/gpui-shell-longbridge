@@ -1,4 +1,4 @@
-import { View } from "gpui";
+import { View } from "gpui-kit";
 import { Table, v_flex } from "gpui-base";
 import { menuTrigger, quoteDetail, quoteRow, watchlistHeader } from "./ui.js";
 

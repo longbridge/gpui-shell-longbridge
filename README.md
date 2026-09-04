@@ -5,7 +5,7 @@ Longbridge Lite is a market-reading Longbridge desktop client made especially fo
 uses the system font, and adopts Omarchy-native spacing and keyboard
 conventions. It is also an architecture example showing how a JavaScript
 application can run as a native GPUI desktop program through
-[GPUI Shell](https://longbridge.github.io/gpui-component/shell/).
+[GPUI Shell](https://gpui-kit.com/shell/).
 
 The active palette is read from Omarchy's materialized theme state at
 `~/.local/state/omarchy/current/theme/colors.toml`, and the spacing, type and
@@ -55,7 +55,7 @@ version or uninstall, invoke the downloaded script with `-Version 0.2.0` or
 available on each GitHub Release.
 
 - [Longbridge OpenAPI](https://open.longbridge.com/)
-- [gpui-component](https://github.com/longbridge/gpui-component)
+- [gpui-kit](https://github.com/longbridge/gpui-kit)
 
 <img width="1232" height="872" alt="image" src="https://github.com/user-attachments/assets/2f79d6ac-0376-4321-afbf-807aca713a6f" />
 
@@ -76,7 +76,7 @@ Rust host (`src/main.rs`)
 └── mounts the JavaScript view into a native GPUI window
                          │
                          ▼
-gpui-shell runtime (`../gpui-component/crates/shell`)
+gpui-shell runtime (`../gpui-kit/crates/shell`)
 ├── executes ES modules in QuickJS
 ├── records declarative element descriptions
 ├── materializes descriptions as native GPUI elements
@@ -103,13 +103,13 @@ configures assets, creates `ShellRuntime`, loads the
 plugin, and opens `ShellRoot`. Native concerns stay in the host; product state
 and rendering stay in JavaScript.
 
-The host depends on `gpui-shell` and `gpui-base` from the `main` branch of
-[gpui-component](https://github.com/longbridge/gpui-component). The lockfile
+The host depends on `gpui-shell` and `gpui-kit` from the `main` branch of
+[gpui-kit](https://github.com/longbridge/gpui-kit). The lockfile
 pins the exact merged revision used by each release. `gpui-shell` exposes a
 constrained ES-module API — one module per crate that provides the capability,
-so `"gpui"` holds GPUI's own elements and what the runtime adds, `"gpui-base"`
-holds base's layout helpers, components and theme, and `"gpui-fps"` holds its
-performance overlay. The application never imports Rust implementation details.
+so `"gpui-kit"` holds GPUI's own elements and what the runtime adds,
+`"gpui-base"` holds base's layout helpers, components and theme, and
+`"gpui-fps"` holds its performance overlay. The application never imports Rust implementation details.
 
 ### Render boundary
 

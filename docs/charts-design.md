@@ -7,7 +7,7 @@ Demonstrate gpui-shell's native drawing support with a five-day intraday price c
 ## Constraints
 
 - Expose GPUI's `Path` and `PathBuilder` capabilities directly through gpui-shell.
-- Do not expose or depend on gpui-component chart components; they are API references only.
+- Do not expose or depend on gpui-kit chart components; they are API references only.
 - Keep application chart data and layout in JavaScript.
 - Use Longbridge read-only quote commands only.
 - Preserve the original watchlist order within each market group.

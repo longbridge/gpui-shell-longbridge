@@ -4,18 +4,18 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use gpui::{IntoElement as _, TestAppContext, VisualTestContext};
+use gpui_kit::{IntoElement as _, TestAppContext, VisualTestContext};
 use gpui_shell::ShellRuntime;
 
 fn app_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("app")
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn logged_out_application_loads_through_the_public_shell_runtime(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     cx.update(|cx| {
-        gpui_base::Theme::global_mut(cx).appearance = gpui_base::ThemeAppearance::Dark;
+        gpui_kit::base::Theme::global_mut(cx).appearance = gpui_kit::base::ThemeAppearance::Dark;
     });
     let root = app_dir();
     let manifest = gpui_shell::plugin::PluginManifest::read(&root).expect("plugin manifest");
@@ -47,15 +47,15 @@ fn logged_out_application_loads_through_the_public_shell_runtime(cx: &mut TestAp
     context.run_until_parked();
     context.update(|_, cx| {
         assert_eq!(
-            gpui_base::Theme::global(cx).appearance,
-            gpui_base::ThemeAppearance::Light,
+            gpui_kit::base::Theme::global(cx).appearance,
+            gpui_kit::base::ThemeAppearance::Light,
             "without the native Omarchy reader, the isolated runtime uses its fallback palette"
         );
     });
     let draw_view = view.clone();
     context.draw(
-        gpui::Point::default(),
-        gpui::size(gpui::px(1120.), gpui::px(760.)),
+        gpui_kit::Point::default(),
+        gpui_kit::size(gpui_kit::px(1120.), gpui_kit::px(760.)),
         move |_, _| draw_view.into_any_element(),
     );
     let rendered = context.update(|_, cx| {
@@ -89,12 +89,12 @@ fn logged_out_application_loads_through_the_public_shell_runtime(cx: &mut TestAp
 
 struct Empty;
 
-impl gpui::Render for Empty {
+impl gpui_kit::Render for Empty {
     fn render(
         &mut self,
-        _: &mut gpui::Window,
-        _: &mut gpui::Context<Self>,
-    ) -> impl gpui::IntoElement {
-        gpui::div()
+        _: &mut gpui_kit::Window,
+        _: &mut gpui_kit::Context<Self>,
+    ) -> impl gpui_kit::IntoElement {
+        gpui_kit::div()
     }
 }

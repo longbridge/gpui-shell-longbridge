@@ -17,7 +17,7 @@
 // in `style.js`, which is the same singleton the library's own components
 // read. Nothing in this file writes a pixel.
 
-import { Background, PathBuilder, div } from "gpui";
+import { Background, PathBuilder, div } from "gpui-kit";
 import {
   Table,
   TableBody,
@@ -140,7 +140,7 @@ export const panel = (tokens) => new Surface().build(context(tokens));
  * @param {import("gpui-base").Theme} tokens
  * @param {string} id
  * @param {string} caption
- * @param {(event: import("gpui").ClickEvent, cx: import("gpui").Context) => void} onClick
+ * @param {(event: import("gpui-kit").ClickEvent, cx: import("gpui-kit").Context) => void} onClick
  * @param {{ variant?: LongbridgeActionVariant, disabled?: boolean, selected?: boolean, quiet?: boolean }} [options]
  */
 export function action(tokens, id, caption, onClick, options = {}) {
@@ -174,7 +174,7 @@ export function action(tokens, id, caption, onClick, options = {}) {
  * @param {string} id
  * @param {string} hint What the control does, for the tooltip and the label.
  * @param {string} asset
- * @param {(event: import("gpui").ClickEvent, cx: import("gpui").Context) => void} onClick
+ * @param {(event: import("gpui-kit").ClickEvent, cx: import("gpui-kit").Context) => void} onClick
  */
 export function iconAction(tokens, id, hint, asset, onClick) {
   return new IconButton(id)
@@ -319,13 +319,13 @@ export function watchlistHeader(tokens, compact = false) {
  * @param {import("gpui-base").Theme} tokens
  * @param {string} id
  * @param {string} caption
- * @param {(event: import("gpui").ClickEvent, cx: import("gpui").Context) => void} onClick
+ * @param {(event: import("gpui-kit").ClickEvent, cx: import("gpui-kit").Context) => void} onClick
  * `tone` is for a row whose colour is a *reading* rather than an interface
  * role -- buying and selling take the same two colours a rising and a falling
  * number take. `danger` stays the library's own word for the one role that is
  * one, so the two cannot be confused at a call site.
  *
- * @param {{ detail?: string, destructive?: boolean, disabled?: boolean, tone?: import("gpui").Color }} [options]
+ * @param {{ detail?: string, destructive?: boolean, disabled?: boolean, tone?: import("gpui-kit").Color }} [options]
  */
 export function menuItem(tokens, id, caption, onClick, options = {}) {
   const { detail = "", destructive = false, disabled = false, tone = null } = options;
@@ -480,7 +480,7 @@ const ROW_HOVER_ALPHA = 0.25;
  * as the row's own border so the row's box does not change by a pixel when a
  * menu opens over it.
  *
- * @template {import("gpui").Element} T
+ * @template {import("gpui-kit").Element} T
  * @param {import("gpui-base").Theme} tokens
  * @param {T} row
  * @param {{ selected?: boolean, menuTarget?: boolean }} state
@@ -867,7 +867,7 @@ function statGrid(tokens, id, entries) {
  * @param {LongbridgeQuoteRow} quote
  * @param {number} [now]
  * @param {number} [pulseOpacity]
- * @param {{ open?: boolean, onToggle?: (open: boolean, cx: import("gpui").Context) => void }} [disclosure]
+ * @param {{ open?: boolean, onToggle?: (open: boolean, cx: import("gpui-kit").Context) => void }} [disclosure]
  */
 export function quoteDetail(tokens, quote, now = Date.now(), pulseOpacity = 1, disclosure = {}) {
   const cx = context(tokens);
@@ -1013,7 +1013,7 @@ function donutSlice(tokens, slice, index, total, count, state = "resting") {
  *
  * @param {import("gpui-base").Theme} tokens
  * @param {ReturnType<import("./portfolio.js").allocationInUsd>} group
- * @param {{ hovered?: string | null, onHover?: (symbol: string | null, cx: import("gpui").Context) => void }} [pointer]
+ * @param {{ hovered?: string | null, onHover?: (symbol: string | null, cx: import("gpui-kit").Context) => void }} [pointer]
  */
 export function allocationChart(tokens, group, pointer = {}) {
   const { hovered = null, onHover = null } = pointer;
@@ -1344,7 +1344,7 @@ export function orderStatusTone(tokens, kind) {
  *
  * @param {import("gpui-base").Theme} tokens
  * @param {string} side `buy` or `sell`, in any case.
- * @returns {import("gpui").Color}
+ * @returns {import("gpui-kit").Color}
  */
 export function tradeSideTone(tokens, side) {
   const status = statusColors(tokens);
@@ -1594,7 +1594,7 @@ export function orderDetail(tokens, order, actions = {}) {
  * @param {string} id
  * @param {readonly { value: string, label: string }[]} options
  * @param {string} value
- * @param {(next: string, cx: import("gpui").Context) => void} onChange
+ * @param {(next: string, cx: import("gpui-kit").Context) => void} onChange
  */
 export function segmented(tokens, id, options, value, onChange) {
   return new Tabs(id)
@@ -1618,7 +1618,7 @@ export function segmented(tokens, id, options, value, onChange) {
  * @param {string} id
  * @param {readonly { value: string, label: string }[]} options
  * @param {string} value
- * @param {(next: string, cx: import("gpui").Context) => void} onChange
+ * @param {(next: string, cx: import("gpui-kit").Context) => void} onChange
  * @param {string} [label] what this run is choosing, for a screen reader
  */
 export function intervalTabs(tokens, id, options, value, onChange, label = "") {
@@ -1642,8 +1642,8 @@ export function intervalTabs(tokens, id, options, value, onChange, label = "") {
  *
  * @param {import("gpui-base").Theme} tokens
  * @param {string} caption
- * @param {import("gpui").Element} control
- * @param {{ error?: string, hint?: string, accessory?: import("gpui").Element | null }} [options]
+ * @param {import("gpui-kit").Element} control
+ * @param {{ error?: string, hint?: string, accessory?: import("gpui-kit").Element | null }} [options]
  */
 export function ticketField(tokens, caption, control, options = {}) {
   const { error = "", hint = "", accessory = null } = options;
@@ -1880,8 +1880,8 @@ export function sessionAvatar(tokens, id, hint, open = false) {
  *   level?: number,
  *   keepMounted?: boolean,
  *   inset?: number,
- *   onToggle: (open: boolean, cx: import("gpui").Context) => void,
- *   body: import("gpui").Element,
+ *   onToggle: (open: boolean, cx: import("gpui-kit").Context) => void,
+ *   body: import("gpui-kit").Element,
  * }} options
  */
 export function accordionSection(tokens, options) {
@@ -1938,8 +1938,8 @@ const WEEKDAYS = Object.freeze(["S", "M", "T", "W", "T", "F", "S"]);
  * @param {{
  *   selected: string | null,
  *   latest: string,
- *   onPick: (day: string, cx: import("gpui").Context) => void,
- *   onMonth: (delta: number, cx: import("gpui").Context) => void,
+ *   onPick: (day: string, cx: import("gpui-kit").Context) => void,
+ *   onMonth: (delta: number, cx: import("gpui-kit").Context) => void,
  * }} options
  */
 export function calendarGrid(tokens, calendar, options) {
@@ -2058,8 +2058,8 @@ export const WATCHLIST_MIN_WIDTH = 400;
  *
  * @param {import("gpui-base").Theme} tokens
  * @param {string} title
- * @param {import("gpui").Element} content
- * @param {import("gpui").Element | null} [accessory]
+ * @param {import("gpui-kit").Element} content
+ * @param {import("gpui-kit").Element | null} [accessory]
  * @param {{ grow?: boolean, note?: string, id?: string }} [options]
  */
 export function workspacePanel(tokens, title, content, accessory = null, options = {}) {

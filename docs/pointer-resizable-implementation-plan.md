@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Do not expose drawing through gpui-component; use GPUI `Path`, `PathBuilder`, and `Background` through gpui-shell.
+- Do not expose drawing through gpui-kit; use GPUI `Path`, `PathBuilder`, and `Background` through gpui-shell.
 - Do not replace gpui-base controls with styled `div` implementations.
 - Do not add raw application colors.
 - Preserve responsive stacked panes at narrow widths.
@@ -21,7 +21,7 @@
 
 ### Task 1: Complete Resizable exposure
 
-**Files:** `../gpui-component/crates/shell/src/spec.rs`, `materialize.rs`, `materialize/components.rs`, `engine/quickjs/mod.rs`, `typings.rs`, `tests/render.rs`.
+**Files:** `../gpui-kit/crates/shell/src/spec.rs`, `materialize.rs`, `materialize/components.rs`, `engine/quickjs/mod.rs`, `typings.rs`, `tests/render.rs`.
 
 **Interfaces:** Produces `h_resizable(id)`, `v_resizable(id)`, `resizable_panel()`, `size`, `size_range`, `visible`, and `on_resize`.
 
@@ -31,7 +31,7 @@
 
 ### Task 2: Add normalized pointer callbacks
 
-**Files:** `../gpui-component/crates/shell/src/spec.rs`, `materialize.rs`, `engine/quickjs/mod.rs`, `typings.rs`, `tests/render.rs`.
+**Files:** `../gpui-kit/crates/shell/src/spec.rs`, `materialize.rs`, `engine/quickjs/mod.rs`, `typings.rs`, `tests/render.rs`.
 
 **Interfaces:** Produces `on_mouse_move(handler)` with `PointerMoveEvent` and `on_hover(handler)` with boolean state.
 

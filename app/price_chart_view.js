@@ -1,4 +1,4 @@
-import { Background, PathBuilder, View, div } from "gpui";
+import { Background, PathBuilder, View, div } from "gpui-kit";
 import { Progress, ProgressIndicator, ProgressTrack, h_flex, v_flex } from "gpui-base";
 import {
   findNearestPricePoint,
