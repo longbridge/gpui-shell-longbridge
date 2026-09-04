@@ -157,7 +157,7 @@ process execution or trading mutation API is exposed to the JavaScript layer.
 | `app/orders.js`       | Pure order normalization, statuses and history window      |
 | `app/ui.js`           | This terminal's presentation, composed from Omarchy UI      |
 | `app/style.js`        | The one spacing, type and control scale the window is drawn on |
-| `app/palette.js`      | The colours the semantic token set cannot carry: direction and feed health |
+| `app/palette.js`      | The colors the semantic token set cannot carry: direction and feed health |
 
 The application changes exactly one thing about an account: which securities it
 watches. `PUT /v1/watchlist/groups` is the only write the HTTP boundary can
