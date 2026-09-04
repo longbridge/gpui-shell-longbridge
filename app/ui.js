@@ -505,8 +505,7 @@ function rowState(tokens, row, state) {
             .absolute()
             .inset_0()
             .border(1)
-            .border_color(tokens.ring)
-            .rounded(tokens.radius.sm),
+            .border_color(tokens.ring),
         ),
     );
 }
@@ -1038,7 +1037,6 @@ export function allocationChart(tokens, group, pointer = {}) {
             .items_center()
             .py(style().spacing.xs)
             .px(style().spacing.xs)
-            .rounded(style().cornerRadius)
             .border_b(style().spacing.hairline)
             .border_color(tokens.border)
             .bg(hovered === slice.symbol ? tokens.accent : tokens.surface)
@@ -1747,7 +1745,6 @@ export function orderConfirmSummary(tokens, summary) {
       .id("order-confirm-summary")
       .gap(style().spacing.xs)
       .p(style().spacing.sm)
-      .rounded(tokens.radius.sm)
       .bg(tokens.background)
       .child(
         h_flex()

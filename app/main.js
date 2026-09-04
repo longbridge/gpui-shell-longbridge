@@ -3396,7 +3396,6 @@ export default class LongbridgeApp extends View {
           .bg(tokens.surface)
           .border(1)
           .border_color(tokens.border)
-          .rounded(tokens.radius.md)
           .child(label(tokens, "Keyboard shortcuts", "heading").font_weight(700))
           .children(
             KEY_BINDINGS.filter((binding) => Boolean(binding.caption)).map((binding) =>
@@ -3541,7 +3540,6 @@ export default class LongbridgeApp extends View {
       .gap(2)
       .px(tokens.spacing.xs)
       .py(3)
-      .rounded(tokens.radius.md)
       .bg(tokens.background)
       .border(1)
       .border_color(tokens.border)
@@ -3558,7 +3556,6 @@ export default class LongbridgeApp extends View {
               .justify_center()
               .h(24)
               .px(tokens.spacing.md)
-              .rounded(tokens.radius.sm)
               // Reserve the state border in both states so selection never
               // changes the tab's geometry.
               .border(1)
@@ -3859,7 +3856,6 @@ export default class LongbridgeApp extends View {
         .w(380)
         .gap(tokens.spacing.md)
         .p(tokens.spacing.lg)
-        .rounded(tokens.radius.md)
         .border(1)
         .border_color(tokens.border)
         .bg(tokens.surface)
@@ -4056,7 +4052,6 @@ export default class LongbridgeApp extends View {
           v_flex()
             .gap(tokens.spacing.xs)
             .p(tokens.spacing.sm)
-            .rounded(tokens.radius.sm)
             .bg(tokens.background)
             .child(
               h_flex()
@@ -4129,7 +4124,6 @@ export default class LongbridgeApp extends View {
       .w(360)
       .gap(tokens.spacing.md)
       .p(tokens.spacing.lg)
-      .rounded(tokens.radius.md)
       .border(1)
       .border_color(tokens.border)
       .bg(tokens.surface)
@@ -4184,7 +4178,6 @@ export default class LongbridgeApp extends View {
       .id("add-symbol-preview")
       .gap(tokens.spacing.xs)
       .p(tokens.spacing.sm)
-      .rounded(tokens.radius.sm)
       .bg(tokens.background)
       .child(
         h_flex()
@@ -5089,7 +5082,6 @@ export default class LongbridgeApp extends View {
       .bg(tokens.surface)
       .border(1)
       .border_color(tokens.border)
-      .rounded(tokens.radius.md)
       .on_mouse_down_out((_event, cx) => {
         this.calendarOpen = false;
         this.redraw(cx);

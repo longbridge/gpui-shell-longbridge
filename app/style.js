@@ -54,8 +54,6 @@ control-height = 28
 control-padding-x = 8
 `;
 
-/** Hyprland's rounding, as this window would draw it with no desktop to ask. */
-const TERMINAL_CORNER_RADIUS = 2;
 
 /**
  * Install the scale. Called once on import with the terminal's own rhythm, and
@@ -75,11 +73,10 @@ const TERMINAL_CORNER_RADIUS = 2;
  * while the terminal's density survives every key they left alone.
  *
  * @param {string} [shellSource] the desktop's `shell.toml`, when there is one
- * @param {{ cornerRadius?: number, fontFamily?: string }} [host]
+ * @param {{ fontFamily?: string }} [host]
  */
 export function applyTerminalStyle(shellSource = "", host = {}) {
   return applyOmarchyStyle(`${TERMINAL_SHELL}\n${shellSource}`, {
-    cornerRadius: host.cornerRadius ?? TERMINAL_CORNER_RADIUS,
     fontFamily: host.fontFamily,
     // The kit reserves the leading edge for the host's own window buttons, and
     // it can only do that if it is told whose host this is. Without it the
