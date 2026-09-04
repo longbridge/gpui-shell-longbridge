@@ -1,4 +1,4 @@
-import { View } from "gpui";
+import { View } from "gpui-kit";
 import { Avatar, AvatarFallback, AvatarImage, h_flex } from "gpui-base";
 
 // `Avatar` is the one component whose children are slots rather than elements:

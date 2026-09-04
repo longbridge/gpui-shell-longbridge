@@ -1,7 +1,7 @@
 // A standalone, read-only Longbridge desktop client. OAuth uses direct HTTP,
 // quotes use the documented WebSocket protocol, and no trading API is exposed.
 
-import { View, div, svg } from "gpui";
+import { View, div, svg } from "gpui-kit";
 import { holdContext } from "./context.js";
 import {
   CalendarState,
@@ -311,7 +311,7 @@ const PAGES = Object.freeze([
 /**
  * One duration, one curve, for every transition in the application.
  *
- * @param {import("gpui").Element} element @param {string} property
+ * @param {import("gpui-kit").Element} element @param {string} property
  */
 function motion(element, property) {
   return element.transition(property, { duration: 150, easing: "ease-out" });
@@ -356,7 +356,7 @@ const ORDER_FILTER_FIELDS = Object.freeze(["symbol", "name", "statusLabel", "sid
  * without pretending to be a keyboard. Application commands use `ctrl` on
  * Linux and the conventional `cmd` modifier on macOS.
  *
- * @type {readonly import("gpui").KeyBinding[]}
+ * @type {readonly import("gpui-kit").KeyBinding[]}
  */
 const PRIMARY_MODIFIER = MACOS ? "cmd" : "ctrl";
 
@@ -593,7 +593,7 @@ function storedTokens() {
 }
 
 export default class LongbridgeApp extends View {
-  /** @param {import("gpui-shell").Props | undefined} _props @param {import("gpui").AsyncContext} cx */
+  /** @param {import("gpui-shell").Props | undefined} _props @param {import("gpui-kit").AsyncContext} cx */
   init(_props, cx) {
     holdContext(cx);
     this.dismissStaleDialogs();
@@ -645,7 +645,7 @@ export default class LongbridgeApp extends View {
      * The connected session's context, for work that outlives the view that
      * asked for it. Set by `connect`, and null until one exists.
      *
-     * @type {import("gpui").Context | null}
+     * @type {import("gpui-kit").Context | null}
      */
     this.sessionContext = null;
     /** The trade gateway's push channel, which reports this account's orders. */
@@ -689,7 +689,7 @@ export default class LongbridgeApp extends View {
     if (this.hasStoredTokens) this.resume(cx);
   }
 
-  /** @param {import("gpui").Context} cx */
+  /** @param {import("gpui-kit").Context} cx */
   syncSystemTheme(cx) {
     if (!themes || this.themeSyncPending || platform !== "linux") return;
     this.themeSyncPending = true;
@@ -723,7 +723,7 @@ export default class LongbridgeApp extends View {
    * its own and takes the keyboard once, which also gives every chord a place
    * to land back on after a popover hands focus over and takes it away again.
    *
-   * @param {import("gpui").AsyncContext} cx
+   * @param {import("gpui-kit").AsyncContext} cx
    */
   initKeyboard(cx) {
     this.workspaceFocus = cx.focus_handle();
@@ -753,7 +753,7 @@ export default class LongbridgeApp extends View {
    * bound — it would cross into JavaScript once per cell from inside the
    * layout pass — so this answers the grid and `calendarGrid` draws it.
    *
-   * @param {import("gpui").AsyncContext} cx
+   * @param {import("gpui-kit").AsyncContext} cx
    */
   initChartCalendar(cx) {
     this.chartCalendar = CalendarState.new();
@@ -880,7 +880,7 @@ export default class LongbridgeApp extends View {
   /**
    * Creates the retained chart entity from lifecycle code, never from render.
    *
-   * @param {import("gpui").Context} cx
+   * @param {import("gpui-kit").Context} cx
    */
   initPriceChartView(cx) {
     const props = this.nextPriceChartProps();
@@ -1016,7 +1016,7 @@ export default class LongbridgeApp extends View {
    * at, which is the point -- the cost stops scaling with how chatty the market
    * is.
    *
-   * @param {import("gpui").Context} cx
+   * @param {import("gpui-kit").Context} cx
    */
   scheduleRedraw(cx, panes = PANE_BOTH) {
     this.dirtyPanes |= panes;
@@ -1077,7 +1077,7 @@ export default class LongbridgeApp extends View {
    * Changes the selected detail instrument without touching the chart's retained props.
    *
    * @param {string | null} symbol
-   * @param {import("gpui").Context | import("gpui").AsyncContext} cx
+   * @param {import("gpui-kit").Context | import("gpui-kit").AsyncContext} cx
    */
   selectDetailMarket(symbol, cx) {
     const selected = typeof symbol === "string" && symbol ? symbol : null;
@@ -1102,7 +1102,7 @@ export default class LongbridgeApp extends View {
 
   /**
    * @param {unknown} detail
-   * @param {import("gpui").Context | import("gpui").AsyncContext} cx
+   * @param {import("gpui-kit").Context | import("gpui-kit").AsyncContext} cx
    */
   receiveDetailError(detail, cx) {
     if (
@@ -1122,7 +1122,7 @@ export default class LongbridgeApp extends View {
 
   /**
    * @param {unknown} depth
-   * @param {import("gpui").Context | import("gpui").AsyncContext} cx
+   * @param {import("gpui-kit").Context | import("gpui-kit").AsyncContext} cx
    * @param {number} generation
    */
   receiveDepth(depth, cx, generation) {
@@ -1161,7 +1161,7 @@ export default class LongbridgeApp extends View {
 
   /**
    * @param {unknown} payload
-   * @param {import("gpui").Context | import("gpui").AsyncContext} cx
+   * @param {import("gpui-kit").Context | import("gpui-kit").AsyncContext} cx
    * @param {number} generation
    */
   receiveTrades(payload, cx, generation) {
@@ -1229,6 +1229,13 @@ export default class LongbridgeApp extends View {
     // but not removed from a watchlist it may not even be on.
     /** @type {{ symbol: string, x: number, y: number, source: "watchlist" | "holdings" | "orders", orderId?: string } | null} */
     this.rowMenu = null;
+    /**
+     * The row a secondary press just landed on, between the list reporting it
+     * and the pane under the list placing the menu. See `noteRowPress`.
+     *
+     * @type {{ source: "watchlist" | "holdings" | "orders", key: string } | null}
+     */
+    this.pressedRow = null;
     /**
      * The order ticket.
      *
@@ -1352,7 +1359,7 @@ export default class LongbridgeApp extends View {
    * `quote_stream.js` bounds its own handshake for exactly this reason. This is
    * the same guard one layer out, over the steps before the stream exists.
    *
-   * @param {import("gpui").Context} cx
+   * @param {import("gpui-kit").Context} cx
    * @param {number} generation
    */
   armConnectDeadline(cx, generation) {
@@ -1379,7 +1386,7 @@ export default class LongbridgeApp extends View {
     this.connectDeadline = null;
   }
 
-  /** @param {import("gpui").Context} cx */
+  /** @param {import("gpui-kit").Context} cx */
   resume(cx) {
     this.status = { state: "restoring_token" };
     this.error = "";
@@ -1401,7 +1408,7 @@ export default class LongbridgeApp extends View {
     });
   }
 
-  /** @param {import("gpui").Context} cx */
+  /** @param {import("gpui-kit").Context} cx */
   signIn(cx) {
     if (this.authorization) return;
     const generation = (this.authorizationGeneration ?? 0) + 1;
@@ -1446,7 +1453,7 @@ export default class LongbridgeApp extends View {
     });
   }
 
-  /** @param {string} token @param {import("gpui").AsyncContext} cx */
+  /** @param {string} token @param {import("gpui-kit").AsyncContext} cx */
   async connect(token, cx) {
     this.connectedToken = token;
     // The session's own context, kept because some work outlives the view that
@@ -1543,7 +1550,7 @@ export default class LongbridgeApp extends View {
     this.loadSelectedChart(cx);
   }
 
-  /** @param {unknown} quote @param {import("gpui").AsyncContext} cx */
+  /** @param {unknown} quote @param {import("gpui-kit").AsyncContext} cx */
   receiveQuote(quote, cx) {
     let selected = false;
     // Deliberately no re-sort here. `sortLikeTerminal` ranks a row from trade
@@ -1585,7 +1592,7 @@ export default class LongbridgeApp extends View {
     this.scheduleRedraw(cx, selected ? PANE_BOTH : PANE_WATCHLIST);
   }
 
-  /** @param {import("gpui").Context} cx */
+  /** @param {import("gpui-kit").Context} cx */
   loadSelectedChart(cx) {
     const symbol = this.selectedSymbol;
     const stream = this.stream;
@@ -1694,7 +1701,7 @@ export default class LongbridgeApp extends View {
    * read as dropped. Deferring the publish lets the selection paint on the next
    * frame and the chart arrive on the one after.
    *
-   * @param {import("gpui").Context | import("gpui").AsyncContext} cx
+   * @param {import("gpui-kit").Context | import("gpui-kit").AsyncContext} cx
    */
   publishChart(cx) {
     if (this.chartPublish) return;
@@ -1705,7 +1712,7 @@ export default class LongbridgeApp extends View {
     });
   }
 
-  /** @param {unknown} status @param {import("gpui").AsyncContext} cx */
+  /** @param {unknown} status @param {import("gpui-kit").AsyncContext} cx */
   receiveStatus(status, cx) {
     this.status = status && typeof status === "object" ? status : { state: "error" };
     if (typeof this.status.error === "string") this.streamError = this.status.error;
@@ -1779,7 +1786,7 @@ export default class LongbridgeApp extends View {
    * the control for its own detail rather than something that can only ever
    * open one.
    *
-   * @param {string} orderId @param {import("gpui").Context} cx
+   * @param {string} orderId @param {import("gpui-kit").Context} cx
    */
   selectOrder(orderId, cx) {
     this.selectedOrderRowId = orderId;
@@ -1800,7 +1807,7 @@ export default class LongbridgeApp extends View {
    * independently, and one that fails has no business taking the other down.
    * A trade channel that will not connect leaves prices running.
    *
-   * @param {string} token @param {number} generation @param {import("gpui").AsyncContext} cx
+   * @param {string} token @param {number} generation @param {import("gpui-kit").AsyncContext} cx
    */
   startTradeStream(token, generation, cx) {
     this.stopTradeStream();
@@ -1823,7 +1830,7 @@ export default class LongbridgeApp extends View {
    * The push channel itself, separated only so that opening one can be tried
    * without the failure reaching the session it was opened from.
    *
-   * @param {string} token @param {number} generation @param {import("gpui").AsyncContext} cx
+   * @param {string} token @param {number} generation @param {import("gpui-kit").AsyncContext} cx
    */
   buildTradeStream(token, generation, cx) {
     let stream;
@@ -1879,7 +1886,7 @@ export default class LongbridgeApp extends View {
    * comparison is what keeps a resting order from repainting the window every
    * time the exchange restates it.
    *
-   * @param {Record<string, unknown>} pushed @param {import("gpui").Context} cx
+   * @param {Record<string, unknown>} pushed @param {import("gpui-kit").Context} cx
    */
   receiveOrderChange(pushed, cx) {
     const order = normalizePushedOrder(pushed);
@@ -1928,7 +1935,7 @@ export default class LongbridgeApp extends View {
    * nothing at all about History. So the page still asks once, when it opens
    * and when the session reconnects, rather than on a timer nobody asked for.
    *
-   * @param {import("gpui").Context} cx
+   * @param {import("gpui-kit").Context} cx
    */
   loadOrders(cx) {
     cx.spawn(async (cx) => this.reloadOrders(cx));
@@ -1959,7 +1966,7 @@ export default class LongbridgeApp extends View {
    * news -- see `receiveOrderChange` -- rather than being a poll that runs
    * whether or not anything happened.
    *
-   * @param {number} delayMillis @param {import("gpui").Context} cx
+   * @param {number} delayMillis @param {import("gpui-kit").Context} cx
    */
   scheduleOrdersRefresh(delayMillis, cx) {
     const token = (this.ordersRefreshToken ?? 0) + 1;
@@ -2007,7 +2014,7 @@ export default class LongbridgeApp extends View {
    * before its own list reports one -- and the gateway, which reports it
    * immediately, disarms that fallback when it does.
    *
-   * @param {import("gpui").Context} [fallbackContext]
+   * @param {import("gpui-kit").Context} [fallbackContext]
    */
   refreshOrdersAfterAction(fallbackContext) {
     const cx = this.sessionContext ?? fallbackContext;
@@ -2074,7 +2081,7 @@ export default class LongbridgeApp extends View {
    * reported -- see `applyPushedOrders` -- because the two do not agree
    * immediately after a write.
    *
-   * @param {import("gpui").Context} cx
+   * @param {import("gpui-kit").Context} cx
    */
   async reloadOrders(cx) {
     if (!this.hasStoredTokens) return;
@@ -2149,7 +2156,7 @@ export default class LongbridgeApp extends View {
    * The generation is what makes a fast typist safe: every keystroke starts a
    * lookup and only the newest one is allowed to publish.
    *
-   * @param {import("gpui").Context} cx
+   * @param {import("gpui-kit").Context} cx
    */
   previewSymbol(cx) {
     const { symbol } = symbolFromInput(this.symbolQuery);
@@ -2225,7 +2232,7 @@ export default class LongbridgeApp extends View {
    * as a list that does not contain it. So what says the change happened is
    * the change being there afterwards.
    *
-   * @param {import("gpui").Context} cx
+   * @param {import("gpui-kit").Context} cx
    */
   addSymbol(cx) {
     if (this.addSymbolPending || this.symbolPreview.status !== "ready") return;
@@ -2284,7 +2291,7 @@ export default class LongbridgeApp extends View {
    * and the market's own group both hold it -- and taking it out of one of
    * them leaves it on screen, put there by the other.
    *
-   * @param {string} symbol @param {import("gpui").Context} cx
+   * @param {string} symbol @param {import("gpui-kit").Context} cx
    */
   dropSymbol(symbol, cx) {
     const holders = groupsHolding(this.groups, symbol);
@@ -2426,7 +2433,7 @@ export default class LongbridgeApp extends View {
    * there is no amount that can be guessed, and a pre-filled one is an amount
    * nobody typed sitting behind a Confirm button.
    *
-   * @param {string} symbol @param {"Buy" | "Sell"} side @param {import("gpui").Context} cx
+   * @param {string} symbol @param {"Buy" | "Sell"} side @param {import("gpui-kit").Context} cx
    */
   openTicket(symbol, side, cx) {
     this.syncDialogFlags();
@@ -2479,7 +2486,7 @@ export default class LongbridgeApp extends View {
    * lot, which refuses nothing -- the exchange still enforces it, and its
    * refusal arrives with a reason, which is more than this client could say.
    *
-   * @param {string} symbol @param {import("gpui").Context} cx
+   * @param {string} symbol @param {import("gpui-kit").Context} cx
    */
   loadLotSize(symbol, cx) {
     if (this.lotSizes.has(symbol)) return;
@@ -2505,7 +2512,7 @@ export default class LongbridgeApp extends View {
    * so this has to reach the one on screen -- which may have been opened
    * before the answer arrived.
    *
-   * @param {string} symbol @param {number} lot @param {import("gpui").Context} cx
+   * @param {string} symbol @param {number} lot @param {import("gpui-kit").Context} cx
    */
   rememberLotSize(symbol, lot, cx) {
     this.lotSizes.set(symbol, lot);
@@ -2524,7 +2531,7 @@ export default class LongbridgeApp extends View {
    * holding, and the Orders page a selected order, which names one. A page
    * with nothing selected does nothing rather than guessing at a row.
    *
-   * @param {"Buy" | "Sell"} side @param {import("gpui").Context} cx
+   * @param {"Buy" | "Sell"} side @param {import("gpui-kit").Context} cx
    */
   openTicketForSelection(side, cx) {
     if (this.ticket.open || this.addSymbolOpen) return;
@@ -2545,7 +2552,7 @@ export default class LongbridgeApp extends View {
    * replacement, so an untouched quantity is still sent, and it must be sent
    * as what it was.
    *
-   * @param {LongbridgeOrderRow} order @param {import("gpui").Context} cx
+   * @param {LongbridgeOrderRow} order @param {import("gpui-kit").Context} cx
    */
   openReplaceTicket(order, cx) {
     this.syncDialogFlags();
@@ -2585,7 +2592,7 @@ export default class LongbridgeApp extends View {
    * whole of the interaction is being sure which order is about to be taken
    * back.
    *
-   * @param {LongbridgeOrderRow} order @param {import("gpui").Context} cx
+   * @param {LongbridgeOrderRow} order @param {import("gpui-kit").Context} cx
    */
   openCancelTicket(order, cx) {
     this.syncDialogFlags();
@@ -2752,7 +2759,7 @@ export default class LongbridgeApp extends View {
    * Nothing has been sent at this point and nothing will be until Confirm.
    * What this does is decide there is something worth confirming.
    *
-   * @param {import("gpui").Context} _cx
+   * @param {import("gpui-kit").Context} _cx
    */
   reviewTicket(_cx) {
     if (!this.ticket.open || this.ticket.pending) return;
@@ -2785,7 +2792,7 @@ export default class LongbridgeApp extends View {
    * a filled-in form is exactly the keystroke someone presses without looking,
    * and the screen it lands on is the one that says what is about to happen.
    *
-   * @param {import("gpui").Context} cx
+   * @param {import("gpui-kit").Context} cx
    */
   advanceTicket(cx) {
     if (!this.ticket.open || this.ticket.pending) return;
@@ -2805,7 +2812,7 @@ export default class LongbridgeApp extends View {
     this.ticket = this.blankTicket();
   }
 
-  /** @param {import("gpui").Context} cx */
+  /** @param {import("gpui-kit").Context} cx */
   closeTicket(cx) {
     if (!this.ticket.open) return;
     this.forgetTicket();
@@ -2840,7 +2847,7 @@ export default class LongbridgeApp extends View {
    * would take the answer away along with the ticket, and the reader would be
    * left to find out from the order list whether anything happened.
    *
-   * @param {import("gpui").Context} cx
+   * @param {import("gpui-kit").Context} cx
    */
   confirmTicket(cx) {
     const ticket = this.ticket;
@@ -2905,7 +2912,7 @@ export default class LongbridgeApp extends View {
     });
   }
 
-  /** @param {import("gpui").Context} cx */
+  /** @param {import("gpui-kit").Context} cx */
   loadPortfolio(cx) {
     cx.spawn(async (cx) => {
       try {
@@ -2949,7 +2956,7 @@ export default class LongbridgeApp extends View {
     ).map((quote) => previous.get(quote.symbol) ?? quote);
   }
 
-  /** @param {"light" | "dark"} mode @param {import("gpui").Context} cx */
+  /** @param {"light" | "dark"} mode @param {import("gpui-kit").Context} cx */
   chooseTheme(mode, cx) {
     if (this.followsSystemTheme) return;
     if (themes) {
@@ -2960,7 +2967,7 @@ export default class LongbridgeApp extends View {
     this.redraw(cx);
   }
 
-  /** @param {import("gpui").Context} cx */
+  /** @param {import("gpui-kit").Context} cx */
   toggleFps(cx) {
     this.fpsVisible = !this.fpsVisible;
     const visible = this.fpsVisible;
@@ -2968,13 +2975,13 @@ export default class LongbridgeApp extends View {
     this.redraw(cx);
   }
 
-  /** @param {string} value @param {string} what @param {import("gpui").Context} cx */
+  /** @param {string} value @param {string} what @param {import("gpui-kit").Context} cx */
   copyAuthorization(value, what, cx) {
     cx.write_to_clipboard(value);
     window.push_toast({ title: `${what} copied`, level: "success", id: "authorization-copy" });
   }
 
-  /** @param {import("gpui").Context} cx */
+  /** @param {import("gpui-kit").Context} cx */
   signOut(cx) {
     this.authorizationGeneration = (this.authorizationGeneration ?? 0) + 1;
     const stream = this.stream;
@@ -3016,7 +3023,7 @@ export default class LongbridgeApp extends View {
    * action is dispatched down the focus path, and the root is the one element
    * every chord can reach whatever has the keyboard.
    *
-   * @param {import("gpui").Element} element
+   * @param {import("gpui-kit").Element} element
    */
   workspaceActions(element) {
     return element
@@ -3053,7 +3060,7 @@ export default class LongbridgeApp extends View {
    * whatever is further out — which is how one chord serves a script-drawn
    * surface and base's own overlays without either knowing about the other.
    *
-   * @param {import("gpui").Context} cx
+   * @param {import("gpui-kit").Context} cx
    */
   dismiss(cx) {
     this.syncDialogFlags();
@@ -3137,7 +3144,7 @@ export default class LongbridgeApp extends View {
     };
   }
 
-  /** @param {LongbridgePage} page @param {import("gpui").Context} cx */
+  /** @param {LongbridgePage} page @param {import("gpui-kit").Context} cx */
   showPage(page, cx) {
     if (this.page === page) return;
     this.page = page;
@@ -3264,9 +3271,9 @@ export default class LongbridgeApp extends View {
    * `is_held` is only on the press half, which is the shape of the question:
    * a release is not held by definition.
    *
-   * @param {import("gpui").KeyEvent} event
+   * @param {import("gpui-kit").KeyEvent} event
    * @param {boolean} down
-   * @param {import("gpui").Context} cx
+   * @param {import("gpui-kit").Context} cx
    */
   observeKey(event, down, cx) {
     const held = down && Boolean(event.is_held);
@@ -3279,7 +3286,7 @@ export default class LongbridgeApp extends View {
     this.redraw(cx);
   }
 
-  /** @param {import("gpui").ModifiersChangedEvent} event @param {import("gpui").Context} cx */
+  /** @param {import("gpui-kit").ModifiersChangedEvent} event @param {import("gpui-kit").Context} cx */
   observeModifiers(event, cx) {
     const down = MACOS ? Boolean(event.modifiers.platform) : Boolean(event.modifiers.control);
     if (down === this.primaryModifierDown) return;
@@ -3292,7 +3299,7 @@ export default class LongbridgeApp extends View {
    * is reported once, after the release, and says nothing about the interval
    * between the two.
    *
-   * @param {boolean} down @param {import("gpui").Context} cx
+   * @param {boolean} down @param {import("gpui-kit").Context} cx
    */
   observePointer(down, cx) {
     if (this.pointerDown === down) return;
@@ -3300,7 +3307,7 @@ export default class LongbridgeApp extends View {
     this.redraw(cx);
   }
 
-  /** @param {import("gpui").Context} cx */
+  /** @param {import("gpui-kit").Context} cx */
   render(cx) {
     const tokens = cx.theme();
     // A dialog outlives the render that opened it and is handed no context of
@@ -3389,7 +3396,6 @@ export default class LongbridgeApp extends View {
           .bg(tokens.surface)
           .border(1)
           .border_color(tokens.border)
-          .rounded(tokens.radius.md)
           .child(label(tokens, "Keyboard shortcuts", "heading").font_weight(700))
           .children(
             KEY_BINDINGS.filter((binding) => Boolean(binding.caption)).map((binding) =>
@@ -3534,7 +3540,6 @@ export default class LongbridgeApp extends View {
       .gap(2)
       .px(tokens.spacing.xs)
       .py(3)
-      .rounded(tokens.radius.md)
       .bg(tokens.background)
       .border(1)
       .border_color(tokens.border)
@@ -3551,7 +3556,6 @@ export default class LongbridgeApp extends View {
               .justify_center()
               .h(24)
               .px(tokens.spacing.md)
-              .rounded(tokens.radius.sm)
               // Reserve the state border in both states so selection never
               // changes the tab's geometry.
               .border(1)
@@ -3762,7 +3766,7 @@ export default class LongbridgeApp extends View {
    * `open_dialog` takes a function, not an element: the dialog outlives the
    * pass that opened it and redraws from this on every notify.
    *
-   * @param {import("gpui").Context} cx
+   * @param {import("gpui-kit").Context} cx
    */
   openAddSymbol(cx) {
     // The add-a-security dialog is dismissable the same two ways, and its flag
@@ -3814,7 +3818,7 @@ export default class LongbridgeApp extends View {
     this.symbolPreview = { status: "idle", symbol: "", error: "" };
   }
 
-  /** @param {import("gpui").Context} cx */
+  /** @param {import("gpui-kit").Context} cx */
   closeAddSymbol(cx) {
     if (!this.addSymbolOpen) return;
     this.forgetAddSymbol();
@@ -3852,7 +3856,6 @@ export default class LongbridgeApp extends View {
         .w(380)
         .gap(tokens.spacing.md)
         .p(tokens.spacing.lg)
-        .rounded(tokens.radius.md)
         .border(1)
         .border_color(tokens.border)
         .bg(tokens.surface)
@@ -4049,7 +4052,6 @@ export default class LongbridgeApp extends View {
           v_flex()
             .gap(tokens.spacing.xs)
             .p(tokens.spacing.sm)
-            .rounded(tokens.radius.sm)
             .bg(tokens.background)
             .child(
               h_flex()
@@ -4122,7 +4124,6 @@ export default class LongbridgeApp extends View {
       .w(360)
       .gap(tokens.spacing.md)
       .p(tokens.spacing.lg)
-      .rounded(tokens.radius.md)
       .border(1)
       .border_color(tokens.border)
       .bg(tokens.surface)
@@ -4177,7 +4178,6 @@ export default class LongbridgeApp extends View {
       .id("add-symbol-preview")
       .gap(tokens.spacing.xs)
       .p(tokens.spacing.sm)
-      .rounded(tokens.radius.sm)
       .bg(tokens.background)
       .child(
         h_flex()
@@ -4214,21 +4214,54 @@ export default class LongbridgeApp extends View {
   }
 
   /**
-   * The menu a right press opens, at the pointer.
+   * A secondary press on a row, as the list reports it.
    *
-   * It acts on the selected instrument rather than on whatever the pointer
-   * happens to be over: a virtual list rebuilds its rows every frame it
-   * scrolls, so a row carries no handler of its own and there is nothing to
-   * ask which one was pressed. The menu names the instrument it will act on,
-   * which is what keeps that honest.
+   * The list hears the press before the pane under it does -- both listen for
+   * the same button, and a press bubbles from the row outwards -- so this only
+   * notes which row it was. Where to put the menu is the pane's question: the
+   * menu is drawn inside the pane at the pane's own coordinates, which the
+   * row's event does not carry, and the pane's `on_mouse_down` reads the note
+   * in the same dispatch. A note nothing reads -- a press that landed on no
+   * row -- is cleared by the next one.
    *
-   * @param {import("gpui").MouseButtonEvent} event @param {import("gpui").Context} cx
+   * @param {"watchlist" | "holdings" | "orders"} source
+   * @param {string} key
+   */
+  noteRowPress(source, key) {
+    this.pressedRow = { source, key };
+  }
+
+  /**
+   * The row the press being dispatched landed on, if it landed on one of
+   * `source`'s rows, and clears the note either way.
+   *
+   * @param {"watchlist" | "holdings" | "orders"} source
+   */
+  takeRowPress(source) {
+    const pressed = this.pressedRow;
+    this.pressedRow = null;
+    return pressed?.source === source ? pressed.key : null;
+  }
+
+  /**
+   * Opens the row menu at the pointer, for the row that was pressed.
+   *
+   * Pressed rather than selected: a menu that acted on the selected row while
+   * the pointer sat on another was a menu the reader could not trust without
+   * reading its heading first. The row is the one the list reported through
+   * `noteRowPress` a moment ago; a press that landed between rows opens
+   * nothing. The selection does not move -- the two states are drawn apart,
+   * see `rowState` in `ui.js` -- so opening a menu on a row is not the same
+   * as looking at it.
+   *
+   * @param {import("gpui-kit").MouseButtonEvent} event @param {import("gpui-kit").Context} cx
    */
   openRowMenu(event, cx) {
-    if (!this.selectedSymbol) return;
+    const symbol = this.takeRowPress("watchlist");
+    if (!symbol) return;
     const local = event.local_position ?? { x: 0, y: 0 };
     this.rowMenu = {
-      symbol: this.selectedSymbol,
+      symbol,
       x: Math.max(0, local.x),
       y: Math.max(0, local.y),
       source: "watchlist",
@@ -4245,11 +4278,11 @@ export default class LongbridgeApp extends View {
    * menu item that either does nothing or removes something the reader was
    * not looking at.
    *
-   * @param {import("gpui").MouseButtonEvent} event
-   * @param {import("gpui").Context} cx
+   * @param {import("gpui-kit").MouseButtonEvent} event
+   * @param {import("gpui-kit").Context} cx
    */
   openHoldingMenu(event, cx) {
-    const symbol = this.selectedHoldingSymbol;
+    const symbol = this.takeRowPress("holdings");
     if (!symbol) return;
     const local = event.local_position ?? { x: 0, y: 0 };
     this.rowMenu = {
@@ -4268,11 +4301,11 @@ export default class LongbridgeApp extends View {
    * entries are drawn either way and disabled when they do not apply: a menu
    * whose items come and go is one the reader has to re-read every time.
    *
-   * @param {import("gpui").MouseButtonEvent} event
-   * @param {import("gpui").Context} cx
+   * @param {import("gpui-kit").MouseButtonEvent} event
+   * @param {import("gpui-kit").Context} cx
    */
   openOrderMenu(event, cx) {
-    const orderId = this.selectedOrderRowId;
+    const orderId = this.takeRowPress("orders");
     const order = [...this.ordersState.today, ...this.ordersState.history].find(
       (entry) => entry.orderId === orderId,
     );
@@ -4369,7 +4402,7 @@ export default class LongbridgeApp extends View {
     // list, so the rows underneath went on receiving the pointer: moving down
     // the menu lit up whichever row happened to be behind each item. `Popup`
     // paints its content in a layer above the window and, since
-    // longbridge/gpui-component#2887, blocks the mouse behind that layer --
+    // longbridge/gpui-kit#2887, blocks the mouse behind that layer --
     // which is the part a hand-placed element cannot do at all.
     //
     // The trigger is a zero-sized anchor at the pointer, because that is where
@@ -4455,6 +4488,7 @@ export default class LongbridgeApp extends View {
                 index,
                 this.lastTick,
                 compact,
+                this.rowMenu?.source === "watchlist" && this.rowMenu.symbol === quote.symbol,
               ),
             (symbol, cx) => {
               this.selectedWatchlistSymbol = symbol;
@@ -4468,6 +4502,8 @@ export default class LongbridgeApp extends View {
                   "Add a security with the + beside the filter, or in Longbridge.",
                 ),
             2,
+            undefined,
+            (symbol) => this.noteRowPress("watchlist", symbol),
           )
             .flex_1()
             .min_h(0),
@@ -4491,13 +4527,16 @@ export default class LongbridgeApp extends View {
    * @param {string} name
    * @param {any[]} rows
    * @param {number} rowHeight
-   * @param {import("gpui").Element} header
-   * @param {(row: any, index: number) => import("gpui").Element} renderRow
-   * @param {((key: string, cx: import("gpui").Context) => void) | null} onSelect
-   * @param {import("gpui").Element} empty
+   * @param {import("gpui-kit").Element} header
+   * @param {(row: any, index: number) => import("gpui-kit").Element} renderRow
+   * @param {((key: string, cx: import("gpui-kit").Context) => void) | null} onSelect
+   * @param {import("gpui-kit").Element} empty
    * @param {number} [columnCount]
    * @param {(row: any, index: number) => string} [rowKey] The identity a row is
-   *   reported by, which is what `onSelect` is handed.
+   *   reported by, which is what `onSelect` and `onSecondaryPress` are handed.
+   * @param {((key: string) => void) | null} [onSecondaryPress] A right press
+   *   on a row, reported before the pane under the list hears the same press;
+   *   see `noteRowPress`.
    */
   instrumentTable(
     tokens,
@@ -4511,6 +4550,7 @@ export default class LongbridgeApp extends View {
     empty,
     columnCount = 5,
     rowKey = (row, index) => String(row?.symbol ?? index),
+    onSecondaryPress = null,
   ) {
     const body = TableBody.new(`${id}-body`)
       .relative()
@@ -4537,7 +4577,10 @@ export default class LongbridgeApp extends View {
         )
           .track_scroll(this.collectionScrollHandles[id])
           .size_full()
-          .when(Boolean(onSelect), (list) => list.on_item_click(onSelect)),
+          .when(Boolean(onSelect), (list) => list.on_item_click(onSelect))
+          .when(Boolean(onSecondaryPress), (list) =>
+            list.on_item_secondary_click((key) => onSecondaryPress(key)),
+          ),
       )
       .child(Scrollbar.vertical(`${id}-rows`).absolute().inset_0());
 
@@ -4748,7 +4791,7 @@ export default class LongbridgeApp extends View {
    * The press stops here. The pane sits inside a resizable group inside the
    * workspace, and neither of those has any business with a copy.
    *
-   * @param {import("gpui").Context} cx
+   * @param {import("gpui-kit").Context} cx
    */
   copySelectedSymbol(cx) {
     cx.stop_propagation();
@@ -4763,7 +4806,7 @@ export default class LongbridgeApp extends View {
    * watchlist -- so what it copies is the row it was opened on, which is not
    * necessarily the selected quote.
    *
-   * @param {string} symbol @param {import("gpui").Context} cx
+   * @param {string} symbol @param {import("gpui-kit").Context} cx
    */
   copySymbol(symbol, cx) {
     if (symbol) this.copyAuthorization(symbol, "Symbol", cx);
@@ -4771,7 +4814,7 @@ export default class LongbridgeApp extends View {
 
   /**
    * @param {string} symbol The virtual list's stable item key.
-   * @param {import("gpui").Context} cx
+   * @param {import("gpui-kit").Context} cx
    */
   selectQuote(symbol, cx) {
     if (!symbol || symbol === this.selectedSymbol) return;
@@ -4837,7 +4880,6 @@ export default class LongbridgeApp extends View {
       .border_t(0)
       .flex_none()
       .min_w(0)
-      .bg(tokens.background)
       .child(
         quote
           ? v_flex()
@@ -4868,7 +4910,6 @@ export default class LongbridgeApp extends View {
       .flex_1()
       .min_w(0)
       .min_h(0)
-      .bg(tokens.background)
       .child(v_flex().child(this.chartSection(tokens)));
   }
 
@@ -4946,7 +4987,6 @@ export default class LongbridgeApp extends View {
       .flex_1()
       .min_w(0)
       .min_h(0)
-      .bg(tokens.background)
       .child(
         quote
           ? v_flex().child(
@@ -5042,7 +5082,6 @@ export default class LongbridgeApp extends View {
       .bg(tokens.surface)
       .border(1)
       .border_color(tokens.border)
-      .rounded(tokens.radius.md)
       .on_mouse_down_out((_event, cx) => {
         this.calendarOpen = false;
         this.redraw(cx);
@@ -5069,7 +5108,7 @@ export default class LongbridgeApp extends View {
 
   /**
    * @param {string | null} day `null` puts the window back on today.
-   * @param {import("gpui").Context} cx
+   * @param {import("gpui-kit").Context} cx
    */
   setChartEnd(day, cx) {
     if (day === this.chartEndDate) return;
@@ -5210,7 +5249,13 @@ export default class LongbridgeApp extends View {
               HOLDING_ROW_HEIGHT,
               holdingsHeader(tokens),
               (holding, index) =>
-                holdingRow(tokens, holding, holding.symbol === this.selectedHoldingSymbol, index),
+                holdingRow(
+                  tokens,
+                  holding,
+                  holding.symbol === this.selectedHoldingSymbol,
+                  index,
+                  this.rowMenu?.source === "holdings" && this.rowMenu.symbol === holding.symbol,
+                ),
               (symbol, cx) => {
                 this.selectedHoldingSymbol = symbol;
                 this.redraw(cx);
@@ -5267,7 +5312,7 @@ export default class LongbridgeApp extends View {
    * built rather than written into each.
    *
    * @param {import("gpui-base").Theme} tokens
-   * @param {import("gpui").Element} page
+   * @param {import("gpui-kit").Element} page
    */
   withOrderMenu(tokens, page) {
     return page
@@ -5467,11 +5512,13 @@ export default class LongbridgeApp extends View {
                 order,
                 index,
                 order.orderId === (this.selectedOrderRowId ?? this.selectedOrderId),
+                this.rowMenu?.source === "orders" && this.rowMenu.orderId === order.orderId,
               ),
             (orderId, cx) => this.selectOrder(orderId, cx),
             this.ordersEmpty(tokens, empty),
             6,
             (order, index) => String(order?.orderId ?? index),
+            (orderId) => this.noteRowPress("orders", orderId),
           )
             .flex_1()
             .min_h(0),
@@ -5525,7 +5572,7 @@ export default class LongbridgeApp extends View {
    * from a streamed quote, and selecting a symbol that has none would leave
    * them showing another instrument's readings under this one's name.
    *
-   * @param {string} orderId @param {import("gpui").Context} cx
+   * @param {string} orderId @param {import("gpui-kit").Context} cx
    */
   showOrderInstrument(orderId, cx) {
     const order = [...this.ordersState.today, ...this.ordersState.history].find(

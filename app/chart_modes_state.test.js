@@ -1,6 +1,6 @@
 // Chart-mode application state owns request identity, cache, and generation.
 
-import { View } from "gpui";
+import { View } from "gpui-kit";
 import { holdContext } from "./context.js";
 import { chartRequestIdentity } from "./chart_modes.js";
 import { PERIOD, TRADE_SESSION } from "./protocol.js";

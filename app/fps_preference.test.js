@@ -1,4 +1,4 @@
-import { View } from "gpui";
+import { View } from "gpui-kit";
 import { v_flex } from "gpui-base";
 
 import { loadFpsVisible, saveFpsVisible } from "./fps_preference.js";

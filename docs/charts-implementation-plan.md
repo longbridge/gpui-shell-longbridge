@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Expose GPUI `Path`/`PathBuilder` directly; do not expose gpui-component charts.
+- Expose GPUI `Path`/`PathBuilder` directly; do not expose gpui-kit charts.
 - Keep all Longbridge access read-only.
 - Request one-minute candles for intraday sessions and retain five actual market-local trading days.
 - Never combine portfolio values across currencies without FX conversion.
@@ -23,12 +23,12 @@
 ### Task 1: gpui-shell Path surface
 
 **Files:**
-- Modify: `../gpui-component/crates/shell/src/engine/quickjs/mod.rs`
-- Modify: `../gpui-component/crates/shell/src/snapshot.rs`
-- Modify: `../gpui-component/crates/shell/src/materialize.rs`
-- Modify: `../gpui-component/crates/shell/src/typings.rs`
-- Test: `../gpui-component/crates/shell/src/tests/snapshot.rs`
-- Test: `../gpui-component/crates/shell/src/tests/render.rs`
+- Modify: `../gpui-kit/crates/shell/src/engine/quickjs/mod.rs`
+- Modify: `../gpui-kit/crates/shell/src/snapshot.rs`
+- Modify: `../gpui-kit/crates/shell/src/materialize.rs`
+- Modify: `../gpui-kit/crates/shell/src/typings.rs`
+- Test: `../gpui-kit/crates/shell/src/tests/snapshot.rs`
+- Test: `../gpui-kit/crates/shell/src/tests/render.rs`
 
 **Interfaces:**
 - Produces: global `PathBuilder` whose chainable commands end in an immutable `build(): Path`.

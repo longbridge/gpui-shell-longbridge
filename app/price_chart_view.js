@@ -1,4 +1,4 @@
-import { Background, PathBuilder, View, div } from "gpui";
+import { Background, PathBuilder, View, div } from "gpui-kit";
 import { Progress, ProgressIndicator, ProgressTrack, h_flex, v_flex } from "gpui-base";
 import {
   findNearestPricePoint,
@@ -424,7 +424,6 @@ export default class PriceChartView extends View {
       .px(tokens.spacing.sm)
       .py(tokens.spacing.xs)
       .gap(tokens.spacing.xxs)
-      .rounded(tokens.radius.md)
       .border(1)
       .border_color(tokens.border)
       .bg(tokens.surface)
@@ -674,7 +673,6 @@ export default class PriceChartView extends View {
       .px(tokens.spacing.sm)
       .py(tokens.spacing.xs)
       .gap(tokens.spacing.xxs)
-      .rounded(tokens.radius.md)
       .border(1)
       .border_color(tokens.border)
       .bg(tokens.surface)

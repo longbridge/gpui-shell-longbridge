@@ -1,4 +1,4 @@
-import { View } from "gpui";
+import { View } from "gpui-kit";
 import { v_flex } from "gpui-base";
 
 import { DEFAULT_CHART_MODE, loadChartMode, saveChartMode } from "./chart_mode_preference.js";

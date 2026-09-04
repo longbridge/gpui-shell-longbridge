@@ -103,13 +103,13 @@ configures assets, creates `ShellRuntime`, loads the
 plugin, and opens `ShellRoot`. Native concerns stay in the host; product state
 and rendering stay in JavaScript.
 
-The host depends on `gpui-shell` and `gpui-base` from the `main` branch of
+The host depends on `gpui-shell` and `gpui-kit` from the `main` branch of
 [gpui-kit](https://github.com/longbridge/gpui-kit). The lockfile
 pins the exact merged revision used by each release. `gpui-shell` exposes a
 constrained ES-module API — one module per crate that provides the capability,
-so `"gpui"` holds GPUI's own elements and what the runtime adds, `"gpui-base"`
-holds base's layout helpers, components and theme, and `"gpui-fps"` holds its
-performance overlay. The application never imports Rust implementation details.
+so `"gpui-kit"` holds GPUI's own elements and what the runtime adds,
+`"gpui-base"` holds base's layout helpers, components and theme, and
+`"gpui-fps"` holds its performance overlay. The application never imports Rust implementation details.
 
 ### Render boundary
 

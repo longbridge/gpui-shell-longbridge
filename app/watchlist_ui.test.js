@@ -1,4 +1,4 @@
-import { View } from "gpui";
+import { View } from "gpui-kit";
 import { Table, v_flex } from "gpui-base";
 import { menuTrigger, quoteDetail, quoteRow, watchlistHeader } from "./ui.js";
 
@@ -43,6 +43,27 @@ export default class WatchlistUiProbe extends View {
         // closed half of the disclosure is `detail_ui.test.js`, which is where
         // the pane owns the state.
         .child(quoteDetail(tokens, quote, quote.receivedAt + 5_000, 1, { open: true }))
+        // The row a menu is open for, drawn apart from the selected one: a ring
+        // rather than a fill, so the two can be told apart when they differ.
+        .child(
+          Table.new("probe-watchlist-menu")
+            .row_count(2)
+            .column_count(5)
+            .flex()
+            .flex_col()
+            .child(watchlistHeader(tokens))
+            .child(
+              quoteRow(
+                tokens,
+                { ...quote, symbol: "MSFT.US", code: "MSFT", name: "Microsoft Corp." },
+                false,
+                0,
+                quote.receivedAt + 5_000,
+                false,
+                true,
+              ),
+            ),
+        )
         // The compact pair is the narrow dock contract: never squeeze the
         // secondary columns into the Instrument/Last lanes.
         .child(

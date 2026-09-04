@@ -2,7 +2,7 @@
   "id": "com.longbridge.desktop-lite",
   "name": "Longbridge Lite",
   "version": "0.5.1",
-  "shell-version": "0.1.0",
+  "shell-version": "0.6.0",
   "entry": "main.js",
   "dependencies": {
     "omarchy-ui": "huacnlee/omarchy-ui"

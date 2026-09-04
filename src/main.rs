@@ -1,6 +1,6 @@
 use std::{path::PathBuf, rc::Rc, time::Duration};
 
-use gpui::{
+use gpui_kit::{
     App, Bounds, KeyBinding, Menu, MenuItem, TitlebarOptions, WindowBounds, WindowOptions, actions,
     point, px, size, transparent_black,
 };
@@ -46,7 +46,7 @@ fn main() {
         )
         .init();
 
-    gpui_platform::application()
+    gpui_kit::application()
         .with_assets(assets)
         .run(move |cx| {
             gpui_shell::init(cx);
@@ -69,7 +69,7 @@ fn main() {
             // host projects it. `active_handle` stays unset, so a drag still
             // lights up in `ring` -- the one moment the divider is worth
             // seeing.
-            gpui_base::Theme::global_mut(cx).resizable.handle = Some(transparent_black());
+            gpui_kit::base::Theme::global_mut(cx).resizable.handle = Some(transparent_black());
             // The script's "Exit" asks; what the ask *means* is the host's to
             // decide, and here it means the same as Cmd-Q.
             gpui_shell::on_exit_request(|_request, _window, cx| cx.quit());
@@ -100,15 +100,15 @@ fn main() {
                 // number well above one says the window is being asked to
                 // redraw faster than it can, which no amount of frame budget
                 // fixes.
-                gpui::set_trace_enabled(true);
+                gpui_kit::set_trace_enabled(true);
                 cx.spawn(async move |cx| {
-                    let mut collector = gpui::FrameTimingCollector::new();
+                    let mut collector = gpui_kit::FrameTimingCollector::new();
                     loop {
                         cx.background_executor().timer(Duration::from_secs(1)).await;
                         let mut draws: Vec<f64> = Vec::new();
                         let mut invalidations: u64 = 0;
                         for event in collector.collect_unseen() {
-                            if let gpui::FrameEvent::Draw(timing) = event {
+                            if let gpui_kit::FrameEvent::Draw(timing) = event {
                                 draws.push(timing.draw_duration().as_secs_f64() * 1000.0);
                                 invalidations += timing.invalidations;
                             }
@@ -255,7 +255,7 @@ fn is_application_dir(path: &std::path::Path) -> bool {
 }
 
 /// Loads the application and hands back the view to mount, or the reason not to.
-fn window_options(cx: &gpui::App) -> WindowOptions {
+fn window_options(cx: &gpui_kit::App) -> WindowOptions {
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
             None,

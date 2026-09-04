@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use gpui::{IntoElement as _, TestAppContext, VisualTestContext};
+use gpui_kit::{IntoElement as _, TestAppContext, VisualTestContext};
 use gpui_shell::ShellRuntime;
 
 fn app_dir() -> PathBuf {
@@ -83,11 +83,11 @@ fn copy_tree(source: &Path, destination: &Path) {
 fn load_test_view(
     runtime: &std::rc::Rc<ShellRuntime>,
     fixture: &ApplicationFixture,
-    window: &mut gpui::Window,
-    cx: &mut gpui::App,
+    window: &mut gpui_kit::Window,
+    cx: &mut gpui_kit::App,
 ) -> (
-    gpui::Entity<gpui_shell::ShellRoot>,
-    gpui::Entity<gpui_shell::ScriptView>,
+    gpui_kit::Entity<gpui_shell::ShellRoot>,
+    gpui_kit::Entity<gpui_shell::ScriptView>,
 ) {
     let root = runtime
         .try_load(&fixture.root, window, cx)
@@ -123,21 +123,21 @@ const PRIMARY_MODIFIER_LABEL: &str = if cfg!(target_os = "macos") {
 /// The same modifier as a held key rather than as part of a chord. GPUI names
 /// the macOS one `platform`, and the workspace reads whichever its own
 /// platform means.
-fn primary_modifiers() -> gpui::Modifiers {
+fn primary_modifiers() -> gpui_kit::Modifiers {
     if cfg!(target_os = "macos") {
-        gpui::Modifiers {
+        gpui_kit::Modifiers {
             platform: true,
             ..Default::default()
         }
     } else {
-        gpui::Modifiers {
+        gpui_kit::Modifiers {
             control: true,
             ..Default::default()
         }
     }
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn omarchy_application_follows_system_appearance(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -194,8 +194,8 @@ let themes = null;"##,
     context.run_until_parked();
     context.update(|_, cx| {
         assert_eq!(
-            gpui_base::Theme::global(cx).appearance,
-            gpui_base::ThemeAppearance::Light
+            gpui_kit::base::Theme::global(cx).appearance,
+            gpui_kit::base::ThemeAppearance::Light
         );
     });
 
@@ -203,8 +203,8 @@ let themes = null;"##,
     context.run_until_parked();
     context.update(|_, cx| {
         assert_eq!(
-            gpui_base::Theme::global(cx).appearance,
-            gpui_base::ThemeAppearance::Dark,
+            gpui_kit::base::Theme::global(cx).appearance,
+            gpui_kit::base::ThemeAppearance::Dark,
             "the Omarchy clock must apply a changed system appearance"
         );
     });
@@ -237,7 +237,7 @@ let themes = null;"##,
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn non_omarchy_application_keeps_manual_theme_switching(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -272,8 +272,8 @@ fn non_omarchy_application_keeps_manual_theme_switching(cx: &mut TestAppContext)
     context.run_until_parked();
     context.update(|_, cx| {
         assert_eq!(
-            gpui_base::Theme::global(cx).appearance,
-            gpui_base::ThemeAppearance::Dark
+            gpui_kit::base::Theme::global(cx).appearance,
+            gpui_kit::base::ThemeAppearance::Dark
         );
     });
 
@@ -281,14 +281,14 @@ fn non_omarchy_application_keeps_manual_theme_switching(cx: &mut TestAppContext)
     context.run_until_parked();
     context.update(|_, cx| {
         assert_eq!(
-            gpui_base::Theme::global(cx).appearance,
-            gpui_base::ThemeAppearance::Light,
+            gpui_kit::base::Theme::global(cx).appearance,
+            gpui_kit::base::ThemeAppearance::Light,
             "non-Omarchy systems must retain the manual theme shortcut"
         );
     });
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn quote_stream_vectors_run_against_this_application(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -300,8 +300,8 @@ fn quote_stream_vectors_run_against_this_application(cx: &mut TestAppContext) {
     context.run_until_parked();
     let draw_view = view.clone();
     context.draw(
-        gpui::Point::default(),
-        gpui::size(gpui::px(400.), gpui::px(300.)),
+        gpui_kit::Point::default(),
+        gpui_kit::size(gpui_kit::px(400.), gpui_kit::px(300.)),
         move |_, _| draw_view.into_any_element(),
     );
     let rendered = context.update(|_, cx| {
@@ -319,7 +319,7 @@ fn quote_stream_vectors_run_against_this_application(cx: &mut TestAppContext) {
 /// first read after a write comes back without it. A list rebuilt from that
 /// read alone drops the order that was just placed -- it appears, and then it
 /// vanishes.
-#[gpui::test]
+#[gpui_kit::test]
 fn a_pushed_order_outlives_the_read_that_is_behind_it(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -331,8 +331,8 @@ fn a_pushed_order_outlives_the_read_that_is_behind_it(cx: &mut TestAppContext) {
     context.run_until_parked();
     let draw_view = view.clone();
     context.draw(
-        gpui::Point::default(),
-        gpui::size(gpui::px(600.), gpui::px(400.)),
+        gpui_kit::Point::default(),
+        gpui_kit::size(gpui_kit::px(600.), gpui_kit::px(400.)),
         move |_, _| draw_view.into_any_element(),
     );
     let rendered = context.update(|_, cx| {
@@ -344,7 +344,7 @@ fn a_pushed_order_outlives_the_read_that_is_behind_it(cx: &mut TestAppContext) {
     assert!(rendered.contains("text \"ok\""), "{rendered}");
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn trade_stream_vectors_run_against_this_application(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -356,8 +356,8 @@ fn trade_stream_vectors_run_against_this_application(cx: &mut TestAppContext) {
     context.run_until_parked();
     let draw_view = view.clone();
     context.draw(
-        gpui::Point::default(),
-        gpui::size(gpui::px(400.), gpui::px(300.)),
+        gpui_kit::Point::default(),
+        gpui_kit::size(gpui_kit::px(400.), gpui_kit::px(300.)),
         move |_, _| draw_view.into_any_element(),
     );
     let rendered = context.update(|_, cx| {
@@ -369,7 +369,7 @@ fn trade_stream_vectors_run_against_this_application(cx: &mut TestAppContext) {
     assert!(rendered.contains("text \"ok\""), "{rendered}");
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn auth_and_http_vectors_run_against_this_application(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -381,8 +381,8 @@ fn auth_and_http_vectors_run_against_this_application(cx: &mut TestAppContext) {
     context.run_until_parked();
     let draw_view = view.clone();
     context.draw(
-        gpui::Point::default(),
-        gpui::size(gpui::px(400.), gpui::px(300.)),
+        gpui_kit::Point::default(),
+        gpui_kit::size(gpui_kit::px(400.), gpui_kit::px(300.)),
         move |_, _| draw_view.into_any_element(),
     );
     let rendered = context.update(|_, cx| {
@@ -394,7 +394,7 @@ fn auth_and_http_vectors_run_against_this_application(cx: &mut TestAppContext) {
     assert!(rendered.contains("text \"ok\""), "{rendered}");
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn fps_visibility_preference_defaults_off_and_round_trips(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     grant_app_capabilities();
@@ -408,8 +408,8 @@ fn fps_visibility_preference_defaults_off_and_round_trips(cx: &mut TestAppContex
     context.run_until_parked();
     let draw_view = view.clone();
     context.draw(
-        gpui::Point::default(),
-        gpui::size(gpui::px(400.), gpui::px(300.)),
+        gpui_kit::Point::default(),
+        gpui_kit::size(gpui_kit::px(400.), gpui_kit::px(300.)),
         move |_, _| draw_view.into_any_element(),
     );
     let rendered = context.update(|_, cx| {
@@ -421,7 +421,7 @@ fn fps_visibility_preference_defaults_off_and_round_trips(cx: &mut TestAppContex
     assert!(rendered.contains("text \"ok\""), "{rendered}");
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn the_chosen_chart_interval_outlives_the_session(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     grant_app_capabilities();
@@ -435,8 +435,8 @@ fn the_chosen_chart_interval_outlives_the_session(cx: &mut TestAppContext) {
     context.run_until_parked();
     let draw_view = view.clone();
     context.draw(
-        gpui::Point::default(),
-        gpui::size(gpui::px(400.), gpui::px(300.)),
+        gpui_kit::Point::default(),
+        gpui_kit::size(gpui_kit::px(400.), gpui_kit::px(300.)),
         move |_, _| draw_view.into_any_element(),
     );
     let rendered = context.update(|_, cx| {
@@ -448,7 +448,7 @@ fn the_chosen_chart_interval_outlives_the_session(cx: &mut TestAppContext) {
     assert!(rendered.contains("text \"ok\""), "{rendered}");
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn chart_vectors_run_against_this_application(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -458,7 +458,7 @@ fn chart_vectors_run_against_this_application(cx: &mut TestAppContext) {
     let _loaded = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn chart_mode_vectors_run_against_this_application(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -468,7 +468,7 @@ fn chart_mode_vectors_run_against_this_application(cx: &mut TestAppContext) {
     let _loaded = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn candlestick_geometry_vectors_run_against_this_application(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -478,7 +478,7 @@ fn candlestick_geometry_vectors_run_against_this_application(cx: &mut TestAppCon
     let _loaded = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn chart_mode_state_vectors_run_against_this_application(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -488,7 +488,7 @@ fn chart_mode_state_vectors_run_against_this_application(cx: &mut TestAppContext
     let _loaded = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn reconnect_invalidates_the_superseded_chart_request_before_stopping(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -498,7 +498,7 @@ fn reconnect_invalidates_the_superseded_chart_request_before_stopping(cx: &mut T
     let _loaded = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn protocol_vectors_run_against_this_application(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -508,7 +508,7 @@ fn protocol_vectors_run_against_this_application(cx: &mut TestAppContext) {
     let _loaded = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn market_state_vectors_run_against_this_application(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -518,7 +518,7 @@ fn market_state_vectors_run_against_this_application(cx: &mut TestAppContext) {
     let _loaded = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn market_detail_vectors_run_against_this_application(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -528,7 +528,7 @@ fn market_detail_vectors_run_against_this_application(cx: &mut TestAppContext) {
     let _loaded = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn market_detail_state_vectors_run_against_this_application(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -538,7 +538,7 @@ fn market_detail_state_vectors_run_against_this_application(cx: &mut TestAppCont
     let _loaded = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn orders_page_stacks_today_over_history_as_one_filtered_reading(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     grant_app_capabilities();
@@ -550,8 +550,8 @@ fn orders_page_stacks_today_over_history_as_one_filtered_reading(cx: &mut TestAp
     context.run_until_parked();
     let draw_view = view.clone();
     context.draw(
-        gpui::Point::default(),
-        gpui::size(gpui::px(1000.), gpui::px(760.)),
+        gpui_kit::Point::default(),
+        gpui_kit::size(gpui_kit::px(1000.), gpui_kit::px(760.)),
         move |_, _| draw_view.into_any_element(),
     );
     let rendered = context.update(|_, cx| {
@@ -749,7 +749,7 @@ fn orders_page_stacks_today_over_history_as_one_filtered_reading(cx: &mut TestAp
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn an_empty_today_gives_its_height_back_to_the_history(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     grant_app_capabilities();
@@ -761,8 +761,8 @@ fn an_empty_today_gives_its_height_back_to_the_history(cx: &mut TestAppContext) 
     context.run_until_parked();
     let draw_view = view.clone();
     context.draw(
-        gpui::Point::default(),
-        gpui::size(gpui::px(1000.), gpui::px(760.)),
+        gpui_kit::Point::default(),
+        gpui_kit::size(gpui_kit::px(1000.), gpui_kit::px(760.)),
         move |_, _| draw_view.into_any_element(),
     );
     let rendered = context.update(|_, cx| {
@@ -825,7 +825,7 @@ fn an_empty_today_gives_its_height_back_to_the_history(cx: &mut TestAppContext) 
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn watchlist_edit_vectors_run_against_this_application(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -835,7 +835,7 @@ fn watchlist_edit_vectors_run_against_this_application(cx: &mut TestAppContext) 
     let _loaded = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn order_vectors_run_against_this_application(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -851,7 +851,7 @@ fn order_vectors_run_against_this_application(cx: &mut TestAppContext) {
 /// `backdrop_dismissable` leave the application's own "is it open?" field
 /// saying yes about a surface that is gone. Every `open...` guard reads that
 /// field, so the ticket could otherwise be opened exactly once per run.
-#[gpui::test]
+#[gpui_kit::test]
 fn a_dialog_dismissed_by_the_shell_can_be_opened_again(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -862,8 +862,8 @@ fn a_dialog_dismissed_by_the_shell_can_be_opened_again(cx: &mut TestAppContext) 
     context.run_until_parked();
     let draw_view = view.clone();
     context.draw(
-        gpui::Point::default(),
-        gpui::size(gpui::px(1000.), gpui::px(760.)),
+        gpui_kit::Point::default(),
+        gpui_kit::size(gpui_kit::px(1000.), gpui_kit::px(760.)),
         move |_, _| draw_view.into_any_element(),
     );
     let rendered = context.update(|_, cx| {
@@ -883,7 +883,7 @@ fn a_dialog_dismissed_by_the_shell_can_be_opened_again(cx: &mut TestAppContext) 
 /// This application is driven from the keyboard and the ticket is reached by
 /// one, so a form that can only be completed by clicking is a form half of it
 /// cannot use.
-#[gpui::test]
+#[gpui_kit::test]
 fn the_order_ticket_can_be_filled_in_from_the_keyboard(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -894,8 +894,8 @@ fn the_order_ticket_can_be_filled_in_from_the_keyboard(cx: &mut TestAppContext) 
     context.run_until_parked();
     let draw_view = view.clone();
     context.draw(
-        gpui::Point::default(),
-        gpui::size(gpui::px(1000.), gpui::px(760.)),
+        gpui_kit::Point::default(),
+        gpui_kit::size(gpui_kit::px(1000.), gpui_kit::px(760.)),
         move |_, _| draw_view.into_any_element(),
     );
     let rendered = context.update(|_, cx| {
@@ -961,7 +961,7 @@ fn the_order_ticket_can_be_filled_in_from_the_keyboard(cx: &mut TestAppContext) 
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn the_order_ticket_states_what_it_will_send(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -972,8 +972,8 @@ fn the_order_ticket_states_what_it_will_send(cx: &mut TestAppContext) {
     context.run_until_parked();
     let draw_view = view.clone();
     context.draw(
-        gpui::Point::default(),
-        gpui::size(gpui::px(1000.), gpui::px(760.)),
+        gpui_kit::Point::default(),
+        gpui_kit::size(gpui_kit::px(1000.), gpui_kit::px(760.)),
         move |_, _| draw_view.into_any_element(),
     );
     let rendered = context.update(|_, cx| {
@@ -1122,7 +1122,7 @@ fn the_order_ticket_states_what_it_will_send(cx: &mut TestAppContext) {
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn trade_vectors_run_against_this_application(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -1132,7 +1132,7 @@ fn trade_vectors_run_against_this_application(cx: &mut TestAppContext) {
     let _loaded = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn portfolio_vectors_run_against_this_application(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -1142,7 +1142,7 @@ fn portfolio_vectors_run_against_this_application(cx: &mut TestAppContext) {
     let _loaded = context.update(|window, cx| load_test_view(&runtime, &fixture, window, cx));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn watchlist_row_renders_scannable_market_columns(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -1153,8 +1153,8 @@ fn watchlist_row_renders_scannable_market_columns(cx: &mut TestAppContext) {
     context.run_until_parked();
     let draw_view = view.clone();
     context.draw(
-        gpui::Point::default(),
-        gpui::size(gpui::px(900.), gpui::px(300.)),
+        gpui_kit::Point::default(),
+        gpui_kit::size(gpui_kit::px(900.), gpui_kit::px(300.)),
         move |_, _| draw_view.into_any_element(),
     );
     let rendered = context.update(|_, cx| {
@@ -1266,6 +1266,26 @@ fn watchlist_row_renders_scannable_market_columns(cx: &mut TestAppContext) {
     assert!(!closed.contains(":selected[Bool(true)]"), "{closed}");
     assert!(open.contains(":selected[Bool(true)]"), "{open}");
 
+    // The row a menu is open for wears a ring; the selected row a fill and no
+    // ring, so the two read apart when they are different rows.
+    let menu_row = rendered
+        .split(r#"TableRow "quote-MSFT.US""#)
+        .nth(1)
+        .and_then(|rest| rest.split("TableRow ").next())
+        .expect("the probe draws the row a menu is open for");
+    assert!(
+        menu_row.contains(".absolute") && menu_row.contains(".border[Number(1"),
+        "the menu's row carries a ring:\n{menu_row}"
+    );
+    let selected_row = rendered
+        .split(r#"TableRow "quote-AAPL.US""#)
+        .nth(1)
+        .and_then(|rest| rest.split("TableRow ").next())
+        .expect("the probe draws the selected row");
+    assert!(
+        !selected_row.contains(".absolute"),
+        "the selected row carries no ring:\n{selected_row}"
+    );
     let compact = rendered
         .split_once(r#"Table "probe-watchlist-compact""#)
         .map(|(_, compact)| compact)
@@ -1317,7 +1337,7 @@ fn watchlist_row_renders_scannable_market_columns(cx: &mut TestAppContext) {
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn authenticated_workspace_materializes_a_scrollable_watchlist(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     grant_app_capabilities();
@@ -1330,8 +1350,8 @@ fn authenticated_workspace_materializes_a_scrollable_watchlist(cx: &mut TestAppC
     context.run_until_parked();
     let draw_view = view.clone();
     context.draw(
-        gpui::Point::default(),
-        gpui::size(gpui::px(1120.), gpui::px(760.)),
+        gpui_kit::Point::default(),
+        gpui_kit::size(gpui_kit::px(1120.), gpui_kit::px(760.)),
         move |_, _| draw_view.into_any_element(),
     );
     let rendered = context.update(|_, cx| {
@@ -1358,7 +1378,7 @@ fn authenticated_workspace_materializes_a_scrollable_watchlist(cx: &mut TestAppC
 /// The panes still draw what they always drew; they simply draw it inside a
 /// panel now. This probe renders one of them directly, which is the only way to
 /// read a panel's own description from here.
-#[gpui::test]
+#[gpui_kit::test]
 fn the_watchlist_pane_still_virtualizes_its_rows(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     grant_app_capabilities();
@@ -1371,8 +1391,8 @@ fn the_watchlist_pane_still_virtualizes_its_rows(cx: &mut TestAppContext) {
     context.run_until_parked();
     let draw_view = view.clone();
     context.draw(
-        gpui::Point::default(),
-        gpui::size(gpui::px(1120.), gpui::px(760.)),
+        gpui_kit::Point::default(),
+        gpui_kit::size(gpui_kit::px(1120.), gpui_kit::px(760.)),
         move |_, _| draw_view.into_any_element(),
     );
     let rendered = context.update(|_, cx| {
@@ -1399,7 +1419,7 @@ fn the_watchlist_pane_still_virtualizes_its_rows(cx: &mut TestAppContext) {
     assert!(rendered.contains(":tooltip"), "{rendered}");
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn retained_price_chart_owns_its_indicator_and_dated_tooltip(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -1445,9 +1465,9 @@ fn retained_price_chart_owns_its_indicator_and_dated_tooltip(cx: &mut TestAppCon
     assert!(initial.contains(":on_hover(fn)"), "{initial}");
 
     context.simulate_mouse_move(
-        gpui::point(gpui::px(100.), gpui::px(80.)),
+        gpui_kit::point(gpui_kit::px(100.), gpui_kit::px(80.)),
         None,
-        gpui::Modifiers::default(),
+        gpui_kit::Modifiers::default(),
     );
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));
@@ -1466,9 +1486,9 @@ fn retained_price_chart_owns_its_indicator_and_dated_tooltip(cx: &mut TestAppCon
     // This exercises the current snapshot's genuine `on_hover(false)` path,
     // rather than clearing hover by directly invoking child state.
     context.simulate_mouse_move(
-        gpui::point(gpui::px(700.), gpui::px(300.)),
+        gpui_kit::point(gpui_kit::px(700.), gpui_kit::px(300.)),
         None,
-        gpui::Modifiers::default(),
+        gpui_kit::Modifiers::default(),
     );
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));
@@ -1486,15 +1506,15 @@ fn retained_price_chart_owns_its_indicator_and_dated_tooltip(cx: &mut TestAppCon
     );
 
     context.simulate_click(
-        gpui::point(gpui::px(400.), gpui::px(14.)),
-        gpui::Modifiers::default(),
+        gpui_kit::point(gpui_kit::px(400.), gpui_kit::px(14.)),
+        gpui_kit::Modifiers::default(),
     );
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));
     context.simulate_mouse_move(
-        gpui::point(gpui::px(100.), gpui::px(100.)),
+        gpui_kit::point(gpui_kit::px(100.), gpui_kit::px(100.)),
         None,
-        gpui::Modifiers::default(),
+        gpui_kit::Modifiers::default(),
     );
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));
@@ -1521,8 +1541,8 @@ fn retained_price_chart_owns_its_indicator_and_dated_tooltip(cx: &mut TestAppCon
     );
 
     context.simulate_click(
-        gpui::point(gpui::px(75.), gpui::px(14.)),
-        gpui::Modifiers::default(),
+        gpui_kit::point(gpui_kit::px(75.), gpui_kit::px(14.)),
+        gpui_kit::Modifiers::default(),
     );
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));
@@ -1547,9 +1567,9 @@ fn retained_price_chart_owns_its_indicator_and_dated_tooltip(cx: &mut TestAppCon
         (460., "Post-market"),
     ] {
         context.simulate_mouse_move(
-            gpui::point(gpui::px(x), gpui::px(100.)),
+            gpui_kit::point(gpui_kit::px(x), gpui_kit::px(100.)),
             None,
-            gpui::Modifiers::default(),
+            gpui_kit::Modifiers::default(),
         );
         context.run_until_parked();
         context.update(|window, cx| window.draw(cx).clear(cx));
@@ -1561,7 +1581,7 @@ fn retained_price_chart_owns_its_indicator_and_dated_tooltip(cx: &mut TestAppCon
     }
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn retained_price_chart_hover_rebuilds_the_child_without_the_parent(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -1604,9 +1624,9 @@ fn retained_price_chart_hover_rebuilds_the_child_without_the_parent(cx: &mut Tes
     );
 
     let drive_child_only =
-        |context: &mut VisualTestContext, point: gpui::Point<gpui::Pixels>, operation: &str| {
+        |context: &mut VisualTestContext, point: gpui_kit::Point<gpui_kit::Pixels>, operation: &str| {
             let before = runtime.read_metrics();
-            context.simulate_click(point, gpui::Modifiers::default());
+            context.simulate_click(point, gpui_kit::Modifiers::default());
             context.run_until_parked();
             context.update(|window, cx| window.draw(cx).clear(cx));
             assert_eq!(
@@ -1623,25 +1643,25 @@ fn retained_price_chart_hover_rebuilds_the_child_without_the_parent(cx: &mut Tes
 
     drive_child_only(
         &mut context,
-        gpui::point(gpui::px(75.), gpui::px(20.)),
+        gpui_kit::point(gpui_kit::px(75.), gpui_kit::px(20.)),
         "loading props",
     );
     drive_child_only(
         &mut context,
-        gpui::point(gpui::px(225.), gpui::px(20.)),
+        gpui_kit::point(gpui_kit::px(225.), gpui_kit::px(20.)),
         "error props",
     );
     drive_child_only(
         &mut context,
-        gpui::point(gpui::px(375.), gpui::px(20.)),
+        gpui_kit::point(gpui_kit::px(375.), gpui_kit::px(20.)),
         "ready props",
     );
 
     let before_hover = runtime.read_metrics();
     context.simulate_mouse_move(
-        gpui::point(gpui::px(100.), gpui::px(100.)),
+        gpui_kit::point(gpui_kit::px(100.), gpui_kit::px(100.)),
         None,
-        gpui::Modifiers::default(),
+        gpui_kit::Modifiers::default(),
     );
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));
@@ -1657,7 +1677,7 @@ fn retained_price_chart_hover_rebuilds_the_child_without_the_parent(cx: &mut Tes
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn a_large_candlestick_publication_does_not_overflow_nested_view_rollback(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -1674,8 +1694,8 @@ fn a_large_candlestick_publication_does_not_overflow_nested_view_rollback(cx: &m
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));
     context.simulate_click(
-        gpui::point(gpui::px(160.), gpui::px(20.)),
-        gpui::Modifiers::default(),
+        gpui_kit::point(gpui_kit::px(160.), gpui_kit::px(20.)),
+        gpui_kit::Modifiers::default(),
     );
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));
@@ -1699,7 +1719,7 @@ fn a_large_candlestick_publication_does_not_overflow_nested_view_rollback(cx: &m
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn unrelated_quote_updates_do_not_rebuild_the_price_chart_child(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -1718,8 +1738,8 @@ fn unrelated_quote_updates_do_not_rebuild_the_price_chart_child(cx: &mut TestApp
     let before = runtime.read_metrics();
 
     context.simulate_click(
-        gpui::point(gpui::px(20.), gpui::px(20.)),
-        gpui::Modifiers::default(),
+        gpui_kit::point(gpui_kit::px(20.), gpui_kit::px(20.)),
+        gpui_kit::Modifiers::default(),
     );
     // Quotes no longer repaint as they land. They arrive in bursts and a
     // repaint on a restored layout is a whole-window refresh, so the burst is
@@ -1737,7 +1757,7 @@ fn unrelated_quote_updates_do_not_rebuild_the_price_chart_child(cx: &mut TestApp
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn clicking_a_watchlist_row_selects_that_instruments_details(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     grant_app_capabilities();
@@ -1760,8 +1780,8 @@ fn clicking_a_watchlist_row_selects_that_instruments_details(cx: &mut TestAppCon
     // probe layout. Clicking it exercises the native virtual-list hit box,
     // rather than invoking selection directly.
     context.simulate_click(
-        gpui::point(gpui::px(200.), gpui::px(130.)),
-        gpui::Modifiers::default(),
+        gpui_kit::point(gpui_kit::px(200.), gpui_kit::px(130.)),
+        gpui_kit::Modifiers::default(),
     );
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));
@@ -1789,7 +1809,7 @@ fn clicking_a_watchlist_row_selects_that_instruments_details(cx: &mut TestAppCon
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn allocation_donut_folds_past_the_available_theme_palette(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -1800,8 +1820,8 @@ fn allocation_donut_folds_past_the_available_theme_palette(cx: &mut TestAppConte
     context.run_until_parked();
     let draw_view = view.clone();
     context.draw(
-        gpui::Point::default(),
-        gpui::size(gpui::px(640.), gpui::px(400.)),
+        gpui_kit::Point::default(),
+        gpui_kit::size(gpui_kit::px(640.), gpui_kit::px(400.)),
         move |_, _| draw_view.into_any_element(),
     );
     let rendered = context.update(|_, cx| {
@@ -1863,7 +1883,7 @@ fn allocation_donut_folds_past_the_available_theme_palette(cx: &mut TestAppConte
     // chart geometry and folding, not a particular installed Omarchy theme.
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn portfolio_renders_pnl_summary_and_position_columns(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     grant_app_capabilities();
@@ -1875,8 +1895,8 @@ fn portfolio_renders_pnl_summary_and_position_columns(cx: &mut TestAppContext) {
     context.run_until_parked();
     let draw_view = view.clone();
     context.draw(
-        gpui::Point::default(),
-        gpui::size(gpui::px(900.), gpui::px(600.)),
+        gpui_kit::Point::default(),
+        gpui_kit::size(gpui_kit::px(900.), gpui_kit::px(600.)),
         move |_, _| draw_view.into_any_element(),
     );
     let rendered = context.update(|_, cx| {
@@ -1966,29 +1986,29 @@ fn portfolio_renders_pnl_summary_and_position_columns(cx: &mut TestAppContext) {
 
 struct Empty;
 
-impl gpui::Render for Empty {
+impl gpui_kit::Render for Empty {
     fn render(
         &mut self,
-        _: &mut gpui::Window,
-        _: &mut gpui::Context<Self>,
-    ) -> impl gpui::IntoElement {
-        gpui::div()
+        _: &mut gpui_kit::Window,
+        _: &mut gpui_kit::Context<Self>,
+    ) -> impl gpui_kit::IntoElement {
+        gpui_kit::div()
     }
 }
 
-struct WorkspaceRoot(gpui::Entity<gpui_shell::ShellRoot>);
+struct WorkspaceRoot(gpui_kit::Entity<gpui_shell::ShellRoot>);
 
-impl gpui::Render for WorkspaceRoot {
+impl gpui_kit::Render for WorkspaceRoot {
     fn render(
         &mut self,
-        _: &mut gpui::Window,
-        _: &mut gpui::Context<Self>,
-    ) -> impl gpui::IntoElement {
+        _: &mut gpui_kit::Window,
+        _: &mut gpui_kit::Context<Self>,
+    ) -> impl gpui_kit::IntoElement {
         self.0.clone().into_any_element()
     }
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn stock_details_lead_with_the_price_and_fold_their_secondary_readings(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     grant_app_capabilities();
@@ -2000,8 +2020,8 @@ fn stock_details_lead_with_the_price_and_fold_their_secondary_readings(cx: &mut 
     context.run_until_parked();
     let draw_view = view.clone();
     context.draw(
-        gpui::Point::default(),
-        gpui::size(gpui::px(520.), gpui::px(760.)),
+        gpui_kit::Point::default(),
+        gpui_kit::size(gpui_kit::px(520.), gpui_kit::px(760.)),
         move |_, _| draw_view.into_any_element(),
     );
     let rendered = context.update(|_, cx| {
@@ -2232,7 +2252,7 @@ fn stock_details_lead_with_the_price_and_fold_their_secondary_readings(cx: &mut 
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn market_detail_panels_name_loading_empty_and_error_states(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -2243,8 +2263,8 @@ fn market_detail_panels_name_loading_empty_and_error_states(cx: &mut TestAppCont
     context.run_until_parked();
     let draw_view = view.clone();
     context.draw(
-        gpui::Point::default(),
-        gpui::size(gpui::px(360.), gpui::px(480.)),
+        gpui_kit::Point::default(),
+        gpui_kit::size(gpui_kit::px(360.), gpui_kit::px(480.)),
         move |_, _| draw_view.into_any_element(),
     );
     let rendered = context.update(|_, cx| {
@@ -2276,7 +2296,7 @@ fn market_detail_panels_name_loading_empty_and_error_states(cx: &mut TestAppCont
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn sparse_order_book_keeps_best_levels_next_to_the_spread(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let runtime = cx.update(ShellRuntime::new).expect("runtime");
@@ -2287,8 +2307,8 @@ fn sparse_order_book_keeps_best_levels_next_to_the_spread(cx: &mut TestAppContex
     context.run_until_parked();
     let draw_view = view.clone();
     context.draw(
-        gpui::Point::default(),
-        gpui::size(gpui::px(360.), gpui::px(300.)),
+        gpui_kit::Point::default(),
+        gpui_kit::size(gpui_kit::px(360.), gpui_kit::px(300.)),
         move |_, _| draw_view.into_any_element(),
     );
     let rendered = context.update(|_, cx| {
@@ -2336,7 +2356,7 @@ fn sparse_order_book_keeps_best_levels_next_to_the_spread(cx: &mut TestAppContex
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn holdings_scroll_as_one_virtualized_collection_without_pagination(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     grant_app_capabilities();
@@ -2348,8 +2368,8 @@ fn holdings_scroll_as_one_virtualized_collection_without_pagination(cx: &mut Tes
     context.run_until_parked();
     let draw_view = view.clone();
     context.draw(
-        gpui::Point::default(),
-        gpui::size(gpui::px(900.), gpui::px(900.)),
+        gpui_kit::Point::default(),
+        gpui_kit::size(gpui_kit::px(900.), gpui_kit::px(900.)),
         move |_, _| draw_view.into_any_element(),
     );
     let rendered = context.update(|_, cx| {
@@ -2366,7 +2386,7 @@ fn holdings_scroll_as_one_virtualized_collection_without_pagination(cx: &mut Tes
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn a_bound_chord_reaches_the_action_that_switches_page(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     grant_app_capabilities();
@@ -2563,7 +2583,7 @@ fn a_bound_chord_reaches_the_action_that_switches_page(cx: &mut TestAppContext) 
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn modifier_hold_reveals_workspace_tab_shortcuts_until_release(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     grant_app_capabilities();
@@ -2617,7 +2637,7 @@ fn modifier_hold_reveals_workspace_tab_shortcuts_until_release(cx: &mut TestAppC
         );
     }
 
-    context.simulate_modifiers_change(gpui::Modifiers::default());
+    context.simulate_modifiers_change(gpui_kit::Modifiers::default());
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));
     let released = tree(&mut context);
@@ -2626,7 +2646,7 @@ fn modifier_hold_reveals_workspace_tab_shortcuts_until_release(cx: &mut TestAppC
     assert!(!released.contains("page-orders-shortcut"), "{released}");
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn tab_reaches_the_watchlist_filter_and_text_editing_stays_in_the_input(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     grant_app_capabilities();
@@ -2696,7 +2716,7 @@ fn tab_reaches_the_watchlist_filter_and_text_editing_stays_in_the_input(cx: &mut
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn keyboard_selection_scrolls_a_virtualized_row_into_view(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     grant_app_capabilities();
@@ -2731,8 +2751,8 @@ fn keyboard_selection_scrolls_a_virtualized_row_into_view(cx: &mut TestAppContex
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));
     context.simulate_click(
-        gpui::point(gpui::px(200.), gpui::px(130.)),
-        gpui::Modifiers::default(),
+        gpui_kit::point(gpui_kit::px(200.), gpui_kit::px(130.)),
+        gpui_kit::Modifiers::default(),
     );
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));
@@ -2754,8 +2774,8 @@ fn keyboard_selection_scrolls_a_virtualized_row_into_view(cx: &mut TestAppContex
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));
     context.simulate_click(
-        gpui::point(gpui::px(200.), gpui::px(130.)),
-        gpui::Modifiers::default(),
+        gpui_kit::point(gpui_kit::px(200.), gpui_kit::px(130.)),
+        gpui_kit::Modifiers::default(),
     );
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));
@@ -2771,7 +2791,7 @@ fn keyboard_selection_scrolls_a_virtualized_row_into_view(cx: &mut TestAppContex
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn the_window_readout_follows_the_window_it_is_measuring(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     grant_app_capabilities();
@@ -2805,7 +2825,7 @@ fn the_window_readout_follows_the_window_it_is_measuring(cx: &mut TestAppContext
     // is taken on the first render after one. An unbound chord is the cheapest
     // notification there is: it reaches `on_key_down` and nothing else.
     let redraw = |context: &mut VisualTestContext, width: f32, chord: &str| {
-        context.simulate_resize(gpui::size(gpui::px(width), gpui::px(800.)));
+        context.simulate_resize(gpui_kit::size(gpui_kit::px(width), gpui_kit::px(800.)));
         context.run_until_parked();
         context.simulate_keystrokes(chord);
         context.run_until_parked();
@@ -2834,7 +2854,7 @@ fn the_window_readout_follows_the_window_it_is_measuring(cx: &mut TestAppContext
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn escape_puts_away_what_the_workspace_opened_and_then_carries_on(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     grant_app_capabilities();
@@ -2900,8 +2920,8 @@ fn escape_puts_away_what_the_workspace_opened_and_then_carries_on(cx: &mut TestA
     assert!(!again.contains("chart-calendar-surface"), "{again}");
 }
 
-#[gpui::test]
-fn a_right_press_in_the_watchlist_opens_a_menu_for_the_selected_instrument(
+#[gpui_kit::test]
+fn a_right_press_on_a_watchlist_row_opens_a_menu_for_that_row_and_leaves_the_selection(
     cx: &mut TestAppContext,
 ) {
     cx.update(gpui_shell::init);
@@ -2921,19 +2941,6 @@ fn a_right_press_in_the_watchlist_opens_a_menu_for_the_selected_instrument(
     context.run_until_parked();
     context.update(|window, cx| window.draw(cx).clear(cx));
 
-    // A press, not a click: `on_click` reports neither which button nor how
-    // many presses ago, and a watchlist row cannot carry a handler of its own
-    // because the virtual list rebuilds its rows every frame it scrolls.
-    context.simulate_event(gpui::MouseDownEvent {
-        button: gpui::MouseButton::Right,
-        position: gpui::point(gpui::px(200.), gpui::px(200.)),
-        modifiers: gpui::Modifiers::default(),
-        click_count: 1,
-        first_mouse: false,
-    });
-    context.run_until_parked();
-    context.update(|window, cx| window.draw(cx).clear(cx));
-
     let view = window
         .root(&mut context)
         .expect("workspace root")
@@ -2945,32 +2952,75 @@ fn a_right_press_in_the_watchlist_opens_a_menu_for_the_selected_instrument(
                 .downcast::<gpui_shell::ScriptView>()
                 .expect("workspace content is a script view")
         });
-    let rendered = context.update(|_, cx| {
-        view.read(cx)
-            .snapshot()
-            .map(gpui_shell::RenderSnapshot::debug_tree)
-            .unwrap_or_default()
-    });
+    let render = |context: &mut VisualTestContext| {
+        context.update(|_, cx| {
+            view.read(cx)
+                .snapshot()
+                .map(gpui_shell::RenderSnapshot::debug_tree)
+                .unwrap_or_default()
+        })
+    };
+    // A press, not a click: a context menu opens on the press, and the list
+    // reports which row it landed on through `on_item_secondary_click`.
+    let press = |context: &mut VisualTestContext, y: f32| {
+        context.simulate_mouse_move(
+            gpui_kit::point(gpui_kit::px(200.), gpui_kit::px(y)),
+            gpui_kit::MouseButton::Right,
+            gpui_kit::Modifiers::default(),
+        );
+        context.simulate_mouse_down(
+            gpui_kit::point(gpui_kit::px(200.), gpui_kit::px(y)),
+            gpui_kit::MouseButton::Right,
+            gpui_kit::Modifiers::default(),
+        );
+        context.run_until_parked();
+        context.update(|window, cx| window.draw(cx).clear(cx));
+    };
 
-    // The menu is drawn where the press was, inside the pane whose coordinates
-    // the press reported, and it names the instrument it will act on -- which
-    // is the selected one, because a virtual list's rows carry no handler that
-    // could say which of them was pressed.
+    // AAPL is selected; MSFT is the other row. Walk down the pane until a
+    // press lands on MSFT -- the rows' exact y depends on the chrome above
+    // them, which is not what this test is about.
+    let mut found = None;
+    let mut y = 90.;
+    while y < 600. && found.is_none() {
+        press(&mut context, y);
+        let rendered = render(&mut context);
+        if rendered.contains(r#"Button "row-menu-copy""#) && rendered.contains("text \"MSFT.US\"") {
+            found = Some(rendered);
+        }
+        y += 11.;
+    }
+    let rendered = found.expect("a right press on the MSFT row must open a menu naming MSFT");
+
+    // The menu is for the row that was pressed, and offers what the Watchlist
+    // offers.
     assert!(
         rendered.contains(r#"Button "row-menu-copy""#)
             && rendered.contains(r#"Button "row-menu-drop""#)
             && rendered.contains("Copy symbol")
-            && rendered.contains("text \"Remove\"")
-            && rendered.contains("text \"AAPL.US\""),
-        "a right press must open a menu for the selected instrument:\n{rendered}"
+            && rendered.contains("text \"Remove\""),
+        "a right press must open the Watchlist menu for the pressed row:\n{rendered}"
     );
     assert!(
         rendered.contains(".absolute .left[Number(") && rendered.contains(":on_mouse_down_out(fn)"),
         "the menu is placed at the pointer and closes on a press outside it:\n{rendered}"
     );
+    // Opening a menu on a row is not the same as looking at it: the details
+    // still show AAPL, and the two rows are drawn apart -- the selected one as
+    // a fill, the pressed one as a ring.
+    let heading = rendered
+        .split_once(r#":id[Str("quote-detail-heading")]"#)
+        .map(|(_, rest)| rest)
+        .and_then(|rest| rest.split_once(r#":id[Str("quote-detail-stats")]"#))
+        .map(|(heading, _)| heading)
+        .expect("the quote details keep their heading");
+    assert!(
+        heading.contains("Apple Inc.") && !heading.contains("Microsoft"),
+        "the selection must not move to the pressed row:\n{heading}"
+    );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn the_diagnostics_popover_answers_every_window_measurement(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     grant_app_capabilities();
@@ -2982,8 +3032,8 @@ fn the_diagnostics_popover_answers_every_window_measurement(cx: &mut TestAppCont
     context.run_until_parked();
     let draw_view = view.clone();
     context.draw(
-        gpui::Point::default(),
-        gpui::size(gpui::px(1120.), gpui::px(760.)),
+        gpui_kit::Point::default(),
+        gpui_kit::size(gpui_kit::px(1120.), gpui_kit::px(760.)),
         move |_, _| draw_view.into_any_element(),
     );
     let rendered = context.update(|_, cx| {
@@ -3036,7 +3086,7 @@ fn the_diagnostics_popover_answers_every_window_measurement(cx: &mut TestAppCont
     }
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn a_dispatched_action_reaches_the_handler_a_chord_would(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     grant_app_capabilities();
@@ -3090,7 +3140,7 @@ fn a_dispatched_action_reaches_the_handler_a_chord_would(cx: &mut TestAppContext
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn an_avatar_draws_its_image_when_it_has_one_and_its_fallback_otherwise(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     grant_app_capabilities();
@@ -3102,8 +3152,8 @@ fn an_avatar_draws_its_image_when_it_has_one_and_its_fallback_otherwise(cx: &mut
     context.run_until_parked();
     let draw_view = view.clone();
     context.draw(
-        gpui::Point::default(),
-        gpui::size(gpui::px(200.), gpui::px(100.)),
+        gpui_kit::Point::default(),
+        gpui_kit::size(gpui_kit::px(200.), gpui_kit::px(100.)),
         move |_, _| draw_view.into_any_element(),
     );
     let rendered = context.update(|_, cx| {
@@ -3126,7 +3176,7 @@ fn an_avatar_draws_its_image_when_it_has_one_and_its_fallback_otherwise(cx: &mut
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn title_bar_draws_the_themed_official_svg_mark(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     grant_app_capabilities();
@@ -3138,8 +3188,8 @@ fn title_bar_draws_the_themed_official_svg_mark(cx: &mut TestAppContext) {
     context.run_until_parked();
     let draw_view = view.clone();
     context.draw(
-        gpui::Point::default(),
-        gpui::size(gpui::px(640.), gpui::px(48.)),
+        gpui_kit::Point::default(),
+        gpui_kit::size(gpui_kit::px(640.), gpui_kit::px(48.)),
         move |_, _| draw_view.into_any_element(),
     );
     let rendered = context.update(|_, cx| {

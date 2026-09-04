@@ -1,4 +1,4 @@
-import { View } from "gpui";
+import { View } from "gpui-kit";
 import { layoutCandles } from "./candlestick_chart.js";
 
 function check(condition, message) {

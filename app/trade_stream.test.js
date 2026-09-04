@@ -5,7 +5,7 @@
 // private topic carries more than orders, so the channel has to recognise the
 // one it is for and let the rest past without treating it as a fault.
 
-import { View } from "gpui";
+import { View } from "gpui-kit";
 import { holdContext } from "./context.js";
 import { v_flex } from "gpui-base";
 import {

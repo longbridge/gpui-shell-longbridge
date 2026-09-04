@@ -1,6 +1,6 @@
 // A network-free shell contract for the real auth.js and http.js modules.
 
-import { View } from "gpui";
+import { View } from "gpui-kit";
 import { holdContext } from "./context.js";
 import { v_flex } from "gpui-base";
 import { beginDeviceAuthorization, formBody, pollDeviceAuthorization } from "./auth.js";

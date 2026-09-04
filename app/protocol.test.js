@@ -2,7 +2,7 @@
 // loads it through gpui-shell's QuickJS runtime, so the `zlib` import exercises
 // the same standard-runtime surface as the real application.
 
-import { View } from "gpui";
+import { View } from "gpui-kit";
 import { gzipSync } from "zlib";
 import {
   COMMAND,

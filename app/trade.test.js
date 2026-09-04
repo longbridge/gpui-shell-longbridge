@@ -1,4 +1,4 @@
-import { View } from "gpui";
+import { View } from "gpui-kit";
 import {
   ANY_TIME,
   RTH_ONLY,
