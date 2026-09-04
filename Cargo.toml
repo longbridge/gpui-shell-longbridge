@@ -18,9 +18,16 @@ codegen-units = 16
 debug = "limited"
 split-debuginfo = "unpacked"
 
-[profile.dev.package]
-gpui-pre = { opt-level = 3 }
-gpui-base = { opt-level = 3 }
-gpui-pre-platform = { opt-level = 3 }
-gpui-shell = { opt-level = 3 }
-rquickjs = { opt-level = 3 }
+# Every dependency, not a list of the ones that looked hot.
+#
+# A frame is spent almost entirely inside crates this application does not
+# write: GPUI paints it, `taffy` lays it out, `zed-font-kit` shapes the text,
+# `resvg` rasterizes the icons, `etagere` packs the atlas. Naming a few of them
+# left the rest at `opt-level = 0`, and the ones left out are on the same
+# frame: a debug build drew in 40-45 ms against release's 6-15 ms, and moved to
+# 19-23 ms once the list stopped being a list.
+#
+# The cost is a slower first build. It is paid once per dependency version,
+# while the frame is paid on every interaction, all day.
+[profile.dev.package."*"]
+opt-level = 3
